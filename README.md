@@ -42,7 +42,7 @@ Running your own cloud today means stacking a full Linux distribution, a hypervi
 
 | Piece | Built on |
 | --- | --- |
-| Hypervisor | [Cloud Hypervisor](https://github.com/cloud-hypervisor/cloud-hypervisor) / rust-vmm |
+| Hypervisor | [Cloud Hypervisor](https://github.com/cloud-hypervisor/cloud-hypervisor) / [rust-vmm](https://github.com/rust-vmm) |
 | Cluster state | [Quorium](https://github.com/canonical/quorium) (Raft) |
 | Storage plugins | WebAssembly components ([Wasmtime](https://wasmtime.dev)), loaded at runtime |
 | Networking | Overlay with per-node DHCP, DNS and gateway |
