@@ -180,7 +180,7 @@ The dashboard ships in the `amafu` snap and runs on the infra node next to MAAS,
 <table>
   <tr>
     <td><img width="1440" height="960" alt="image" src="https://github.com/user-attachments/assets/89dff31c-0eb4-4f5e-8860-99b45b97196d" /></td>
-    <td><img width="1440" height="960" alt="image" src="https://github.com/user-attachments/assets/2d8c8ade-5f5c-4a8a-ae11-c026e41237f2" /></td>
+    <td><img width="1440" height="960" alt="image" src="https://github.com/user-attachments/assets/b3314a1e-c53c-46f4-8775-d30260094b2a" /></td>
   </tr>
   <tr>
     <td align="center">Virtual machines</td>
@@ -196,11 +196,19 @@ The dashboard ships in the `amafu` snap and runs on the infra node next to MAAS,
   </tr>
   <tr>
     <td><img width="1440" height="960" alt="image" src="https://github.com/user-attachments/assets/b563b0ba-c8e4-4960-994e-8f9c6e85e53e" /></td>
-    <td><img width="1440" height="960" alt="image" src="https://github.com/user-attachments/assets/a9748731-151e-4483-8bda-c8dfc5b21cc9" /></td>
+    <td><img width="1440" height="960" alt="image" src="https://github.com/user-attachments/assets/4b883403-f499-4f4d-a55b-cf83aa77c255" /></td>
   </tr>
   <tr>
     <td align="center">Floating IPs</td>
     <td align="center">Security groups</td>
+  </tr>
+  <tr>
+     <td><img width="1440" height="1042" alt="image" src="https://github.com/user-attachments/assets/23aca3de-3f32-42b1-a2f3-bfe8d68dea9a" /></td>
+     <td><img width="1440" height="960" alt="image" src="https://github.com/user-attachments/assets/27fb680f-1ec4-4cfb-9ca2-b390689598b4" /></td>
+  </tr>
+  <tr>
+     <td align="center">Nodes</td>
+     <td align="center">Events</td>
   </tr>
 </table>
 
