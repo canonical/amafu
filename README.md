@@ -20,18 +20,12 @@ Running your own cloud today means stacking a full Linux distribution, a hypervi
 
 ## The idea
 
-```
-   Traditional host                    Amafu host
-  +--------------------------+        +--------------------------+
-  | Control-plane agents     |        |                          |
-  | Hypervisor and tools     |        |                          |
-  | Storage daemons          |  ====> |   amafu  (one binary)    |
-  | Network daemons          |        |                          |
-  | systemd, shell, packages |        +--------------------------+
-  +--------------------------+        |       Linux kernel       |
-  |       Linux kernel       |        +--------------------------+
-  +--------------------------+         ~100 MB, runs from RAM
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/948394e9-a829-4d16-aef6-191ea8732e04">
+     <img alt="image" src="https://github.com/user-attachments/assets/23030190-d582-40e9-84d7-3cfc8c4f0bfa" />
+  </picture>
+</p>
 
 - **No host to manage.** No shell, no SSH, no packages. One signed image, configured through an API.
 - **Every workload is a VM.** VMs, system containers and OCI containers all run in (micro)VMs, so all of them can live-migrate consistently.
@@ -39,40 +33,12 @@ Running your own cloud today means stacking a full Linux distribution, a hypervi
 
 ## How it fits together
 
-```
-              +---------------------------------------+
-              |  Consensus core: 3-5 voters + relays  |
-              |   cluster state (Quorium / Raft)      |
-              +---------------------------------------+
-                                  ^
-                                  | own slice + lease
-                                  v
-  +--------------------------------------------------------------+
-  |  Every node: Linux kernel + one amafu binary                 |
-  |                                                              |
-  |                      +---------------+                       |
-  |                      | amafu control |                       |
-  |                      +---------------+                       |
-  |                 /            |             \                 |
-  |                v             v              v                |
-  |        +----------+  +--------------+  +------------------+  |
-  |        |    VM    |  |   microVM    |  |     microVM      |  |
-  |        |          |  |   OCI pod    |  | system container |  |
-  |        +----------+  +--------------+  +------------------+  |
-  |                \            |             /                  |
-  |                 v           v            v                   |
-  |  +--------------------------------------------------------+  |
-  |  |  Linux kernel: KVM, block I/O, overlay network         |  |
-  |  +--------------------------------------------------------+  |
-  +--------------------------------------------------------------+
-               |                                    |
-               | block I/O                          | overlay network
-               v                                    v
-  +--------------------------------+       +-----------------+
-  |         Shared storage         |       |   Other nodes   |
-  | NVMe/TCP, Ceph, iSCSI, FC, NFS |       +-----------------+
-  +--------------------------------+
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/67c49605-fc78-44ec-80c4-9af59429442c">
+     <img alt="image" src="https://github.com/user-attachments/assets/8b5b5875-4a9d-456f-96aa-295c536cb79e" />
+  </picture>
+</p>
 
 | Piece | Built on |
 | --- | --- |
@@ -105,18 +71,12 @@ amafu cluster create prod-east --tag amafu
 
 `amafu cluster create` does the rest:
 
-```
- amafu CLI (infra node)                  MAAS                      compute nodes
- ----------------------                  ----                      -------------
- 1. Check machines, MAAS version  ---->  machine + zone data
- 2. Upload Amafu image if missing ---->  custom/amafu-<ver>
- 3. Create cluster CA, admin key
- 4. Pick 3 or 5 voters across zones
- 5. Render one config per machine
- 6. Deploy voters                 ---->  deploy + user-data ---->  form the cluster
- 7. Deploy the rest in batches    ---->  deploy + user-data ---->  join as subscribers
- 8. Wait, then print status
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/26e1202c-9fe7-427a-8202-8a9080233b74">
+     <img alt="image" src="https://github.com/user-attachments/assets/3fc9f73a-2bc6-4b7a-9afe-1fb772a69331" />
+  </picture>
+</p>
 
 ```
 $ amafu cluster create prod-east --tag amafu
@@ -240,19 +200,12 @@ Roll back any time before then with: amafu upgrade rollback
 
 Each node goes through the same cycle. The new version is only made permanent after it proves healthy:
 
-```
- cordon the node
-      |
- live-migrate its VMs to already-upgraded nodes
-      |
- boot the new image from the inactive slot (kexec)
-      |
- health checks pass? ---- no ---->  reboot into the old image, pause the upgrade
-      |
-     yes
-      |
- make the new image the default, uncordon, move to the next node
-```
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/10d935e9-c126-420f-9903-12a96cc58be5">
+     <img alt="image" src="https://github.com/user-attachments/assets/8b6da558-54b9-40a9-b2e0-5ff33930637a" />
+  </picture>
+</p>
 
 | Risk | Safeguard |
 | --- | --- |
