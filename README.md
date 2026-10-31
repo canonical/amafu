@@ -135,36 +135,97 @@ Containers need no type flag: an OCI reference (`ghcr.io/...`, `nginx:1.27`) run
 
 The dashboard ships in the `amafu` snap and runs on the infra node next to MAAS, not on the compute nodes, so hypervisor hosts stay minimal and the dashboard keeps working during a cluster incident.
 
-<img width="1440" height="960" alt="image" src="https://github.com/user-attachments/assets/82d2560c-2be3-45b4-ab08-839e78b83cf7" />
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/f71ed223-2641-4363-8fbf-b4a31409fb2c">
+     <img alt="image" src="https://github.com/user-attachments/assets/82d2560c-2be3-45b4-ab08-839e78b83cf7" />
+  </picture>
+</p>
 
 <table>
   <tr>
-    <td><img width="1440" height="960" alt="image" src="https://github.com/user-attachments/assets/89dff31c-0eb4-4f5e-8860-99b45b97196d" /></td>
-    <td><img width="1440" height="960" alt="image" src="https://github.com/user-attachments/assets/b3314a1e-c53c-46f4-8775-d30260094b2a" /></td>
+    <td>
+      <p align="center">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/1528f440-c3d1-4cec-9744-6407f2423313">
+           <img alt="image" src="https://github.com/user-attachments/assets/89dff31c-0eb4-4f5e-8860-99b45b97196d" />
+        </picture>
+      </p>
+    </td>
+    <td>
+      <p align="center">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/574c2312-c2e0-48ce-a1be-66025eec847d">
+           <img alt="image" src="https://github.com/user-attachments/assets/b3314a1e-c53c-46f4-8775-d30260094b2a" />
+        </picture>
+      </p>
+    </td>
   </tr>
   <tr>
     <td align="center">Virtual machines</td>
     <td align="center">Containers, with the create panel</td>
   </tr>
   <tr>
-    <td><img width="1440" height="960" alt="image" src="https://github.com/user-attachments/assets/ae8f8226-3cdd-4864-84af-0da292354af2" /></td>
-    <td><img width="1440" height="960" alt="image" src="https://github.com/user-attachments/assets/73f3a9c0-e2fe-41e4-91b3-7ab05526daf0" /></td>
+    <td>
+      <p align="center">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/b279be50-973b-4fbd-b2cb-af5b5798f86a">
+           <img alt="image" src="https://github.com/user-attachments/assets/ae8f8226-3cdd-4864-84af-0da292354af2" />
+        </picture>
+      </p>
+    </td>
+    <td>
+      <p align="center">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/2792daf7-445a-4e21-bed4-b4030e7679cc">
+           <img alt="image" src="https://github.com/user-attachments/assets/73f3a9c0-e2fe-41e4-91b3-7ab05526daf0" />
+        </picture>
+      </p>
+    </td>
   </tr>
   <tr>
     <td align="center">Storage backends</td>
     <td align="center">Networks</td>
   </tr>
   <tr>
-    <td><img width="1440" height="960" alt="image" src="https://github.com/user-attachments/assets/b563b0ba-c8e4-4960-994e-8f9c6e85e53e" /></td>
-    <td><img width="1440" height="960" alt="image" src="https://github.com/user-attachments/assets/4b883403-f499-4f4d-a55b-cf83aa77c255" /></td>
+    <td>
+      <p align="center">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/e9c71713-e210-4590-8a23-4b870511b0c1">
+           <img alt="image" src="https://github.com/user-attachments/assets/b563b0ba-c8e4-4960-994e-8f9c6e85e53e" />
+        </picture>
+      </p>
+    </td>
+    <td>
+      <p align="center">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/1bb98015-56a2-4e14-8180-1fbff09b175d">
+           <img alt="image" src="https://github.com/user-attachments/assets/4b883403-f499-4f4d-a55b-cf83aa77c255" />
+        </picture>
+      </p>
+    </td>
   </tr>
   <tr>
     <td align="center">Floating IPs</td>
     <td align="center">Security groups</td>
   </tr>
   <tr>
-     <td><img width="1440" height="1042" alt="image" src="https://github.com/user-attachments/assets/23aca3de-3f32-42b1-a2f3-bfe8d68dea9a" /></td>
-     <td><img width="1440" height="960" alt="image" src="https://github.com/user-attachments/assets/27fb680f-1ec4-4cfb-9ca2-b390689598b4" /></td>
+     <td>
+       <p align="center">
+         <picture>
+           <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/0be913a9-cd5a-48ee-b381-d74ec1a7aab3">
+           <img alt="image" src="https://github.com/user-attachments/assets/23aca3de-3f32-42b1-a2f3-bfe8d68dea9a" />
+         </picture>
+       </p>
+     </td>
+     <td>
+       <p align="center">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="https://github.com/user-attachments/assets/461352e3-2ee1-428f-855d-1428597dec91">
+           <img alt="image" src="https://github.com/user-attachments/assets/27fb680f-1ec4-4cfb-9ca2-b390689598b4" />
+        </picture>
+      </p>
+     </td>
   </tr>
   <tr>
      <td align="center">Nodes</td>
