@@ -1,4 +1,5 @@
 pub mod adapter;
+pub mod agents;
 pub mod boot;
 pub mod control;
 pub mod images;
@@ -10,6 +11,7 @@ pub mod sandbox;
 pub mod vm_process;
 
 pub use adapter::{CloudHypervisor, CloudHypervisorSettings};
+pub use agents::HybridVsockAgents;
 pub use boot::{BootFiles, BootSources};
 pub use images::{ImageBundle, ImageError};
 pub use plan::VmProcessPlan;
