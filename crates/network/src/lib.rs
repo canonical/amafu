@@ -4,7 +4,9 @@ pub mod dns;
 pub mod metadata;
 pub mod nftables;
 pub mod policy;
+pub mod services;
 pub mod underlay;
 
-pub use underlay::{StaticAddress, UnderlayConfiguration, UnderlayError, configure_underlay};
 pub use datapath::KernelDatapath;
+pub use services::LocalServicesServer;
+pub use underlay::{StaticAddress, UnderlayConfiguration, UnderlayError, configure_underlay};
