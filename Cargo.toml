@@ -45,6 +45,8 @@ rand = "0.10.3"
 rand_chacha = "0.10.0"
 rcgen = "0.14.10"
 rtnetlink = "0.23.0"
+socket2 = { version = "0.6.5", features = ["all"] }
+tun-rs = { version = "2.8.16", default-features = false }
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls-no-provider", "http2", "stream"] }
 rustix = { version = "1.1.6", features = ["fs", "mount", "process", "system"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }

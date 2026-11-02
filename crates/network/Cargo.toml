@@ -7,16 +7,21 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+async-trait.workspace = true
+axum.workspace = true
 amafu-domain.workspace = true
 amafu-interfaces.workspace = true
 futures.workspace = true
 rtnetlink.workspace = true
+socket2.workspace = true
+tun-rs.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+tokio.workspace = true
 uuid.workspace = true
 serde_yaml_ng.workspace = true
 
