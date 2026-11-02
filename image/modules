@@ -2,3 +2,12 @@ kvm
 kvm-amd
 kvm-intel
 nls_iso8859-1
+bridge
+nf_tables
+nft_ct
+nft_nat
+nft_masq
+nft_chain_nat
+nft_meta_bridge
+nf_conntrack_bridge
+nfsv4
