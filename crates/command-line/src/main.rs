@@ -5,6 +5,7 @@ mod output;
 mod resources;
 mod storage_backend;
 mod vm;
+mod volume;
 
 use std::process::ExitCode;
 
@@ -30,6 +31,8 @@ enum Command {
     Vm(vm::VmCommand),
     #[command(subcommand, about = "Register disk and container images")]
     Image(image::ImageCommand),
+    #[command(subcommand, about = "Create and manage volumes")]
+    Volume(volume::VolumeCommand),
     #[command(subcommand, about = "Declare where volumes are kept")]
     StorageBackend(storage_backend::StorageBackendCommand),
     #[command(subcommand, about = "Inspect and manage nodes")]
@@ -41,6 +44,7 @@ async fn run(arguments: Arguments) -> anyhow::Result<()> {
     match arguments.command {
         Command::Vm(command) => vm::run(&client, command, arguments.output).await,
         Command::Image(command) => image::run(&client, command, arguments.output).await,
+        Command::Volume(command) => volume::run(&client, command, arguments.output).await,
         Command::StorageBackend(command) => storage_backend::run(&client, command, arguments.output).await,
         Command::Node(command) => node::run(&client, command, arguments.output).await,
     }
