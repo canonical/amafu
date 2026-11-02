@@ -3,8 +3,13 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 
 use crate::change::{Change, ChangeError, apply_change, confirm_removal};
+use crate::kinds::image::Image;
+use crate::kinds::network::Network;
 use crate::kinds::node::Node;
+use crate::kinds::security_group::SecurityGroup;
+use crate::kinds::storage_backend::StorageBackend;
 use crate::kinds::vm::Vm;
+use crate::kinds::volume::Volume;
 use crate::name::{ObjectName, ProjectName};
 use crate::object::Object;
 use crate::object_id::ObjectId;
@@ -73,8 +78,16 @@ impl KindDescriptor {
 }
 
 #[must_use]
-pub fn kinds() -> [KindDescriptor; 2] {
-    [KindDescriptor::of::<Node>(), KindDescriptor::of::<Vm>()]
+pub fn kinds() -> [KindDescriptor; 7] {
+    [
+        KindDescriptor::of::<Node>(),
+        KindDescriptor::of::<StorageBackend>(),
+        KindDescriptor::of::<Vm>(),
+        KindDescriptor::of::<Image>(),
+        KindDescriptor::of::<Volume>(),
+        KindDescriptor::of::<Network>(),
+        KindDescriptor::of::<SecurityGroup>(),
+    ]
 }
 
 #[must_use]
@@ -146,7 +159,7 @@ mod tests {
     fn lookups_find_each_kind() {
         assert_eq!(kind_named("Vm").map(|descriptor| descriptor.plural_name), Some("vms"));
         assert_eq!(kind_with_plural_name("nodes").map(|descriptor| descriptor.kind), Some("Node"));
-        assert!(kind_named("Volume").is_none());
+        assert!(kind_named("Bucket").is_none());
     }
 
     #[test]
@@ -159,7 +172,7 @@ mod tests {
                 name: ObjectName::new("web-1").unwrap(),
                 project: Some(ProjectName::new("project-a").unwrap()),
                 labels: BTreeMap::new(),
-                specification: json!({"cpu_count": 2, "memory_mebibytes": 512, "image": "test-guest"}),
+                specification: json!({"cpu_count": 2, "memory_mebibytes": 512, "boot": {"type": "kernel", "bundle": "test-guest"}}),
             },
         )
         .unwrap();
