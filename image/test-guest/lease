@@ -1,0 +1,16 @@
+#!/bin/busybox sh
+case "$1" in
+    bound|renew)
+        ip address flush dev "${interface}"
+        ip address add "${ip}/${mask}" dev "${interface}"
+        for gateway in ${router}; do
+            ip route add default via "${gateway}" dev "${interface}"
+            break
+        done
+        : > /etc/resolv.conf
+        for server in ${dns}; do
+            echo "nameserver ${server}" >> /etc/resolv.conf
+        done
+        echo "amafu test guest address ${interface} ${ip}"
+        ;;
+esac

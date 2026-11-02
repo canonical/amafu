@@ -114,6 +114,7 @@ build_test_guest() {
     mkdir -p "${guest}/bin" "${guest}/proc" "${guest}/sys" "${guest}/dev"
     cp "${cache}/extracted/usr/bin/busybox" "${guest}/bin/busybox"
     cp "${image_directory}/test-guest/init" "${guest}/init"
+    cp "${image_directory}/test-guest/lease" "${guest}/bin/lease"
     local target="${staging}/usr/lib/amafu/images/test-guest"
     mkdir -p "${target}"
     (cd "${guest}" && find . | LC_ALL=C sort | cpio --quiet --create --format=newc --reproducible) | zstd --quiet -19 > "${target}/initramfs"

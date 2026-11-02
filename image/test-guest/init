@@ -2,5 +2,28 @@
 /bin/busybox --install -s /bin
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /etc /tmp
 echo "amafu test guest is running"
+ip link set lo up
+for interface in /sys/class/net/eth*; do
+    [ -e "${interface}" ] || continue
+    name="$(basename "${interface}")"
+    udhcpc -i "${name}" -s /bin/lease -q -n -t 10 -T 1 >/dev/null 2>&1 || echo "amafu test guest got no lease on ${name}"
+done
+seed="$(cat /sys/class/dmi/id/product_serial 2>/dev/null)"
+case "${seed}" in
+    *"s=http"*)
+        source_url="${seed##*s=}"
+        if wget -q -T 5 -O /tmp/user-data "${source_url}user-data"; then
+            echo "amafu test guest fetched user data"
+            if [ "$(head -c 2 /tmp/user-data)" = "#!" ]; then
+                chmod +x /tmp/user-data
+                /tmp/user-data 2>&1
+            fi
+        else
+            echo "amafu test guest could not fetch user data"
+        fi
+        ;;
+esac
 while true; do sleep 3600; done
