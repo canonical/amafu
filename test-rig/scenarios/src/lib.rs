@@ -1,4 +1,5 @@
 pub mod containers;
+pub mod networking;
 pub mod security;
 pub mod storage;
 pub mod support;
@@ -18,6 +19,8 @@ pub fn all() -> Vec<ScenarioDefinition> {
         containers::CONTAINER_EXIT_IS_REPORTED,
         storage::VM_BOOTS_FROM_A_CLONED_VOLUME,
         storage::NFS_VOLUME_IS_ATTACHED,
+        networking::ADDRESSES_ARE_DISTINCT,
+        networking::SECURITY_GROUPS_DECIDE,
     ]
 }
 
