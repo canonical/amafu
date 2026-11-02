@@ -178,6 +178,8 @@ dependencies = [
 name = "amafu-network"
 version = "0.1.0"
 dependencies = [
+ "amafu-domain",
+ "amafu-interfaces",
  "futures",
  "rtnetlink",
  "serde",
@@ -185,6 +187,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
