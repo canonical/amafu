@@ -1,6 +1,7 @@
 pub mod access;
 pub mod addressing;
 pub mod change;
+pub mod digest;
 pub mod kinds;
 pub mod name;
 pub mod object;
@@ -11,6 +12,7 @@ pub mod validation;
 
 pub use addressing::{InvalidAddress, Ipv4Network, MacAddress};
 pub use change::{Change, ChangeError, apply_change, confirm_removal};
+pub use digest::{InvalidReference, OciReference, Sha256Digest};
 pub use name::{InvalidName, NodeName, ObjectName, ProjectName};
 pub use object::{Metadata, Object, ObjectReference};
 pub use object_id::ObjectId;
