@@ -13,6 +13,7 @@ amafu-domain.workspace = true
 amafu-interfaces.workspace = true
 amafu-scenario.workspace = true
 futures.workspace = true
+serde.workspace = true
 http.workspace = true
 
 [dev-dependencies]

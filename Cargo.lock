@@ -321,6 +321,7 @@ dependencies = [
  "amafu-simulated-world",
  "futures",
  "http",
+ "serde",
 ]
 
 [[package]]

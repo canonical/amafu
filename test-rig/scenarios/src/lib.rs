@@ -1,4 +1,5 @@
 pub mod security;
+pub mod support;
 pub mod walking_skeleton;
 
 use amafu_scenario::ScenarioDefinition;
