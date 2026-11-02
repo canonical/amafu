@@ -4,6 +4,7 @@ mod network;
 mod node;
 mod output;
 mod resources;
+mod security_group;
 mod storage_backend;
 mod vm;
 mod volume;
@@ -36,6 +37,8 @@ enum Command {
     Volume(volume::VolumeCommand),
     #[command(subcommand, about = "Create and manage private networks")]
     Network(network::NetworkCommand),
+    #[command(subcommand, about = "Control traffic to and from VM interfaces")]
+    SecurityGroup(security_group::SecurityGroupCommand),
     #[command(subcommand, about = "Declare where volumes are kept")]
     StorageBackend(storage_backend::StorageBackendCommand),
     #[command(subcommand, about = "Inspect and manage nodes")]
@@ -49,6 +52,7 @@ async fn run(arguments: Arguments) -> anyhow::Result<()> {
         Command::Image(command) => image::run(&client, command, arguments.output).await,
         Command::Volume(command) => volume::run(&client, command, arguments.output).await,
         Command::Network(command) => network::run(&client, command, arguments.output).await,
+        Command::SecurityGroup(command) => security_group::run(&client, command, arguments.output).await,
         Command::StorageBackend(command) => storage_backend::run(&client, command, arguments.output).await,
         Command::Node(command) => node::run(&client, command, arguments.output).await,
     }
