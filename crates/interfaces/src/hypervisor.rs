@@ -1,16 +1,61 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
-use amafu_domain::{ObjectId, ObjectName};
+use amafu_domain::{MacAddress, ObjectId, ObjectName};
 use serde::{Deserialize, Serialize};
 
 use crate::error::ActionError;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum Payload {
+    Bundle { name: ObjectName },
+    Firmware,
+    ContainerTemplate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LaunchDisk {
+    pub path: PathBuf,
+    pub is_read_only: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LaunchInterface {
+    pub tap: String,
+    pub mac: MacAddress,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VmLaunchSpecification {
     pub vm_id: ObjectId,
     pub cpu_count: u16,
     pub memory_mebibytes: u64,
-    pub image: ObjectName,
+    pub payload: Payload,
+    #[serde(default)]
+    pub disks: Vec<LaunchDisk>,
+    #[serde(default)]
+    pub network_interfaces: Vec<LaunchInterface>,
+    #[serde(default)]
+    pub has_guest_agent: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_seed: Option<String>,
+}
+
+impl VmLaunchSpecification {
+    #[must_use]
+    pub fn of_bundle(vm_id: ObjectId, cpu_count: u16, memory_mebibytes: u64, bundle: ObjectName) -> Self {
+        Self {
+            vm_id,
+            cpu_count,
+            memory_mebibytes,
+            payload: Payload::Bundle { name: bundle },
+            disks: Vec::new(),
+            network_interfaces: Vec::new(),
+            has_guest_agent: false,
+            metadata_seed: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

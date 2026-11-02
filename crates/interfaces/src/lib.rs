@@ -15,10 +15,14 @@ pub use audit::{AuditEntry, AuditLog, AuditOutcome};
 pub use clock::Clock;
 pub use error::ActionError;
 pub use guest::{GuestAgents, WorkloadSpecification, WorkloadState};
-pub use hypervisor::{Hypervisor, InstanceState, RunningInstance, VmLaunchSpecification};
+pub use hypervisor::{
+    Hypervisor, InstanceState, LaunchDisk, LaunchInterface, Payload, RunningInstance, VmLaunchSpecification,
+};
 pub use identifiers::{Identifiers, RandomIdentifiers};
 pub use images::{CachedImage, ContainerConfiguration, ImageRequest, ImageStore};
-pub use network::{Datapath, LocalServices, NodeNetworkState, Port, PortKey, RealizedNetwork, Segment, SegmentKey};
+pub use network::{
+    Datapath, LocalServices, NodeNetworkState, Port, PortKey, RealizedNetwork, Segment, SegmentKey,
+};
 pub use objects::ObjectStoreError;
 pub use storage::{AttachTarget, Storage, StorageProtocol, StorageProvider, VolumeAttacher, VolumeRequest};
 pub use store::{Consistency, Store, StoreError, StoredRecord, WatchEvent};
