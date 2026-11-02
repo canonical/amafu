@@ -1,3 +1,4 @@
+pub mod datapath;
 pub mod hypervisor;
 pub mod storage;
 pub mod store;
