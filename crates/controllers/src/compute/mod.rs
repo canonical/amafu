@@ -21,6 +21,8 @@ use crate::references::{cluster_reference, project_reference};
 
 const STOP_GRACE_PERIOD: Duration = Duration::from_secs(10);
 
+const TRANSITION_REVISIT: std::time::Duration = std::time::Duration::from_millis(250);
+
 #[derive(Clone)]
 pub struct ComputeServices {
     pub store: Arc<dyn Store>,
@@ -235,6 +237,13 @@ impl Controller for ComputeController {
 
     fn plan(&self, observation: &ComputeObservation) -> Vec<ComputeAction> {
         plan_compute(observation)
+    }
+
+    fn revisit_after(&self, observation: &ComputeObservation) -> Option<std::time::Duration> {
+        let ComputeObservation::Hosted(context) = observation else {
+            return None;
+        };
+        plan::is_in_transition(context).then_some(TRANSITION_REVISIT)
     }
 
     async fn apply(&self, key: &ComputeKey, action: ComputeAction) -> Result<(), ActionError> {

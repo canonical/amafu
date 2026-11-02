@@ -227,6 +227,18 @@ fn plan_stopped(context: &VmContext) -> Vec<ComputeAction> {
 }
 
 #[must_use]
+pub fn is_in_transition(context: &VmContext) -> bool {
+    let should_run = context.vm.specification.should_run() && !context.vm.metadata.is_deleting;
+    match context.instance.as_ref().map(|instance| instance.state) {
+        None => should_run && !has_settled_at_this_generation(&context.vm),
+        Some(InstanceState::Booting | InstanceState::Exited) => true,
+        Some(InstanceState::Running) => {
+            context.vm.specification.is_container() && context.workload != Some(WorkloadState::Running)
+        }
+    }
+}
+
+#[must_use]
 pub fn plan_vm(context: &VmContext) -> Vec<ComputeAction> {
     let (vm, node) = (&context.vm, &context.node);
     let should_run = vm.specification.should_run() && !vm.metadata.is_deleting;
@@ -568,6 +580,19 @@ mod tests {
         let mut restarting = vm;
         restarting.status.message = status.message.clone();
         assert!(matches!(only(plan_vm(&context(restarting, None))), ComputeAction::StartVm(_)));
+    }
+
+    #[test]
+    fn booting_vms_and_waiting_containers_are_in_transition() {
+        let vm = vm_on(Some("node-a"), VmPhase::Running);
+        assert!(is_in_transition(&context(vm.clone(), Some(InstanceState::Booting))));
+        assert!(!is_in_transition(&context(vm, Some(InstanceState::Running))));
+        let mut container = vm_on(Some("node-a"), VmPhase::Starting);
+        container.specification = VmSpecification::container(name("busybox"));
+        let mut waiting = context(container, Some(InstanceState::Running));
+        assert!(is_in_transition(&waiting));
+        waiting.workload = Some(WorkloadState::Running);
+        assert!(!is_in_transition(&waiting));
     }
 
     #[test]
