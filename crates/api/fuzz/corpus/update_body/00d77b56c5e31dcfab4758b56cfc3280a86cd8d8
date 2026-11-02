@@ -1,0 +1,1 @@
+{"expected_generation":1,"specification":{"cpu_count":2,"memory_mebibytes":512,"image":"test-guest","power_state":"stqpped"}}
