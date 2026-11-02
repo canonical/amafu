@@ -1,4 +1,5 @@
 pub mod built_in;
+pub mod images;
 pub mod local_disk;
 pub mod nfs;
 pub mod qcow2;
