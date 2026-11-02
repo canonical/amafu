@@ -49,7 +49,7 @@ impl FakeHypervisor {
         lock(&self.instances)
             .iter()
             .map(|(vm_id, instance)| {
-                (RunningInstance { vm_id: *vm_id, state: self.state_of(instance) }, instance.clone())
+                (RunningInstance::new(*vm_id, self.state_of(instance)), instance.clone())
             })
             .collect()
     }

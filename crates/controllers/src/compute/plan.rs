@@ -235,13 +235,13 @@ pub fn plan_vm(context: &VmContext) -> Vec<ComputeAction> {
         (true, None) => match start_plan(context) {
             Ok(plan) => {
                 let mut actions = vec![ComputeAction::StartVm(Box::new(plan))];
-                actions.extend(report(vm, node, VmPhase::Starting, None));
+                actions.extend(report(vm, node, VmPhase::Starting, vm.status.message.clone()));
                 actions
             }
             Err(reason) => report(vm, node, VmPhase::Scheduled, Some(reason)).into_iter().collect(),
         },
         (true, Some(InstanceState::Booting)) => {
-            report(vm, node, VmPhase::Starting, None).into_iter().collect()
+            report(vm, node, VmPhase::Starting, vm.status.message.clone()).into_iter().collect()
         }
         (true, Some(InstanceState::Running)) if vm.specification.is_container() => {
             plan_running_container(context)
@@ -249,7 +249,7 @@ pub fn plan_vm(context: &VmContext) -> Vec<ComputeAction> {
         (true, Some(InstanceState::Running)) => {
             report(vm, node, VmPhase::Running, None).into_iter().collect()
         }
-        (_, Some(InstanceState::Exited)) => vec![ComputeAction::StopVm(vm.metadata.id)],
+        (_, Some(InstanceState::Exited)) => plan_exited(context),
         (false, Some(InstanceState::Booting | InstanceState::Running)) => {
             let mut actions: Vec<ComputeAction> =
                 report(vm, node, VmPhase::Stopping, None).into_iter().collect();
@@ -258,6 +258,21 @@ pub fn plan_vm(context: &VmContext) -> Vec<ComputeAction> {
         }
         (false, None) => plan_stopped(context),
     }
+}
+
+fn plan_exited(context: &VmContext) -> Vec<ComputeAction> {
+    let (vm, node) = (&context.vm, &context.node);
+    let failure = context.instance.as_ref().and_then(|instance| instance.failure.clone());
+    let mut actions: Vec<ComputeAction> = match failure {
+        Some(failure) if vm.specification.should_run() && !vm.metadata.is_deleting => {
+            report(vm, node, VmPhase::Starting, Some(format!("the VM process failed: {failure}")))
+                .into_iter()
+                .collect()
+        }
+        _ => Vec::new(),
+    };
+    actions.push(ComputeAction::StopVm(vm.metadata.id));
+    actions
 }
 
 #[must_use]
@@ -306,7 +321,7 @@ mod tests {
     }
 
     fn context(vm: Object<Vm>, state: Option<InstanceState>) -> VmContext {
-        let instance = state.map(|state| RunningInstance { vm_id: vm.metadata.id, state });
+        let instance = state.map(|state| RunningInstance::new(vm.metadata.id, state));
         VmContext {
             node: here(),
             vm,
@@ -416,7 +431,7 @@ mod tests {
     #[test]
     fn a_stray_instance_is_stopped() {
         let vm = vm_on(Some("node-b"), VmPhase::Running);
-        let stray = RunningInstance { vm_id: vm.metadata.id, state: InstanceState::Running };
+        let stray = RunningInstance::new(vm.metadata.id, InstanceState::Running);
         assert_eq!(plan_stray(Some(&stray)), vec![ComputeAction::StopVm(vm.metadata.id)]);
         assert_eq!(plan_stray(None), Vec::new());
     }
@@ -540,10 +555,26 @@ mod tests {
     }
 
     #[test]
+    fn a_vm_process_failure_is_reported_and_kept_through_the_restart() {
+        let vm = vm_on(Some("node-a"), VmPhase::Starting);
+        let mut failed = context(vm.clone(), Some(InstanceState::Exited));
+        if let Some(instance) = failed.instance.as_mut() {
+            instance.failure = Some(String::from("the VM configuration is invalid"));
+        }
+        let actions = plan_vm(&failed);
+        let ComputeAction::ReportPhase { status, .. } = &actions[0] else { panic!("expected a report") };
+        assert_eq!(status.message.as_deref(), Some("the VM process failed: the VM configuration is invalid"));
+        assert_eq!(actions[1], ComputeAction::StopVm(vm.metadata.id));
+        let mut restarting = vm;
+        restarting.status.message = status.message.clone();
+        assert!(matches!(only(plan_vm(&context(restarting, None))), ComputeAction::StartVm(_)));
+    }
+
+    #[test]
     fn instances_without_an_assigned_vm_are_stopped() {
         let kept = ObjectId::from_uuid(uuid::Uuid::new_v4());
         let orphan = ObjectId::from_uuid(uuid::Uuid::new_v4());
-        let instances = [kept, orphan].map(|vm_id| RunningInstance { vm_id, state: InstanceState::Running });
+        let instances = [kept, orphan].map(|vm_id| RunningInstance::new(vm_id, InstanceState::Running));
         assert_eq!(plan_orphans(&instances, &BTreeSet::from([kept])), vec![ComputeAction::StopVm(orphan)]);
     }
 }

@@ -90,6 +90,14 @@ async fn wait_for_exit(directory: &VmDirectory, timeout: Duration) -> bool {
     true
 }
 
+fn failure_of(directory: &VmDirectory) -> Option<String> {
+    let log = fs::read_to_string(directory.process_log()).ok()?;
+    log.lines().rev().find_map(|line| {
+        let event: serde_json::Value = serde_json::from_str(line).ok()?;
+        (event["level"] == "ERROR").then(|| event["fields"]["error"].as_str().map(str::to_owned)).flatten()
+    })
+}
+
 fn vm_cgroup(vm_id: &ObjectId) -> String {
     format!("vm-{vm_id}")
 }
@@ -290,7 +298,14 @@ impl Hypervisor for CloudHypervisor {
         let vms = self.settings.runtime.vms().map_err(io_failure("listing VM directories"))?;
         Ok(vms
             .iter()
-            .map(|(vm_id, directory)| RunningInstance { vm_id: *vm_id, state: instance_state(directory) })
+            .map(|(vm_id, directory)| {
+                let state = instance_state(directory);
+                RunningInstance {
+                    vm_id: *vm_id,
+                    state,
+                    failure: (state == InstanceState::Exited).then(|| failure_of(directory)).flatten(),
+                }
+            })
             .collect())
     }
 }

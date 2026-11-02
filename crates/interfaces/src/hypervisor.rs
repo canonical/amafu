@@ -70,6 +70,15 @@ pub enum InstanceState {
 pub struct RunningInstance {
     pub vm_id: ObjectId,
     pub state: InstanceState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure: Option<String>,
+}
+
+impl RunningInstance {
+    #[must_use]
+    pub fn new(vm_id: ObjectId, state: InstanceState) -> Self {
+        Self { vm_id, state, failure: None }
+    }
 }
 
 #[async_trait::async_trait]
