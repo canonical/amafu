@@ -9,7 +9,7 @@ pub mod runtime;
 pub mod sandbox;
 pub mod vm_process;
 
-pub use adapter::CloudHypervisor;
+pub use adapter::{CloudHypervisor, CloudHypervisorSettings};
 pub use boot::{BootFiles, BootSources};
 pub use images::{ImageBundle, ImageError};
 pub use plan::VmProcessPlan;

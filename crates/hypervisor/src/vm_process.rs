@@ -1,3 +1,4 @@
+use std::os::fd::{IntoRawFd, OwnedFd, RawFd};
 use std::path::Path;
 use std::sync::mpsc;
 
@@ -8,8 +9,12 @@ use vmm::vm_config::VmConfig;
 use vmm_sys_util::eventfd::{EFD_NONBLOCK, EventFd};
 use vmm_sys_util::signal::block_signal;
 
+use crate::boot::BootFiles;
+use crate::control::{self, Work};
 use crate::plan::VmProcessPlan;
+use crate::probe::{self, Attempt, DENIED_EXIT_CODE, PERMITTED_EXIT_CODE};
 use crate::runtime::VmDirectory;
+use crate::sandbox::{self, SandboxError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum VmProcessError {
@@ -25,35 +30,46 @@ pub enum VmProcessError {
     Boot(String),
     #[error("the VMM stopped with an error: {0}")]
     Exit(String),
+    #[error(transparent)]
+    Sandbox(SandboxError),
 }
 
 fn debug_message(error: impl std::fmt::Debug) -> String {
     format!("{error:?}")
 }
 
-fn read_plan(directory: &VmDirectory) -> Result<VmProcessPlan, VmProcessError> {
-    let bytes =
-        std::fs::read(directory.plan_file()).map_err(|error| VmProcessError::Plan(error.to_string()))?;
-    serde_json::from_slice(&bytes).map_err(|error| VmProcessError::Plan(error.to_string()))
+fn listed(options: &[String]) -> Option<Vec<&str>> {
+    (!options.is_empty()).then(|| options.iter().map(String::as_str).collect())
 }
 
-fn configuration(plan: &VmProcessPlan) -> Result<VmConfig, VmProcessError> {
+fn configuration(plan: &VmProcessPlan, tap_descriptors: &[RawFd]) -> Result<VmConfig, VmProcessError> {
     let cpus = plan.cpus_option();
     let memory = plan.memory_option();
     let serial = plan.serial_option();
-    let kernel = plan.image.kernel.to_string_lossy();
-    let initramfs = plan.image.initramfs.as_ref().map(|path| path.to_string_lossy());
+    let disks = plan.disk_options();
+    let networks = plan.network_options(tap_descriptors);
+    let vsock = plan.vsock_option();
+    let platform = plan.platform_option();
+    let (kernel, initramfs, command_line, firmware) = match &plan.boot {
+        BootFiles::Kernel { kernel, initramfs, command_line } => (
+            Some(kernel.to_string_lossy()),
+            initramfs.as_ref().map(|path| path.to_string_lossy()),
+            Some(command_line.as_str()),
+            None,
+        ),
+        BootFiles::Firmware { firmware } => (None, None, None, Some(firmware.to_string_lossy())),
+    };
     let parameters = VmParams {
         cpus: &cpus,
         memory: &memory,
         memory_zones: None,
-        firmware: None,
-        kernel: Some(&kernel),
+        firmware: firmware.as_deref(),
+        kernel: kernel.as_deref(),
         initramfs: initramfs.as_deref(),
-        cmdline: Some(&plan.image.command_line),
+        cmdline: command_line,
         rate_limit_groups: None,
-        disks: None,
-        net: None,
+        disks: listed(&disks),
+        net: listed(&networks),
         rng: "src=/dev/urandom",
         balloon: None,
         fs: None,
@@ -65,13 +81,13 @@ fn configuration(plan: &VmProcessPlan) -> Result<VmConfig, VmProcessError> {
         devices: None,
         user_devices: None,
         vdpa: None,
-        vsock: None,
+        vsock: vsock.as_deref(),
         pvpanic: false,
         numa: None,
         watchdog: false,
         rtc: None,
         pci_segments: None,
-        platform: None,
+        platform: platform.as_deref(),
         tpm: None,
         landlock_enable: false,
         landlock_rules: None,
@@ -100,10 +116,13 @@ fn create_and_boot(
     Ok(())
 }
 
-pub fn run_vm_process(path: &Path) -> Result<(), VmProcessError> {
-    let directory = VmDirectory::at(path);
-    let plan = read_plan(&directory)?;
-    let configuration = configuration(&plan)?;
+fn boot(
+    directory: &VmDirectory,
+    plan: &VmProcessPlan,
+    tap_descriptors: Vec<OwnedFd>,
+) -> Result<(), VmProcessError> {
+    let tap_descriptors: Vec<RawFd> = tap_descriptors.into_iter().map(IntoRawFd::into_raw_fd).collect();
+    let configuration = configuration(plan, &tap_descriptors)?;
     block_handled_signals();
     let hypervisor =
         cloud_hypervisor_backend::new().map_err(|error| VmProcessError::Hypervisor(debug_message(error)))?;
@@ -120,7 +139,7 @@ pub fn run_vm_process(path: &Path) -> Result<(), VmProcessError> {
         api_sender.clone(),
         api_receiver,
         clone(&exit_event)?,
-        &SeccompAction::Allow,
+        &SeccompAction::KillProcess,
         hypervisor,
         false,
         false,
@@ -144,5 +163,26 @@ pub fn run_vm_process(path: &Path) -> Result<(), VmProcessError> {
         Ok(Ok(())) => Ok(()),
         Ok(Err(error)) => Err(VmProcessError::Exit(debug_message(error))),
         Err(_) => Err(VmProcessError::Exit(String::from("the VMM thread panicked"))),
+    }
+}
+
+fn probe(attempt: &Attempt) -> ! {
+    match probe::attempt(attempt) {
+        Ok(()) => std::process::exit(PERMITTED_EXIT_CODE),
+        Err(reason) => {
+            println!("{reason}");
+            std::process::exit(DENIED_EXIT_CODE)
+        }
+    }
+}
+
+pub fn run_vm_process(path: &Path) -> Result<(), VmProcessError> {
+    let directory = VmDirectory::at(path);
+    let (instructions, descriptors) =
+        control::receive(std::io::stdin()).map_err(|error| VmProcessError::Plan(error.to_string()))?;
+    sandbox::enter(&instructions.restrictions).map_err(VmProcessError::Sandbox)?;
+    match instructions.work {
+        Work::Probe { attempt } => probe(&attempt),
+        Work::Boot { plan } => boot(&directory, &plan, descriptors),
     }
 }
