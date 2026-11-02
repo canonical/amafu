@@ -2,6 +2,7 @@ pub mod admission;
 pub mod authentication;
 pub mod authorization;
 pub mod client;
+pub mod diagnostics;
 mod handlers;
 pub mod identity;
 mod request_chain;
