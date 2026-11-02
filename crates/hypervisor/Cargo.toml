@@ -1,0 +1,29 @@
+[package]
+name = "amafu-hypervisor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+amafu-domain.workspace = true
+amafu-interfaces.workspace = true
+async-trait.workspace = true
+cloud-hypervisor-backend = { package = "hypervisor", git = "https://github.com/cloud-hypervisor/cloud-hypervisor", tag = "v54.0", features = ["kvm"] }
+rustix.workspace = true
+seccompiler = "0.5.0"
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+vmm = { git = "https://github.com/cloud-hypervisor/cloud-hypervisor", tag = "v54.0", features = ["kvm"] }
+vmm-sys-util = "0.15.0"
+
+[dev-dependencies]
+tempfile.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true
