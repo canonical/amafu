@@ -1,4 +1,5 @@
 pub mod hypervisor;
+pub mod storage;
 pub mod store;
 
 use std::fmt::Debug;
