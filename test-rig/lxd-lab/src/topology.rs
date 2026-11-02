@@ -85,6 +85,12 @@ impl LabTopology {
             .collect();
         Self { nodes }
     }
+
+    #[must_use]
+    pub fn next_proxy_port(&self, settings: &LabSettings) -> u16 {
+        let used = u16::try_from(self.nodes.len()).unwrap_or(u16::MAX).saturating_mul(2);
+        settings.first_proxy_port.saturating_add(used)
+    }
 }
 
 #[must_use]

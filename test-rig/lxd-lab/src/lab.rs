@@ -20,6 +20,7 @@ use time::OffsetDateTime;
 
 use crate::credentials::{ClientTokens, ServerCredentials, client_tokens, server_credentials};
 use crate::lxd::{LxdClient, LxdCredentials};
+use crate::nfs::LabNfsServer;
 use crate::topology::{LabNode, LabSettings, LabTopology, NODE_API_PORT, NODE_DIAGNOSTICS_PORT, node_listen};
 
 const BOOT_TIMEOUT: Duration = Duration::from_secs(180);
@@ -33,6 +34,8 @@ pub struct LabState {
     pub server: ServerCredentials,
     pub tokens: ClientTokens,
     pub image_fingerprint: String,
+    #[serde(default)]
+    pub nfs: Option<LabNfsServer>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -205,6 +208,8 @@ pub async fn up(
     let topology = LabTopology::standard(&settings, node_count);
     let lxd = lxd_client(&settings)?;
     ensure_project(&lxd, &settings).await?;
+    let nfs = LabNfsServer::standard(&settings, topology.next_proxy_port(&settings));
+    crate::nfs::create(&lxd, &settings, &nfs).await?;
     let (tokens, identities) = client_tokens(OffsetDateTime::now_utc())?;
     let work = repository.join("target/rig/work");
     std::fs::create_dir_all(&work)?;
@@ -230,12 +235,17 @@ pub async fn up(
         server = Some(credentials);
     }
     let server = server.context("the lab has no node")?;
-    let state = LabState { settings, topology, server, tokens, image_fingerprint: fingerprint };
+    let state =
+        LabState { settings, topology, server, tokens, image_fingerprint: fingerprint, nfs: Some(nfs) };
     save_state(repository, &state)?;
     let mut boots = Vec::new();
     for node in &state.topology.nodes {
         lxd.change_state(&node.name, "start", false).await?;
         boots.push(wait_until_serving(&state.settings, node).await?);
+    }
+    if let Some(nfs) = &state.nfs {
+        let waited = crate::nfs::wait_until_serving(&state.settings, nfs).await?;
+        tracing::info!(seconds = waited.as_secs(), "the NFS server is serving");
     }
     Ok((state, boots))
 }
