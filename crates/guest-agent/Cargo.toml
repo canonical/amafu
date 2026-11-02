@@ -1,0 +1,36 @@
+[package]
+name = "amafu-guest-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "amafu-guest-agent"
+path = "src/main.rs"
+
+[dependencies]
+amafu-domain.workspace = true
+amafu-interfaces.workspace = true
+amafu-network.workspace = true
+amafu-system.workspace = true
+anyhow.workspace = true
+rustix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+socket2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-vsock.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

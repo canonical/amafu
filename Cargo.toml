@@ -17,6 +17,7 @@ amafu-reconciler = { path = "crates/reconciler" }
 amafu-controllers = { path = "crates/controllers" }
 amafu-state = { path = "crates/state" }
 amafu-storage = { path = "crates/storage" }
+amafu-guest-agent = { path = "crates/guest-agent" }
 amafu-hypervisor = { path = "crates/hypervisor" }
 amafu-api = { path = "crates/api" }
 amafu-system = { path = "crates/system" }
@@ -65,6 +66,7 @@ flate2 = "1.1.10"
 webpki-roots = "1.0.11"
 time = { version = "0.3.55", features = ["serde", "formatting", "parsing"] }
 tokio = { version = "1.54.1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net", "io-util", "signal", "process", "fs"] }
+tokio-vsock = "0.7.3"
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12", "logging"] }
 tower = { version = "0.5.3", features = ["util"] }
 tracing = "0.1.44"
