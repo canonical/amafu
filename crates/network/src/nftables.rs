@@ -90,6 +90,7 @@ fn bridge_table(output: &mut String, state: &NodeNetworkState) {
     }
     output.push_str("\t}\n\tchain forward {\n\t\ttype filter hook forward priority 0; policy accept;\n");
     output.push_str("\t\tct state established,related accept\n\t\tct state invalid drop\n");
+    output.push_str("\t\tether type arp accept\n");
     for port in &state.ports {
         let _ = writeln!(
             output,
@@ -170,6 +171,13 @@ mod tests {
         let mut state = state();
         state.ports[0].rules = rules;
         state
+    }
+
+    #[test]
+    fn address_resolution_crosses_the_bridge_before_port_policies() {
+        let ruleset = compile_ruleset(&state(), "eth0");
+        let arp = ruleset.find("ether type arp accept").unwrap();
+        assert!(arp < ruleset.find("jump to_").unwrap());
     }
 
     #[test]
