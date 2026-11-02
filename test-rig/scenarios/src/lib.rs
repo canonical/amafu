@@ -1,3 +1,4 @@
+pub mod containers;
 pub mod security;
 pub mod support;
 pub mod walking_skeleton;
@@ -12,6 +13,8 @@ pub fn all() -> Vec<ScenarioDefinition> {
         walking_skeleton::MISSING_IMAGE_IS_REPORTED,
         security::AUTHORIZATION_MATRIX,
         security::CREDENTIALS_ARE_CHECKED,
+        containers::CONTAINER_RUNS,
+        containers::CONTAINER_EXIT_IS_REPORTED,
     ]
 }
 
