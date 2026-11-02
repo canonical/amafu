@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 use std::future::Future;
 use std::hash::Hash;
+use std::time::Duration;
 
 use amafu_domain::ObjectReference;
 use amafu_interfaces::ActionError;
@@ -35,4 +36,8 @@ pub trait Controller: Send + Sync + 'static {
         key: &Self::Key,
         action: Self::Action,
     ) -> impl Future<Output = Result<(), ActionError>> + Send;
+
+    fn revisit_after(&self, _observation: &Self::Observation) -> Option<Duration> {
+        None
+    }
 }

@@ -35,13 +35,15 @@ pub async fn reconcile_once<C: Controller>(
         Ok(observation) => observation,
         Err(error) => return fail(error),
     };
+    let revisit = controller.revisit_after(&observation);
     for action in controller.plan(&observation) {
         tracing::debug!(controller = C::NAME, ?key, ?action, "applying action");
         if let Err(error) = controller.apply(key, action).await {
             return fail(error);
         }
     }
-    Ok(NextAttempt::After(settings.periodic_resynchronization))
+    let periodic = settings.periodic_resynchronization;
+    Ok(NextAttempt::After(revisit.map_or(periodic, |delay| delay.min(periodic))))
 }
 
 pub fn next_attempt_after<C: Controller>(
