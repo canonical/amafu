@@ -3,7 +3,7 @@ set -euo pipefail
 
 readonly mebibyte=$((1024 * 1024))
 readonly boot_size_mebibytes=256
-readonly data_size_mebibytes=1024
+readonly data_size_mebibytes="${AMAFU_DATA_SIZE_MEBIBYTES:-16384}"
 readonly first_partition_offset_mebibytes=1
 
 if [[ $# -ne 3 ]]; then

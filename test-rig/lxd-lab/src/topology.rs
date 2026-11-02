@@ -76,7 +76,7 @@ impl LabTopology {
                     name: format!("node-{index}"),
                     cpu_count: 2,
                     memory_gibibytes: 4,
-                    disk_gibibytes: 4,
+                    disk_gibibytes: 20,
                     address: Ipv4Addr::new(octets[0], octets[1], octets[2], 50 + index),
                     api_port: settings.first_proxy_port + port_offset,
                     diagnostics_port: settings.first_proxy_port + port_offset + 1,
