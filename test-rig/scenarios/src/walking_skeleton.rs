@@ -3,7 +3,7 @@ use std::time::Duration;
 use amafu_api::ApiClient;
 use amafu_checkers::invariants::at_most_one_running_instance_per_vm;
 use amafu_domain::access::Role;
-use amafu_domain::kinds::vm::{Vm, VmPhase, VmSpecification};
+use amafu_domain::kinds::vm::{BootSource, Vm, VmPhase, VmSpecification};
 use amafu_domain::{ObjectId, ObjectName};
 use amafu_scenario::cluster::client;
 use amafu_scenario::{
@@ -104,7 +104,7 @@ async fn a_vm_runs_again_after_its_node_is_power_cycled(cluster: &dyn Cluster) -
 }
 
 pub const MISSING_IMAGE_IS_REPORTED: ScenarioDefinition = ScenarioDefinition {
-    name: "a VM whose image is missing is reported failed with the reason",
+    name: "a VM whose kernel bundle is missing is reported failed with the reason",
     levels: &[Level::Simulated, Level::VirtualLab],
     node_count: 1,
     run: |cluster| a_vm_whose_image_is_missing_is_reported_failed(cluster).boxed_local(),
@@ -113,7 +113,10 @@ pub const MISSING_IMAGE_IS_REPORTED: ScenarioDefinition = ScenarioDefinition {
 async fn a_vm_whose_image_is_missing_is_reported_failed(cluster: &dyn Cluster) -> ScenarioResult {
     let member = client(cluster, Role::Member).await;
     let name = vm_name("orphan-1")?;
-    let specification = VmSpecification { image: vm_name("no-such-image")?, ..VmSpecification::small() };
+    let specification = VmSpecification {
+        boot: BootSource::Kernel { bundle: vm_name("no-such-image")? },
+        ..VmSpecification::small()
+    };
     let created = member.create::<Vm>(&name, &specification).await?;
     eventually(cluster, START_TIMEOUT, "the VM is reported failed", async || {
         let vm = member.get::<Vm>(name.as_str()).await?;

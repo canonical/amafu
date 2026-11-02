@@ -4,61 +4,80 @@ use std::time::Duration;
 
 use amafu_domain::{ObjectId, ObjectName};
 use amafu_interfaces::{
-    ActionError, Clock, Hypervisor, InstanceState, RunningInstance, VmLaunchSpecification,
+    ActionError, Clock, GuestAgents, Hypervisor, InstanceState, Payload, RunningInstance,
+    VmLaunchSpecification, WorkloadSpecification, WorkloadState,
 };
 use time::OffsetDateTime;
 
 use crate::lock::lock;
 
-struct FakeInstance {
-    started_at: OffsetDateTime,
+#[derive(Debug, Clone)]
+pub struct FakeInstance {
+    pub launch: VmLaunchSpecification,
+    pub started_at: OffsetDateTime,
+    pub workload: Option<WorkloadSpecification>,
+    pub exit_code: Option<i32>,
 }
 
 pub struct FakeHypervisor {
     clock: Arc<dyn Clock>,
     boot_duration: Duration,
-    images: BTreeSet<ObjectName>,
+    bundles: BTreeSet<ObjectName>,
     instances: Mutex<BTreeMap<ObjectId, FakeInstance>>,
 }
 
 impl FakeHypervisor {
     #[must_use]
-    pub fn new(clock: Arc<dyn Clock>, boot_duration: Duration, images: BTreeSet<ObjectName>) -> Self {
-        Self { clock, boot_duration, images, instances: Mutex::new(BTreeMap::new()) }
+    pub fn new(clock: Arc<dyn Clock>, boot_duration: Duration, bundles: BTreeSet<ObjectName>) -> Self {
+        Self { clock, boot_duration, bundles, instances: Mutex::new(BTreeMap::new()) }
     }
 
     pub fn power_off(&self) {
         lock(&self.instances).clear();
     }
 
+    fn state_of(&self, instance: &FakeInstance) -> InstanceState {
+        if self.clock.now() - instance.started_at >= self.boot_duration {
+            InstanceState::Running
+        } else {
+            InstanceState::Booting
+        }
+    }
+
     #[must_use]
-    pub fn instances(&self) -> Vec<RunningInstance> {
-        let now = self.clock.now();
+    pub fn instances(&self) -> Vec<(RunningInstance, FakeInstance)> {
         lock(&self.instances)
             .iter()
-            .map(|(vm_id, instance)| RunningInstance {
-                vm_id: *vm_id,
-                state: if now - instance.started_at >= self.boot_duration {
-                    InstanceState::Running
-                } else {
-                    InstanceState::Booting
-                },
+            .map(|(vm_id, instance)| {
+                (RunningInstance { vm_id: *vm_id, state: self.state_of(instance) }, instance.clone())
             })
             .collect()
+    }
+
+    pub fn exit_workload(&self, vm_id: &ObjectId, code: i32) {
+        if let Some(instance) = lock(&self.instances).get_mut(vm_id)
+            && instance.workload.is_some()
+        {
+            instance.exit_code = Some(code);
+        }
     }
 }
 
 #[async_trait::async_trait]
 impl Hypervisor for FakeHypervisor {
     async fn start(&self, launch: &VmLaunchSpecification) -> Result<(), ActionError> {
-        if !self.images.contains(&launch.image) {
-            return Err(ActionError::invalid(format!(
-                "image {} is not available on this node",
-                launch.image
-            )));
+        if let Payload::Bundle { name } = &launch.payload
+            && !self.bundles.contains(name)
+        {
+            return Err(ActionError::invalid(format!("bundle {name} is not available on this node")));
         }
         let started_at = self.clock.now();
-        lock(&self.instances).entry(launch.vm_id).or_insert(FakeInstance { started_at });
+        lock(&self.instances).entry(launch.vm_id).or_insert(FakeInstance {
+            launch: launch.clone(),
+            started_at,
+            workload: None,
+            exit_code: None,
+        });
         Ok(())
     }
 
@@ -68,7 +87,38 @@ impl Hypervisor for FakeHypervisor {
     }
 
     async fn running(&self) -> Result<Vec<RunningInstance>, ActionError> {
-        Ok(self.instances())
+        Ok(self.instances().into_iter().map(|(running, _)| running).collect())
+    }
+}
+
+#[async_trait::async_trait]
+impl GuestAgents for FakeHypervisor {
+    async fn workload(&self, vm_id: &ObjectId) -> Result<WorkloadState, ActionError> {
+        let instances = lock(&self.instances);
+        let instance = instances.get(vm_id).ok_or_else(|| ActionError::retryable("the VM is not running"))?;
+        if !instance.launch.has_guest_agent {
+            return Err(ActionError::invalid("this VM has no guest agent"));
+        }
+        if self.state_of(instance) != InstanceState::Running {
+            return Err(ActionError::retryable("the guest agent is not up yet"));
+        }
+        Ok(match (&instance.workload, instance.exit_code) {
+            (_, Some(code)) => WorkloadState::Exited { code },
+            (Some(_), None) => WorkloadState::Running,
+            (None, None) => WorkloadState::NotStarted,
+        })
+    }
+
+    async fn start_workload(
+        &self,
+        vm_id: &ObjectId,
+        workload: &WorkloadSpecification,
+    ) -> Result<(), ActionError> {
+        let mut instances = lock(&self.instances);
+        let instance =
+            instances.get_mut(vm_id).ok_or_else(|| ActionError::retryable("the VM is not running"))?;
+        instance.workload.get_or_insert_with(|| workload.clone());
+        Ok(())
     }
 }
 
@@ -81,16 +131,12 @@ mod tests {
 
     #[test]
     fn the_fake_hypervisor_honours_the_hypervisor_contract() {
-        let image = ObjectName::new("test-guest").unwrap();
+        let bundle = ObjectName::new("test-guest").unwrap();
         let clock = VirtualClock::starting_at(OffsetDateTime::UNIX_EPOCH);
         let hypervisor =
-            FakeHypervisor::new(Arc::new(clock), Duration::from_secs(1), BTreeSet::from([image.clone()]));
-        let launch = VmLaunchSpecification {
-            vm_id: ObjectId::from_uuid(uuid::Uuid::new_v4()),
-            cpu_count: 1,
-            memory_mebibytes: 256,
-            image,
-        };
+            FakeHypervisor::new(Arc::new(clock), Duration::from_secs(1), BTreeSet::from([bundle.clone()]));
+        let launch =
+            VmLaunchSpecification::of_bundle(ObjectId::from_uuid(uuid::Uuid::new_v4()), 1, 256, bundle);
         assert_eq!(futures::executor::block_on(hypervisor_contract(&hypervisor, &launch)), Ok(()));
     }
 }

@@ -1,6 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
+use std::net::Ipv4Addr;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,15 +9,23 @@ use std::time::Duration;
 use amafu_api::authentication::TokenIdentity;
 use amafu_api::{ApiClient, ApiState, Principal, RouterTransport, TokenAuthenticator, router};
 use amafu_checkers::invariants::check_all;
-use amafu_controllers::{ComputeController, NodeController, NodeIdentity, PlacementController};
+use amafu_controllers::{
+    ComputeController, ComputeServices, ImageController, NetworkController, NodeController, NodeIdentity,
+    NodeNetworkController, PlacementController, SecurityGroupController, StorageBackendController,
+    VolumeController,
+};
 use amafu_domain::access::Role;
 use amafu_domain::kinds::node::{NodeCapacity, NodeRole};
-use amafu_domain::{NodeName, ObjectId, ObjectName, ProjectName};
-use amafu_interfaces::{AuditLog, Clock, Identifiers, Store};
+use amafu_domain::{MacAddress, NodeName, ObjectId, ObjectName, ProjectName};
+use amafu_interfaces::{
+    AuditLog, Clock, Datapath, GuestAgents, Hypervisor, Identifiers, ImageStore, LocalServices,
+    NodeNetworkState, Storage, Store, WorkloadState,
+};
+use amafu_network::dhcp::{self, DhcpMessage, Lease, MessageType};
 use amafu_reconciler::{Controller, ReconcilerSettings, run_controller};
 use amafu_scenario::{
-    Cluster, ClusterObservation, Fault, FaultHandle, Level, ObservedInstance, ScenarioDefinition,
-    ScenarioError, ScenarioResult,
+    Cluster, ClusterObservation, Fault, FaultHandle, Level, ObservedAttachment, ObservedInstance,
+    ObservedPort, ScenarioDefinition, ScenarioError, ScenarioResult,
 };
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -25,14 +34,17 @@ use uuid::Uuid;
 
 use crate::clock::VirtualClock;
 use crate::executor::{Executor, StepOutcome, TaskFuture, TaskId};
-use crate::fakes::{FakeHypervisor, MemoryAuditLog, MemoryStore, SeededIdentifiers};
+use crate::fakes::{
+    FakeBackends, FakeDatapath, FakeHypervisor, FakeImageStore, FakeLocalServices, FakeStorage,
+    MemoryAuditLog, MemoryStore, SeededIdentifiers,
+};
 
 const PROJECTS: [&str; 2] = ["project-a", "project-b"];
 const START_UNIX_SECONDS: i64 = 1_767_225_600;
 const RECENT_EVENT_COUNT: usize = 200;
 const ROLE_CRASH_PROBABILITY: f64 = 0.02;
 const BOOT_DURATION: Duration = Duration::from_secs(1);
-const TEST_IMAGE: &str = "test-guest";
+const TEST_BUNDLE: &str = "test-guest";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SimulationSettings {
@@ -89,8 +101,36 @@ struct RoleTask {
     task: Cell<TaskId>,
 }
 
-struct SimulatedNode {
+struct NodeServices {
     hypervisor: Arc<FakeHypervisor>,
+    storage: Arc<FakeStorage>,
+    images: Arc<FakeImageStore>,
+    datapath: Arc<FakeDatapath>,
+    local_services: Arc<FakeLocalServices>,
+}
+
+impl NodeServices {
+    fn compute(&self, store: &Arc<dyn Store>) -> ComputeServices {
+        ComputeServices {
+            store: Arc::clone(store),
+            hypervisor: Arc::clone(&self.hypervisor) as Arc<dyn Hypervisor>,
+            storage: Arc::clone(&self.storage) as Arc<dyn Storage>,
+            images: Arc::clone(&self.images) as Arc<dyn ImageStore>,
+            datapath: Arc::clone(&self.datapath) as Arc<dyn Datapath>,
+            agents: Arc::clone(&self.hypervisor) as Arc<dyn GuestAgents>,
+        }
+    }
+
+    fn power_off(&self) {
+        self.hypervisor.power_off();
+        self.storage.power_off();
+        self.datapath.power_off();
+        self.local_services.power_off();
+    }
+}
+
+struct SimulatedNode {
+    services: NodeServices,
     roles: Vec<RoleTask>,
 }
 
@@ -101,6 +141,7 @@ struct WorldShared {
     executor: Executor,
     clock: VirtualClock,
     store: Arc<MemoryStore>,
+    backends: Arc<FakeBackends>,
     audit: Arc<MemoryAuditLog>,
     router: axum::Router,
     tokens: BTreeMap<(Role, ProjectName), String>,
@@ -197,6 +238,7 @@ impl SimulatedWorld {
                 executor: Executor::new(clock.clone()),
                 clock,
                 store,
+                backends: FakeBackends::new(),
                 audit,
                 router,
                 tokens,
@@ -213,13 +255,35 @@ impl SimulatedWorld {
         world
     }
 
+    fn role<C: Controller>(
+        &self,
+        label: String,
+        settings: ReconcilerSettings,
+        make: impl Fn() -> C + 'static,
+    ) -> RoleTask {
+        let shared = &self.shared;
+        controller_role(
+            label,
+            make,
+            Arc::clone(&shared.store) as Arc<dyn Store>,
+            Arc::new(shared.clock.clone()),
+            settings,
+            Rc::clone(&shared.failures),
+        )
+    }
+
     fn add_node(&self, name: &NodeName, is_core: bool, identifiers: &dyn Identifiers) {
         let shared = &self.shared;
         let clock: Arc<dyn Clock> = Arc::new(shared.clock.clone());
         let store: Arc<dyn Store> = Arc::clone(&shared.store) as Arc<dyn Store>;
-        let images = BTreeSet::from([valid_name::<ObjectName>(TEST_IMAGE)]);
-        let hypervisor = Arc::new(FakeHypervisor::new(Arc::clone(&clock), BOOT_DURATION, images));
-        let failures = &shared.failures;
+        let bundles = BTreeSet::from([valid_name::<ObjectName>(TEST_BUNDLE)]);
+        let services = NodeServices {
+            hypervisor: Arc::new(FakeHypervisor::new(Arc::clone(&clock), BOOT_DURATION, bundles)),
+            storage: Arc::new(FakeStorage::new(Arc::clone(&shared.backends))),
+            images: Arc::new(FakeImageStore::new()),
+            datapath: Arc::new(FakeDatapath::new()),
+            local_services: Arc::new(FakeLocalServices::new()),
+        };
         let mut roles = BTreeSet::from([NodeRole::Compute]);
         if is_core {
             roles.insert(NodeRole::Core);
@@ -238,57 +302,75 @@ impl SimulatedWorld {
             periodic_resynchronization: Duration::from_secs(2),
         };
         let heartbeat = ReconcilerSettings { periodic_resynchronization: Duration::from_secs(5), ..fast };
-        let mut tasks = Vec::new();
-        {
-            let (store_for_role, clock_for_role) = (Arc::clone(&store), Arc::clone(&clock));
-            tasks.push(controller_role(
-                format!("{name}/node"),
-                move || {
-                    NodeController::new(
-                        identity.clone(),
-                        Arc::clone(&store_for_role),
-                        Arc::clone(&clock_for_role),
-                    )
-                },
-                Arc::clone(&store),
-                Arc::clone(&clock),
-                heartbeat,
-                Rc::clone(failures),
-            ));
-        }
-        {
-            let (node, store_for_role, hypervisor_for_role) =
-                (name.clone(), Arc::clone(&store), Arc::clone(&hypervisor));
-            tasks.push(controller_role(
-                format!("{name}/compute"),
-                move || {
-                    ComputeController::new(
-                        node.clone(),
-                        Arc::clone(&store_for_role),
-                        Arc::clone(&hypervisor_for_role) as Arc<dyn amafu_interfaces::Hypervisor>,
-                    )
-                },
-                Arc::clone(&store),
-                Arc::clone(&clock),
-                fast,
-                Rc::clone(failures),
-            ));
-        }
+        let compute = services.compute(&store);
+        let (network_store, datapath, local_services) =
+            (Arc::clone(&store), Arc::clone(&services.datapath), Arc::clone(&services.local_services));
+        let (node_store, node_clock, node_name) = (Arc::clone(&store), Arc::clone(&clock), name.clone());
+        let mut tasks = vec![
+            self.role(format!("{name}/node"), heartbeat, move || {
+                NodeController::new(identity.clone(), Arc::clone(&node_store), Arc::clone(&node_clock))
+            }),
+            self.role(format!("{name}/compute"), fast, move || {
+                ComputeController::new(node_name.clone(), compute.clone())
+            }),
+        ];
+        let node_name = name.clone();
+        tasks.push(self.role(format!("{name}/node-network"), fast, move || {
+            NodeNetworkController::new(
+                node_name.clone(),
+                Arc::clone(&network_store),
+                Arc::clone(&datapath) as Arc<dyn Datapath>,
+                Arc::clone(&local_services) as Arc<dyn LocalServices>,
+            )
+        }));
         if is_core {
-            let store_for_role = Arc::clone(&store);
-            tasks.push(controller_role(
-                format!("{name}/placement"),
-                move || PlacementController::new(Arc::clone(&store_for_role)),
-                Arc::clone(&store),
-                Arc::clone(&clock),
-                fast,
-                Rc::clone(failures),
-            ));
+            tasks.extend(self.core_roles(name, &store, &services, fast));
         }
         for role in &tasks {
             role.task.set(shared.executor.spawn(role.label.clone(), (role.start)()));
         }
-        shared.nodes.borrow_mut().insert(name.clone(), SimulatedNode { hypervisor, roles: tasks });
+        shared.nodes.borrow_mut().insert(name.clone(), SimulatedNode { services, roles: tasks });
+    }
+
+    fn core_roles(
+        &self,
+        name: &NodeName,
+        store: &Arc<dyn Store>,
+        services: &NodeServices,
+        settings: ReconcilerSettings,
+    ) -> Vec<RoleTask> {
+        let storage: Arc<dyn Storage> = Arc::clone(&services.storage) as Arc<dyn Storage>;
+        let images: Arc<dyn ImageStore> = Arc::clone(&services.images) as Arc<dyn ImageStore>;
+        let (placement_store, network_store, group_store) =
+            (Arc::clone(store), Arc::clone(store), Arc::clone(store));
+        let (volume_store, volume_storage, volume_images) =
+            (Arc::clone(store), Arc::clone(&storage), Arc::clone(&images));
+        let (image_store, image_cache, image_node) = (Arc::clone(store), Arc::clone(&images), name.clone());
+        let (backend_store, backend_storage) = (Arc::clone(store), Arc::clone(&storage));
+        vec![
+            self.role(format!("{name}/placement"), settings, move || {
+                PlacementController::new(Arc::clone(&placement_store))
+            }),
+            self.role(format!("{name}/network"), settings, move || {
+                NetworkController::new(Arc::clone(&network_store))
+            }),
+            self.role(format!("{name}/security-group"), settings, move || {
+                SecurityGroupController::new(Arc::clone(&group_store))
+            }),
+            self.role(format!("{name}/volume"), settings, move || {
+                VolumeController::new(
+                    Arc::clone(&volume_store),
+                    Arc::clone(&volume_storage),
+                    Arc::clone(&volume_images),
+                )
+            }),
+            self.role(format!("{name}/image"), settings, move || {
+                ImageController::new(image_node.clone(), Arc::clone(&image_store), Arc::clone(&image_cache))
+            }),
+            self.role(format!("{name}/storage-backend"), settings, move || {
+                StorageBackendController::new(Arc::clone(&backend_store), Arc::clone(&backend_storage))
+            }),
+        ]
     }
 
     fn record(&self, event: String) {
@@ -308,7 +390,7 @@ impl SimulatedWorld {
         let nodes = self.shared.nodes.borrow();
         let simulated =
             nodes.get(node).ok_or_else(|| ScenarioError::Expectation(format!("no node named {node}")))?;
-        simulated.hypervisor.power_off();
+        simulated.services.power_off();
         for role in &simulated.roles {
             self.restart_role(role);
         }
@@ -336,20 +418,58 @@ impl SimulatedWorld {
 
     #[must_use]
     pub fn ground_truth(&self) -> ClusterObservation {
-        let instances = self
-            .shared
-            .nodes
-            .borrow()
-            .iter()
-            .flat_map(|(name, node)| {
-                node.hypervisor.instances().into_iter().map(|instance| ObservedInstance {
+        let mut observation = ClusterObservation {
+            stored_objects: self.shared.store.all_objects(),
+            ..ClusterObservation::default()
+        };
+        for (name, node) in self.shared.nodes.borrow().iter() {
+            let services = &node.services;
+            let offered = services.local_services.state();
+            for (running, instance) in services.hypervisor.instances() {
+                let offered_addresses = instance
+                    .launch
+                    .network_interfaces
+                    .iter()
+                    .filter_map(|interface| address_offered_to(&offered, interface.mac))
+                    .collect();
+                let workload = match (&instance.workload, instance.exit_code) {
+                    (_, Some(code)) => Some(WorkloadState::Exited { code }),
+                    (Some(_), None) => Some(WorkloadState::Running),
+                    (None, None) if instance.launch.has_guest_agent => Some(WorkloadState::NotStarted),
+                    (None, None) => None,
+                };
+                observation.instances.push(ObservedInstance {
                     node: name.clone(),
-                    vm_id: instance.vm_id,
-                    state: instance.state,
-                })
-            })
-            .collect();
-        ClusterObservation { instances, stored_objects: self.shared.store.all_objects() }
+                    vm_id: running.vm_id,
+                    state: running.state,
+                    workload,
+                    disks: instance.launch.disks.iter().map(|disk| disk.path.clone()).collect(),
+                    offered_addresses,
+                });
+            }
+            for (target, path) in services.storage.attachments() {
+                observation.attachments.push(ObservedAttachment {
+                    node: name.clone(),
+                    volume: format!("{target:?}"),
+                    path,
+                });
+            }
+            for port in services.datapath.state().ports {
+                observation.ports.push(ObservedPort {
+                    node: name.clone(),
+                    vm_id: port.key.vm_id,
+                    segment: port.segment.to_string(),
+                    address: port.address,
+                });
+            }
+        }
+        observation
+    }
+
+    pub fn exit_workload(&self, vm_id: &ObjectId, code: i32) {
+        for node in self.shared.nodes.borrow().values() {
+            node.services.hypervisor.exit_workload(vm_id, code);
+        }
     }
 
     #[must_use]
@@ -411,6 +531,29 @@ impl SimulatedWorld {
     fn shutdown(&self) {
         self.shared.executor.kill_all();
     }
+}
+
+fn address_offered_to(state: &NodeNetworkState, mac: MacAddress) -> Option<Ipv4Addr> {
+    let discover = DhcpMessage {
+        is_reply: false,
+        transaction: 1,
+        flags: 0,
+        client_address: Ipv4Addr::UNSPECIFIED,
+        your_address: Ipv4Addr::UNSPECIFIED,
+        relay_address: Ipv4Addr::UNSPECIFIED,
+        hardware_address: mac,
+        message_type: MessageType::Discover,
+        requested_address: None,
+        server_identifier: None,
+        lease: Lease::default(),
+        options: Vec::new(),
+    };
+    let request = DhcpMessage::parse(&discover.encode()).ok()?;
+    state
+        .segments
+        .iter()
+        .find_map(|segment| dhcp::answer(&request, &segment.key, state))
+        .map(|offer| offer.your_address)
 }
 
 pub fn run_scenario(

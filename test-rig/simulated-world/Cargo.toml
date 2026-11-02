@@ -12,6 +12,7 @@ amafu-checkers.workspace = true
 amafu-controllers.workspace = true
 amafu-domain.workspace = true
 amafu-interfaces.workspace = true
+amafu-network.workspace = true
 amafu-reconciler.workspace = true
 amafu-scenario.workspace = true
 async-trait.workspace = true
