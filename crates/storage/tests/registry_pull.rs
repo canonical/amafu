@@ -3,7 +3,8 @@ use amafu_domain::kinds::image::ImageSource;
 use amafu_interfaces::{ImageRequest, ImageStore};
 use amafu_storage::CachedImages;
 
-const BUSYBOX: &str = "docker.io/library/busybox@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec";
+const BUSYBOX: &str =
+    "docker.io/library/busybox@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec";
 
 #[tokio::test]
 #[ignore = "needs access to Docker Hub and mkfs.erofs"]
