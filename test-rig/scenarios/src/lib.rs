@@ -1,5 +1,6 @@
 pub mod containers;
 pub mod security;
+pub mod storage;
 pub mod support;
 pub mod walking_skeleton;
 
@@ -15,6 +16,8 @@ pub fn all() -> Vec<ScenarioDefinition> {
         security::CREDENTIALS_ARE_CHECKED,
         containers::CONTAINER_RUNS,
         containers::CONTAINER_EXIT_IS_REPORTED,
+        storage::VM_BOOTS_FROM_A_CLONED_VOLUME,
+        storage::NFS_VOLUME_IS_ATTACHED,
     ]
 }
 
