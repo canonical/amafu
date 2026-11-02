@@ -130,10 +130,17 @@ impl Cluster for VirtualLab {
                     node: name.clone(),
                     vm_id: instance.vm_id,
                     state: instance.state,
+                    workload: None,
+                    disks: Vec::new(),
+                    offered_addresses: Vec::new(),
                 });
             }
         }
-        Ok(ClusterObservation { instances, stored_objects: self.stored_objects().await.unwrap_or_default() })
+        Ok(ClusterObservation {
+            instances,
+            stored_objects: self.stored_objects().await.unwrap_or_default(),
+            ..ClusterObservation::default()
+        })
     }
 
     async fn audit_contains(&self, request_id: Uuid) -> Result<bool, ScenarioError> {

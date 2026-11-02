@@ -9,8 +9,8 @@ use amafu_domain::NodeName;
 use amafu_domain::kinds::node::NodeRole;
 use amafu_network::{StaticAddress, UnderlayConfiguration};
 use amafu_node::configuration::{
-    ApiSection, DiagnosticsSection, Directories, NodeConfiguration, NodeSection, SUPPORTED_VERSION,
-    StateSection,
+    ApiSection, ComputeSection, DiagnosticsSection, Directories, NodeConfiguration, NodeSection,
+    SUPPORTED_VERSION, StateSection,
 };
 use anyhow::{Context, bail};
 use reqwest::Method;
@@ -93,6 +93,7 @@ fn node_configuration(
         },
         state: StateSection::default(),
         directories: Directories::default(),
+        compute: ComputeSection { resolvers: vec![settings.gateway], ..ComputeSection::default() },
         diagnostics: Some(DiagnosticsSection { listen: node_listen(NODE_DIAGNOSTICS_PORT) }),
     })
 }
