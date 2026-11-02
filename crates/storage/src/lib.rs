@@ -5,3 +5,4 @@ pub mod nfs;
 pub mod qcow2;
 
 pub use built_in::BuiltInStorage;
+pub use images::CachedImages;
