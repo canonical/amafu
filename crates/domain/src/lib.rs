@@ -1,4 +1,5 @@
 pub mod access;
+pub mod addressing;
 pub mod change;
 pub mod kinds;
 pub mod name;
@@ -8,6 +9,7 @@ pub mod registry;
 pub mod resource;
 pub mod validation;
 
+pub use addressing::{InvalidAddress, Ipv4Network, MacAddress};
 pub use change::{Change, ChangeError, apply_change, confirm_removal};
 pub use name::{InvalidName, NodeName, ObjectName, ProjectName};
 pub use object::{Metadata, Object, ObjectReference};
