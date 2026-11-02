@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly mebibyte=$((1024 * 1024))
+readonly boot_size_mebibytes=256
+readonly data_size_mebibytes=1024
+readonly first_partition_offset_mebibytes=1
+
+if [[ $# -ne 3 ]]; then
+    echo "usage: image/assemble-disk <built image directory> <node configuration> <output directory>" >&2
+    exit 2
+fi
+
+readonly built="$1"
+readonly configuration="$2"
+readonly output="$3"
+readonly work="$(mktemp -d)"
+trap 'rm -rf "${work}"' EXIT
+
+readonly boot_offset=$((first_partition_offset_mebibytes * mebibyte))
+readonly data_offset=$(((first_partition_offset_mebibytes + boot_size_mebibytes) * mebibyte))
+readonly disk_size_mebibytes=$((first_partition_offset_mebibytes + boot_size_mebibytes + data_size_mebibytes + 1))
+
+truncate --size "$((disk_size_mebibytes * mebibyte))" "${work}/disk.raw"
+sfdisk --quiet "${work}/disk.raw" <<EOF
+label: gpt
+start=${first_partition_offset_mebibytes}MiB, size=${boot_size_mebibytes}MiB, type=uefi, name=amafu-boot
+start=$((first_partition_offset_mebibytes + boot_size_mebibytes))MiB, size=${data_size_mebibytes}MiB, type=linux, name=amafu-data
+EOF
+
+truncate --size "$((boot_size_mebibytes * mebibyte))" "${work}/boot.vfat"
+mkfs.vfat -F 32 -n AMAFU-BOOT "${work}/boot.vfat" >/dev/null
+(cd "${built}/esp" && find . -mindepth 1 -type d | LC_ALL=C sort) | while read -r directory; do
+    mmd -i "${work}/boot.vfat" "::${directory#./}"
+done
+(cd "${built}/esp" && find . -type f | LC_ALL=C sort) | while read -r file; do
+    mcopy -i "${work}/boot.vfat" "${built}/esp/${file#./}" "::${file#./}"
+done
+mmd -i "${work}/boot.vfat" "::amafu" 2>/dev/null || true
+mcopy -o -i "${work}/boot.vfat" "${configuration}" "::amafu/node-configuration.yaml"
+dd if="${work}/boot.vfat" of="${work}/disk.raw" bs=1M seek="${first_partition_offset_mebibytes}" conv=notrunc status=none
+
+mkfs.ext4 -q -L amafu-data -E "offset=${data_offset}" "${work}/disk.raw" "${data_size_mebibytes}M"
+
+mkdir -p "${output}"
+qemu-img convert -f raw -O qcow2 -c "${work}/disk.raw" "${output}/rootfs.img"
+cat > "${work}/metadata.yaml" <<EOF
+architecture: x86_64
+creation_date: $(date +%s)
+properties:
+  description: Amafu node
+  os: amafu
+  release: "$(git -C "$(dirname "$0")" describe --always --dirty 2>/dev/null || echo unknown)"
+EOF
+mv "${output}/rootfs.img" "${work}/rootfs.img"
+tar --create --file "${output}/lxd-image.tar" --directory "${work}" metadata.yaml rootfs.img
+echo "assembled ${output}/lxd-image.tar with partitions at ${boot_offset} and ${data_offset} bytes"
