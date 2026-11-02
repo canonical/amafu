@@ -1,0 +1,11 @@
+pub mod assertions;
+pub mod cluster;
+pub mod definition;
+pub mod error;
+pub mod observation;
+
+pub use assertions::{always_during, ensure, ensure_equal, eventually};
+pub use cluster::{Cluster, Fault, FaultHandle, Level};
+pub use definition::ScenarioDefinition;
+pub use error::{ScenarioError, ScenarioResult, Violation};
+pub use observation::{ClusterObservation, ObservedInstance};
