@@ -2,7 +2,9 @@ use std::time::Duration;
 
 use amafu_api::ApiClient;
 use amafu_api::client::WatchUpdate;
-use amafu_domain::kinds::vm::{PowerState, Vm, VmPhase, VmSpecification};
+use amafu_domain::kinds::vm::{
+    BootSource, NetworkInterfaceSpecification, PowerState, Vm, VmPhase, VmSpecification,
+};
 use amafu_domain::{Object, ObjectName};
 use anyhow::bail;
 use clap::Subcommand;
@@ -10,7 +12,51 @@ use futures::StreamExt;
 
 use crate::output::{OutputFormat, Table, print_structured};
 
-const DEFAULT_WAIT: &str = "120";
+pub const DEFAULT_WAIT: &str = "120";
+
+#[derive(clap::Args)]
+pub struct Attachments {
+    #[arg(
+        long = "network",
+        value_name = "NETWORK",
+        help = "Attach an interface on this network; repeatable"
+    )]
+    pub networks: Vec<ObjectName>,
+    #[arg(long = "security-group", value_name = "GROUP", help = "Apply to every interface; repeatable")]
+    pub security_groups: Vec<ObjectName>,
+}
+
+impl Attachments {
+    #[must_use]
+    pub fn interfaces(&self) -> Vec<NetworkInterfaceSpecification> {
+        self.networks
+            .iter()
+            .map(|network| NetworkInterfaceSpecification {
+                network: network.clone(),
+                security_groups: self.security_groups.clone(),
+                address: None,
+            })
+            .collect()
+    }
+}
+
+#[derive(clap::Args)]
+#[group(required = true, multiple = false)]
+pub struct BootChoice {
+    #[arg(long, value_name = "BUNDLE", help = "Boot a kernel bundle installed on the nodes")]
+    kernel: Option<ObjectName>,
+    #[arg(long, help = "Boot from the first volume through UEFI firmware")]
+    from_disk: bool,
+}
+
+impl BootChoice {
+    fn source(&self) -> BootSource {
+        match &self.kernel {
+            Some(bundle) => BootSource::Kernel { bundle: bundle.clone() },
+            None => BootSource::Disk,
+        }
+    }
+}
 
 #[derive(Subcommand)]
 pub enum VmCommand {
@@ -21,8 +67,18 @@ pub enum VmCommand {
         cpus: u16,
         #[arg(long = "memory", value_name = "MEBIBYTES", default_value_t = 512)]
         memory_mebibytes: u64,
-        #[arg(long)]
-        image: ObjectName,
+        #[command(flatten)]
+        boot: BootChoice,
+        #[arg(
+            long = "volume",
+            value_name = "VOLUME",
+            help = "Attach a volume; repeatable, the first is the boot disk"
+        )]
+        volumes: Vec<ObjectName>,
+        #[command(flatten)]
+        attachments: Attachments,
+        #[arg(long, value_name = "FILE", help = "Serve this file as cloud-init user data")]
+        user_data: Option<std::path::PathBuf>,
         #[arg(long, help = "Create the VM without starting it")]
         stopped: bool,
         #[arg(long, help = "Wait until the VM runs")]
@@ -52,11 +108,26 @@ fn phase_name(phase: VmPhase) -> String {
     serde_json::to_value(phase).ok().and_then(|value| value.as_str().map(str::to_owned)).unwrap_or_default()
 }
 
-fn print_vms(vms: &[Object<Vm>], format: OutputFormat) -> anyhow::Result<()> {
+#[must_use]
+pub fn boot_description(boot: &BootSource) -> String {
+    match boot {
+        BootSource::Kernel { bundle } => format!("kernel {bundle}"),
+        BootSource::Disk => String::from("disk"),
+        BootSource::Container { image, .. } => format!("container {image}"),
+    }
+}
+
+#[must_use]
+pub fn addresses(vm: &Object<Vm>) -> String {
+    vm.status.interfaces.iter().map(|interface| interface.address.to_string()).collect::<Vec<_>>().join(",")
+}
+
+pub fn print_vms(vms: &[Object<Vm>], format: OutputFormat) -> anyhow::Result<()> {
     if format != OutputFormat::Table {
         return print_structured(&vms, format);
     }
-    let mut table = Table::new(vec!["NAME", "PROJECT", "PHASE", "NODE", "CPUS", "MEMORY", "IMAGE"]);
+    let mut table =
+        Table::new(vec!["NAME", "PROJECT", "PHASE", "NODE", "CPUS", "MEMORY", "BOOT", "ADDRESSES"]);
     for vm in vms {
         table.add(vec![
             vm.metadata.name.to_string(),
@@ -65,14 +136,15 @@ fn print_vms(vms: &[Object<Vm>], format: OutputFormat) -> anyhow::Result<()> {
             vm.status.node.as_ref().map(ToString::to_string).unwrap_or_default(),
             vm.specification.cpu_count.to_string(),
             format!("{} MiB", vm.specification.memory_mebibytes),
-            vm.specification.image.to_string(),
+            boot_description(&vm.specification.boot),
+            addresses(vm),
         ]);
     }
     print!("{}", table.render());
     Ok(())
 }
 
-async fn wait_for(
+pub async fn wait_for(
     client: &ApiClient,
     name: &str,
     timeout: u64,
@@ -108,20 +180,51 @@ async fn set_power_state(
     Ok(client.update::<Vm>(name, &specification, Some(vm.metadata.generation)).await?)
 }
 
+pub async fn create_and_wait(
+    client: &ApiClient,
+    name: &ObjectName,
+    specification: &VmSpecification,
+    wait: bool,
+    timeout: u64,
+    format: OutputFormat,
+) -> anyhow::Result<()> {
+    let created = client.create::<Vm>(name, specification).await?;
+    if wait {
+        wait_for(client, name.as_str(), timeout, |update| {
+            matches!(update, WatchUpdate::Changed(vm) if vm.status.phase == VmPhase::Running && vm.is_status_current())
+        })
+        .await?;
+        return print_vms(&[client.get::<Vm>(name.as_str()).await?], format);
+    }
+    print_vms(&[created], format)
+}
+
 pub async fn run(client: &ApiClient, command: VmCommand, format: OutputFormat) -> anyhow::Result<()> {
     match command {
-        VmCommand::Create { name, cpus, memory_mebibytes, image, stopped, wait, timeout } => {
+        VmCommand::Create {
+            name,
+            cpus,
+            memory_mebibytes,
+            boot,
+            volumes,
+            attachments,
+            user_data,
+            stopped,
+            wait,
+            timeout,
+        } => {
             let power_state = if stopped { PowerState::Stopped } else { PowerState::Running };
-            let specification = VmSpecification { cpu_count: cpus, memory_mebibytes, image, power_state };
-            let created = client.create::<Vm>(&name, &specification).await?;
-            if wait && !stopped {
-                wait_for(client, name.as_str(), timeout, |update| {
-                    matches!(update, WatchUpdate::Changed(vm) if vm.status.phase == VmPhase::Running && vm.is_status_current())
-                })
-                .await?;
-                return print_vms(&[client.get::<Vm>(name.as_str()).await?], format);
-            }
-            print_vms(&[created], format)
+            let user_data = user_data.map(std::fs::read_to_string).transpose()?;
+            let specification = VmSpecification {
+                cpu_count: cpus,
+                memory_mebibytes,
+                boot: boot.source(),
+                volumes,
+                network_interfaces: attachments.interfaces(),
+                power_state,
+                user_data,
+            };
+            create_and_wait(client, &name, &specification, wait && !stopped, timeout, format).await
         }
         VmCommand::List => print_vms(&client.list::<Vm>().await?, format),
         VmCommand::Show { name } => print_structured(&client.get::<Vm>(&name).await?, format),
