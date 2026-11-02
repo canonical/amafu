@@ -22,13 +22,10 @@ pub struct Ipv4Network {
 }
 
 impl Ipv4Network {
-    pub const MINIMUM_PREFIX_LENGTH: u8 = 8;
-    pub const MAXIMUM_PREFIX_LENGTH: u8 = 29;
-
     pub fn new(address: Ipv4Addr, prefix_length: u8) -> Result<Self, InvalidAddress> {
         let text = format!("{address}/{prefix_length}");
-        if !(Self::MINIMUM_PREFIX_LENGTH..=Self::MAXIMUM_PREFIX_LENGTH).contains(&prefix_length) {
-            return Err(invalid(&text, "the prefix length must be between 8 and 29"));
+        if prefix_length > 32 {
+            return Err(invalid(&text, "the prefix length must be at most 32"));
         }
         let network = Self { address, prefix_length };
         if network.network_address() != address {
@@ -42,8 +39,13 @@ impl Ipv4Network {
         self.prefix_length
     }
 
+    #[must_use]
+    pub fn host(address: Ipv4Addr) -> Self {
+        Self { address, prefix_length: 32 }
+    }
+
     fn mask(self) -> u32 {
-        u32::MAX << (32 - u32::from(self.prefix_length))
+        u32::MAX.checked_shl(32 - u32::from(self.prefix_length)).unwrap_or(0)
     }
 
     #[must_use]
@@ -209,9 +211,18 @@ mod tests {
 
     #[test]
     fn malformed_networks_are_refused() {
-        for value in ["10.0.0.0", "10.0.0.1/24", "10.0.0.0/30", "10.0.0.0/4", "a.b.c.d/24"] {
+        for value in ["10.0.0.0", "10.0.0.1/24", "10.0.0.0/33", "a.b.c.d/24"] {
             assert!(value.parse::<Ipv4Network>().is_err(), "{value}");
         }
+    }
+
+    #[test]
+    fn every_prefix_length_is_representable() {
+        let everything: Ipv4Network = "0.0.0.0/0".parse().unwrap();
+        assert!(everything.contains(Ipv4Addr::new(192, 0, 2, 7)));
+        let host = Ipv4Network::host(Ipv4Addr::new(192, 0, 2, 7));
+        assert!(host.contains(Ipv4Addr::new(192, 0, 2, 7)));
+        assert!(!host.contains(Ipv4Addr::new(192, 0, 2, 8)));
     }
 
     #[test]

@@ -30,9 +30,19 @@ pub struct NetworkSpecification {
     pub is_outbound_access_allowed: bool,
 }
 
+pub const MINIMUM_SUBNET_PREFIX_LENGTH: u8 = 8;
+pub const MAXIMUM_SUBNET_PREFIX_LENGTH: u8 = 29;
+
 impl Validate for NetworkSpecification {
     fn validate(&self) -> Result<(), ValidationError> {
-        Ok(())
+        let mut error = ValidationError::new();
+        error.check(
+            (MINIMUM_SUBNET_PREFIX_LENGTH..=MAXIMUM_SUBNET_PREFIX_LENGTH)
+                .contains(&self.subnet.prefix_length()),
+            "specification.subnet",
+            "must have a prefix length between 8 and 29",
+        );
+        error.into_result()
     }
 
     fn validate_update(&self, previous: &Self) -> Result<(), ValidationError> {
@@ -64,5 +74,21 @@ impl NetworkStatus {
     #[must_use]
     pub fn is_ready(&self) -> bool {
         self.phase == NetworkPhase::Ready
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subnets_must_leave_room_for_hosts() {
+        let subnet = |text: &str| NetworkSpecification {
+            subnet: text.parse().unwrap(),
+            is_outbound_access_allowed: true,
+        };
+        assert_eq!(subnet("10.0.0.0/24").validate(), Ok(()));
+        assert!(subnet("10.0.0.0/30").validate().is_err());
+        assert!(subnet("0.0.0.0/4").validate().is_err());
     }
 }
