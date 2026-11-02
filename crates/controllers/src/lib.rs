@@ -1,3 +1,4 @@
+pub mod address_allocation;
 pub mod compute;
 pub mod node;
 pub mod placement;

@@ -1,11 +1,14 @@
 use std::sync::Arc;
 
+use amafu_domain::kinds::network::Network;
 use amafu_domain::kinds::node::Node;
-use amafu_domain::kinds::vm::{Vm, VmPhase, VmStatus};
+use amafu_domain::kinds::vm::{InterfaceStatus, Vm, VmPhase, VmStatus};
 use amafu_domain::{Change, NodeName, Object, ObjectReference};
 use amafu_interfaces::objects::{apply, get, list, remove};
 use amafu_interfaces::{ActionError, Consistency, Store};
 use amafu_reconciler::{Controller, KeyMapping, WatchedKind};
+
+use crate::address_allocation::{AllocationProblem, allocate_interfaces};
 
 pub struct PlacementController {
     store: Arc<dyn Store>,
@@ -22,12 +25,14 @@ impl PlacementController {
 pub struct PlacementObservation {
     pub vm: Option<Object<Vm>>,
     pub nodes: Vec<Object<Node>>,
+    pub networks: Vec<Object<Network>>,
+    pub peers: Vec<Object<Vm>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlacementAction {
-    Assign { node: NodeName, observed_generation: u64 },
-    ReportUnschedulable { observed_generation: u64, reason: String },
+    Assign { node: NodeName, interfaces: Vec<InterfaceStatus>, observed_generation: u64 },
+    ReportWaiting { observed_generation: u64, phase: VmPhase, reason: String },
     Remove,
 }
 
@@ -45,6 +50,13 @@ pub fn choose_node(nodes: &[Object<Node>]) -> Option<NodeName> {
         .and_then(|name| NodeName::new(name).ok())
 }
 
+fn report_waiting(vm: &Object<Vm>, phase: VmPhase, reason: String) -> Vec<PlacementAction> {
+    if vm.status.phase == phase && vm.status.message.as_ref() == Some(&reason) && vm.is_status_current() {
+        return Vec::new();
+    }
+    vec![PlacementAction::ReportWaiting { observed_generation: vm.metadata.generation, phase, reason }]
+}
+
 #[must_use]
 pub fn plan_placement(observation: &PlacementObservation) -> Vec<PlacementAction> {
     let Some(vm) = &observation.vm else {
@@ -56,16 +68,16 @@ pub fn plan_placement(observation: &PlacementObservation) -> Vec<PlacementAction
     if vm.metadata.is_deleting {
         return vec![PlacementAction::Remove];
     }
-    let observed_generation = vm.metadata.generation;
+    let interfaces = match allocate_interfaces(vm, &observation.networks, &observation.peers) {
+        Ok(interfaces) => interfaces,
+        Err(AllocationProblem::NotYet(reason)) => return report_waiting(vm, VmPhase::Pending, reason),
+        Err(AllocationProblem::Impossible(reason)) => return report_waiting(vm, VmPhase::Failed, reason),
+    };
     match choose_node(&observation.nodes) {
-        Some(node) => vec![PlacementAction::Assign { node, observed_generation }],
-        None if vm.status.message.as_deref() == Some(NO_NODE_AVAILABLE) && vm.is_status_current() => {
-            Vec::new()
+        Some(node) => {
+            vec![PlacementAction::Assign { node, interfaces, observed_generation: vm.metadata.generation }]
         }
-        None => vec![PlacementAction::ReportUnschedulable {
-            observed_generation,
-            reason: NO_NODE_AVAILABLE.to_owned(),
-        }],
+        None => report_waiting(vm, VmPhase::Pending, NO_NODE_AVAILABLE.to_owned()),
     }
 }
 
@@ -78,6 +90,7 @@ impl Controller for PlacementController {
     const WATCHES: &'static [WatchedKind<ObjectReference>] = &[
         WatchedKind { kind: "Vm", mapping: KeyMapping::ObjectKey(|reference| Some(reference.clone())) },
         WatchedKind { kind: "Node", mapping: KeyMapping::EveryKey },
+        WatchedKind { kind: "Network", mapping: KeyMapping::EveryKey },
     ];
 
     async fn discover_keys(&self) -> Result<Vec<ObjectReference>, ActionError> {
@@ -86,9 +99,20 @@ impl Controller for PlacementController {
     }
 
     async fn observe(&self, key: &ObjectReference) -> Result<PlacementObservation, ActionError> {
-        let vm = get::<Vm>(self.store.as_ref(), key, Consistency::Linearizable).await?;
-        let nodes = list::<Node>(self.store.as_ref(), None, Consistency::Linearizable).await?;
-        Ok(PlacementObservation { vm, nodes })
+        let store = self.store.as_ref();
+        let vm = get::<Vm>(store, key, Consistency::Linearizable).await?;
+        let nodes = list::<Node>(store, None, Consistency::Linearizable).await?;
+        let (networks, peers) = match &vm {
+            Some(vm) if !vm.specification.network_interfaces.is_empty() => {
+                let project = vm.metadata.project.as_ref();
+                (
+                    list::<Network>(store, project, Consistency::Linearizable).await?,
+                    list::<Vm>(store, project, Consistency::Linearizable).await?,
+                )
+            }
+            _ => (Vec::new(), Vec::new()),
+        };
+        Ok(PlacementObservation { vm, nodes, networks, peers })
     }
 
     fn plan(&self, observation: &PlacementObservation) -> Vec<PlacementAction> {
@@ -98,12 +122,13 @@ impl Controller for PlacementController {
     async fn apply(&self, key: &ObjectReference, action: PlacementAction) -> Result<(), ActionError> {
         let store = self.store.as_ref();
         match action {
-            PlacementAction::Assign { node, observed_generation } => {
-                let status = VmStatus { phase: VmPhase::Scheduled, node: Some(node), message: None };
+            PlacementAction::Assign { node, interfaces, observed_generation } => {
+                let status =
+                    VmStatus { phase: VmPhase::Scheduled, node: Some(node), interfaces, message: None };
                 apply::<Vm>(store, key, Change::UpdateStatus { observed_generation, status }).await?;
             }
-            PlacementAction::ReportUnschedulable { observed_generation, reason } => {
-                let status = VmStatus { phase: VmPhase::Pending, node: None, message: Some(reason) };
+            PlacementAction::ReportWaiting { observed_generation, phase, reason } => {
+                let status = VmStatus { phase, node: None, interfaces: Vec::new(), message: Some(reason) };
                 apply::<Vm>(store, key, Change::UpdateStatus { observed_generation, status }).await?;
             }
             PlacementAction::Remove => remove::<Vm>(store, key).await?,
@@ -152,7 +177,7 @@ mod tests {
     }
 
     fn plan(vm: Option<Object<Vm>>, nodes: Vec<Object<Node>>) -> Vec<PlacementAction> {
-        plan_placement(&PlacementObservation { vm, nodes })
+        plan_placement(&PlacementObservation { vm, nodes, networks: Vec::new(), peers: Vec::new() })
     }
 
     #[test]
@@ -161,7 +186,11 @@ mod tests {
         let actions = plan(Some(vm()), nodes);
         assert_eq!(
             actions,
-            vec![PlacementAction::Assign { node: NodeName::new("node-a").unwrap(), observed_generation: 1 }]
+            vec![PlacementAction::Assign {
+                node: NodeName::new("node-a").unwrap(),
+                interfaces: Vec::new(),
+                observed_generation: 1
+            }]
         );
     }
 
@@ -169,7 +198,10 @@ mod tests {
     fn cordoned_and_unready_nodes_are_skipped() {
         let nodes = vec![node("node-a", NodePhase::NotReady, false), node("node-b", NodePhase::Ready, true)];
         let actions = plan(Some(vm()), nodes);
-        assert!(matches!(actions.as_slice(), [PlacementAction::ReportUnschedulable { .. }]));
+        assert!(matches!(
+            actions.as_slice(),
+            [PlacementAction::ReportWaiting { phase: VmPhase::Pending, .. }]
+        ));
     }
 
     #[test]
