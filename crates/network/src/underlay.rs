@@ -90,7 +90,7 @@ async fn links(handle: &Handle) -> Result<Vec<LinkMessage>, UnderlayError> {
     Ok(handle.link().get().execute().try_collect().await?)
 }
 
-async fn bring_up(handle: &Handle, index: u32) -> Result<(), UnderlayError> {
+async fn bring_up_index(handle: &Handle, index: u32) -> Result<(), UnderlayError> {
     Ok(handle.link().set(LinkUnspec::new_with_index(index).up().build()).execute().await?)
 }
 
@@ -110,6 +110,23 @@ fn choose_interface<'links>(
     }
 }
 
+pub async fn bring_up(interface: Option<&str>) -> Result<String, UnderlayError> {
+    let (connection, handle, _) = new_connection().map_err(UnderlayError::Connection)?;
+    let connection_task = tokio::spawn(connection);
+    let result = async {
+        let all_links = links(&handle).await?;
+        if let Some(loopback) = all_links.iter().find(|link| link_name(link) == Some(LOOPBACK)) {
+            bring_up_index(&handle, loopback.header.index).await?;
+        }
+        let chosen = choose_interface(&all_links, interface)?;
+        bring_up_index(&handle, chosen.header.index).await?;
+        Ok(link_name(chosen).unwrap_or_default().to_owned())
+    }
+    .await;
+    connection_task.abort();
+    result
+}
+
 pub async fn configure_underlay(configuration: &UnderlayConfiguration) -> Result<String, UnderlayError> {
     let (connection, handle, _) = new_connection().map_err(UnderlayError::Connection)?;
     let connection_task = tokio::spawn(connection);
@@ -121,12 +138,12 @@ pub async fn configure_underlay(configuration: &UnderlayConfiguration) -> Result
 async fn apply(handle: &Handle, configuration: &UnderlayConfiguration) -> Result<String, UnderlayError> {
     let all_links = links(handle).await?;
     if let Some(loopback) = all_links.iter().find(|link| link_name(link) == Some(LOOPBACK)) {
-        bring_up(handle, loopback.header.index).await?;
+        bring_up_index(handle, loopback.header.index).await?;
     }
     let interface = choose_interface(&all_links, configuration.interface.as_deref())?;
     let index = interface.header.index;
     let name = link_name(interface).unwrap_or_default().to_owned();
-    bring_up(handle, index).await?;
+    bring_up_index(handle, index).await?;
     let address = configuration.address;
     ignore_existing(
         handle.address().add(index, IpAddr::V4(address.address), address.prefix_length).execute().await,

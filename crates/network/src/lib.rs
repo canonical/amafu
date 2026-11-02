@@ -9,4 +9,4 @@ pub mod underlay;
 
 pub use datapath::KernelDatapath;
 pub use services::LocalServicesServer;
-pub use underlay::{StaticAddress, UnderlayConfiguration, UnderlayError, configure_underlay};
+pub use underlay::{StaticAddress, UnderlayConfiguration, UnderlayError, bring_up, configure_underlay};

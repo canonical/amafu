@@ -84,7 +84,7 @@ pub struct DhcpMessage {
     pub requested_address: Option<Ipv4Addr>,
     pub server_identifier: Option<Ipv4Addr>,
     pub lease: Lease,
-    pub reply_options: Vec<(u8, Vec<u8>)>,
+    pub options: Vec<(u8, Vec<u8>)>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -176,7 +176,7 @@ impl DhcpMessage {
             requested_address,
             server_identifier,
             lease,
-            reply_options: Vec::new(),
+            options: Vec::new(),
         })
     }
 
@@ -199,7 +199,7 @@ impl DhcpMessage {
         bytes[28..34].copy_from_slice(&self.hardware_address.octets());
         bytes.extend_from_slice(&MAGIC_COOKIE);
         bytes.extend_from_slice(&[OPTION_MESSAGE_TYPE, 1, self.message_type.code()]);
-        for (code, value) in &self.reply_options {
+        for (code, value) in &self.options {
             for chunk in value.chunks(usize::from(u8::MAX)) {
                 bytes.push(*code);
                 bytes.push(u8::try_from(chunk.len()).unwrap_or(u8::MAX));
@@ -232,7 +232,7 @@ fn reply(
         requested_address: None,
         server_identifier: None,
         lease: Lease::default(),
-        reply_options: options,
+        options,
     }
 }
 
@@ -327,7 +327,7 @@ pub mod tests {
             requested_address: requested,
             server_identifier: None,
             lease: Lease::default(),
-            reply_options: Vec::new(),
+            options: Vec::new(),
         }
     }
 
