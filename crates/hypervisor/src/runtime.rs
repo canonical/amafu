@@ -7,6 +7,8 @@ const PROCESS_ID_FILE: &str = "process-id";
 const BOOTED_FILE: &str = "booted";
 const SERIAL_LOG_FILE: &str = "serial.log";
 const PROCESS_LOG_FILE: &str = "vm-process.log";
+const USER_ID_FILE: &str = "user-id";
+const VSOCK_SOCKET_FILE: &str = "vsock.socket";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeDirectory {
@@ -27,6 +29,11 @@ impl RuntimeDirectory {
     #[must_use]
     pub fn vm(&self, vm_id: &ObjectId) -> VmDirectory {
         VmDirectory { path: self.root.join(vm_id.to_string()) }
+    }
+
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     pub fn vms(&self) -> std::io::Result<Vec<(ObjectId, VmDirectory)>> {
@@ -81,6 +88,20 @@ impl VmDirectory {
     #[must_use]
     pub fn process_log(&self) -> PathBuf {
         self.path.join(PROCESS_LOG_FILE)
+    }
+
+    #[must_use]
+    pub fn vsock_socket(&self) -> PathBuf {
+        self.path.join(VSOCK_SOCKET_FILE)
+    }
+
+    #[must_use]
+    pub fn user_id(&self) -> Option<u32> {
+        std::fs::read_to_string(self.path.join(USER_ID_FILE)).ok()?.trim().parse().ok()
+    }
+
+    pub fn record_user_id(&self, user_id: u32) -> std::io::Result<()> {
+        std::fs::write(self.path.join(USER_ID_FILE), user_id.to_string())
     }
 
     #[must_use]
