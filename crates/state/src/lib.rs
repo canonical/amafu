@@ -1,6 +1,7 @@
 pub mod audit;
 pub mod entities;
 mod errors;
+pub mod log_repair;
 pub mod node;
 pub mod store;
 
