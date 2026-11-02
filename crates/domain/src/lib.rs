@@ -1,3 +1,4 @@
+pub mod kinds;
 pub mod name;
 pub mod object;
 pub mod object_id;
