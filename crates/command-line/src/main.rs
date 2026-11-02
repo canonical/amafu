@@ -1,6 +1,7 @@
 mod connection;
 mod node;
 mod output;
+mod resources;
 mod vm;
 
 use std::process::ExitCode;
