@@ -1,5 +1,6 @@
 pub mod audit;
 pub mod clock;
+pub mod contract;
 pub mod error;
 pub mod hypervisor;
 pub mod identifiers;
