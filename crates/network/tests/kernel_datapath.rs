@@ -3,12 +3,12 @@ use amafu_interfaces::contract::datapath::datapath_contract;
 use amafu_interfaces::{NodeNetworkState, Port, PortKey, Segment, SegmentKey};
 use amafu_network::KernelDatapath;
 
-fn desired() -> NodeNetworkState {
+fn desired() -> Result<NodeNetworkState, Box<dyn std::error::Error>> {
     let segment = SegmentKey::of("contract", "default");
-    NodeNetworkState {
+    Ok(NodeNetworkState {
         segments: vec![Segment {
             key: segment.clone(),
-            subnet: "10.250.0.0/24".parse().unwrap(),
+            subnet: "10.250.0.0/24".parse()?,
             is_outbound_access_allowed: true,
             domain: String::from("default.contract.internal"),
         }],
@@ -16,12 +16,12 @@ fn desired() -> NodeNetworkState {
             key: PortKey { vm_id: ObjectId::from_uuid(uuid::Uuid::from_u128(7)), index: 0 },
             segment,
             mac: MacAddress::locally_administered(b"contract"),
-            address: "10.250.0.2".parse().unwrap(),
+            address: "10.250.0.2".parse()?,
             hostname: String::from("contract"),
             rules: Vec::new(),
             user_data: None,
         }],
-    }
+    })
 }
 
 #[tokio::test]
@@ -29,5 +29,5 @@ fn desired() -> NodeNetworkState {
 async fn the_kernel_datapath_honours_the_datapath_contract() {
     let underlay = std::env::var("AMAFU_TEST_UNDERLAY").unwrap_or_else(|_| String::from("eth0"));
     let datapath = KernelDatapath::new(underlay, "/usr/sbin/nft".into());
-    assert_eq!(datapath_contract(&datapath, &desired()).await, Ok(()));
+    assert_eq!(datapath_contract(&datapath, &desired().unwrap()).await, Ok(()));
 }
