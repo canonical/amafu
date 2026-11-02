@@ -8,4 +8,4 @@ pub use assertions::{always_during, ensure, ensure_equal, eventually};
 pub use cluster::{Cluster, Fault, FaultHandle, Level};
 pub use definition::ScenarioDefinition;
 pub use error::{ScenarioError, ScenarioResult, Violation};
-pub use observation::{ClusterObservation, ObservedInstance};
+pub use observation::{ClusterObservation, ObservedAttachment, ObservedInstance, ObservedPort};
