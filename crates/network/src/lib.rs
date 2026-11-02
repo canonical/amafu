@@ -1,5 +1,6 @@
 pub mod dhcp;
 pub mod dns;
+pub mod metadata;
 pub mod policy;
 pub mod underlay;
 
