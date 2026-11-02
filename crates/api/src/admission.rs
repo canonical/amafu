@@ -81,7 +81,7 @@ mod tests {
     #[test]
     fn a_well_formed_body_is_admitted() {
         let vm = kind_named("Vm").unwrap();
-        let body = br#"{"metadata":{"name":"web-1"},"specification":{"cpu_count":1,"memory_mebibytes":256,"image":"test-guest"}}"#;
+        let body = br#"{"metadata":{"name":"web-1"},"specification":{"cpu_count":1,"memory_mebibytes":256,"boot":{"type":"kernel","bundle":"test-guest"}}}"#;
         let change = admit_create(&vm, ProjectName::new("project-a").ok(), body, new_id()).unwrap();
         let created = (vm.apply_change)(None, change).unwrap();
         assert_eq!(created["metadata"]["project"], "project-a");

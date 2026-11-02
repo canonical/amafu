@@ -10,7 +10,7 @@ use serde_json::json;
 
 fn existing(kind: &amafu_domain::registry::KindDescriptor) -> Option<serde_json::Value> {
     let specification = match kind.kind {
-        "Vm" => json!({"cpu_count": 1, "memory_mebibytes": 256, "image": "test-guest"}),
+        "Vm" => json!({"cpu_count": 1, "memory_mebibytes": 256, "boot": {"type": "kernel", "bundle": "test-guest"}}),
         _ => json!({"roles": ["compute"]}),
     };
     let project = if kind.is_project_scoped() { ProjectName::new("project-a").ok() } else { None };
