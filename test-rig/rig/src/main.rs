@@ -2,7 +2,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use amafu_api::diagnostics::{ContractOutcome, HYPERVISOR_CONTRACT_PATH, INSTANCES_PATH, NodeInstance};
+use amafu_api::diagnostics::{
+    ATTACHMENTS_PATH, ContractOutcome, HYPERVISOR_CONTRACT_PATH, INSTANCES_PATH, NETWORK_PATH, NodeInstance,
+    SANDBOX_PATH,
+};
 use amafu_lxd_lab::{LabSettings, VirtualLab, down, load_state, up};
 use amafu_scenario::{Level, ScenarioDefinition};
 use amafu_simulated_world::{SimulationSettings, run_scenario};
@@ -63,6 +66,28 @@ enum LabCommand {
     Contract,
     #[command(about = "Show the VM processes running on every node, with their console output")]
     Instances,
+    #[command(about = "Show what every node reports about one of its subsystems")]
+    Inspect {
+        #[arg(value_enum)]
+        subsystem: Subsystem,
+    },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum Subsystem {
+    Network,
+    Attachments,
+    Sandbox,
+}
+
+impl Subsystem {
+    fn path(self) -> &'static str {
+        match self {
+            Self::Network => NETWORK_PATH,
+            Self::Attachments => ATTACHMENTS_PATH,
+            Self::Sandbox => SANDBOX_PATH,
+        }
+    }
 }
 
 fn repository() -> anyhow::Result<PathBuf> {
@@ -153,12 +178,35 @@ async fn lab(command: LabCommand) -> anyhow::Result<()> {
                 let instances: Vec<NodeInstance> = http.get(url).send().await?.json().await?;
                 for instance in instances {
                     println!(
-                        "{} {} {:?}\n{}",
+                        "{} {} {:?} workload {:?} disks {:?}\n--- console\n{}\n--- VM process\n{}",
                         node.name,
                         instance.vm_id,
                         instance.state,
-                        instance.console_tail.trim_end()
+                        instance.workload,
+                        instance.disks,
+                        instance.console_tail.trim_end(),
+                        instance.process_log_tail.trim_end()
                     );
+                }
+            }
+            Ok(())
+        }
+        LabCommand::Inspect { subsystem } => {
+            let state = load_state(&repository)?;
+            let http = reqwest::Client::builder().timeout(Duration::from_secs(120)).build()?;
+            for node in &state.topology.nodes {
+                let url = format!("{}{}", node.diagnostics_endpoint(&state.settings), subsystem.path());
+                let request = match subsystem {
+                    Subsystem::Sandbox => http.post(url),
+                    Subsystem::Network | Subsystem::Attachments => http.get(url),
+                };
+                let facts: serde_json::Value = request.send().await?.error_for_status()?.json().await?;
+                println!("{}:", node.name);
+                match facts.get("ruleset").and_then(serde_json::Value::as_str) {
+                    Some(ruleset) => {
+                        println!("{}\n{ruleset}", serde_json::to_string_pretty(&facts["ports"])?);
+                    }
+                    None => println!("{}", serde_json::to_string_pretty(&facts)?),
                 }
             }
             Ok(())
