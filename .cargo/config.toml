@@ -1,0 +1,2 @@
+[alias]
+rig = "run --quiet -p amafu-rig --"
