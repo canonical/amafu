@@ -1,0 +1,8 @@
+disallowed-names = [
+    "addr", "arg", "args", "buf", "cfg", "cmd", "conf", "config", "ctl", "ctx", "db", "dir", "dp", "err", "idx",
+    "impl", "info", "len", "mgr", "msg", "num", "obj", "params", "pkt", "ptr", "req", "res", "resp", "sg", "spec",
+    "srv", "str", "tmp", "tx", "rx", "val", "var", "vec", "foo", "bar", "baz",
+]
+allowed-idents-below-min-chars = []
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
