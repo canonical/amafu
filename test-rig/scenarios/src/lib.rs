@@ -1,5 +1,6 @@
 pub mod containers;
 pub mod networking;
+pub mod sandbox;
 pub mod security;
 pub mod storage;
 pub mod support;
@@ -21,6 +22,7 @@ pub fn all() -> Vec<ScenarioDefinition> {
         storage::NFS_VOLUME_IS_ATTACHED,
         networking::ADDRESSES_ARE_DISTINCT,
         networking::SECURITY_GROUPS_DECIDE,
+        sandbox::HOSTILE_GUEST_IS_CONFINED,
     ]
 }
 
