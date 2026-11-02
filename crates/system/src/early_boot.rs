@@ -96,6 +96,10 @@ fn mount_failure(target: &Path) -> impl Fn(rustix::io::Errno) -> EarlyBootError 
 pub fn mount_essential_filesystems() -> Result<(), EarlyBootError> {
     for entry in ESSENTIAL_MOUNTS {
         if !Path::new(entry.target).exists() {
+            if entry.is_optional {
+                tracing::info!(target = entry.target, "an optional file system has no mount point");
+                continue;
+            }
             create_directory(Path::new(entry.target))?;
         }
         match mount(entry.source, entry.target, entry.file_system, entry.flags, entry.data) {
