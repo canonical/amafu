@@ -1,11 +1,17 @@
-use amafu_domain::ObjectId;
-use amafu_interfaces::InstanceState;
+use std::net::Ipv4Addr;
+use std::path::PathBuf;
+
+use amafu_domain::{MacAddress, ObjectId};
+use amafu_interfaces::{InstanceState, WorkloadState};
 use serde::{Deserialize, Serialize};
 
 pub const INSTANCES_PATH: &str = "/diagnostics/instances";
 pub const BOOT_PATH: &str = "/diagnostics/boot";
 pub const HYPERVISOR_CONTRACT_PATH: &str = "/diagnostics/contracts/hypervisor";
 pub const AUDIT_PATH: &str = "/diagnostics/audit";
+pub const NETWORK_PATH: &str = "/diagnostics/network";
+pub const ATTACHMENTS_PATH: &str = "/diagnostics/attachments";
+pub const SANDBOX_PATH: &str = "/diagnostics/sandbox";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeInstance {
@@ -13,6 +19,43 @@ pub struct NodeInstance {
     pub state: InstanceState,
     #[serde(default)]
     pub console_tail: String,
+    #[serde(default)]
+    pub process_log_tail: String,
+    #[serde(default)]
+    pub disks: Vec<PathBuf>,
+    #[serde(default)]
+    pub mac_addresses: Vec<MacAddress>,
+    #[serde(default)]
+    pub workload: Option<WorkloadState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodePort {
+    pub vm_id: ObjectId,
+    pub index: u8,
+    pub segment: String,
+    pub mac: MacAddress,
+    pub address: Ipv4Addr,
+    pub tap: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeNetworkFacts {
+    pub ports: Vec<NodePort>,
+    pub ruleset: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeAttachment {
+    pub volume: String,
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SandboxCheck {
+    pub name: String,
+    pub is_blocked: bool,
+    pub outcome: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

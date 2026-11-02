@@ -190,6 +190,11 @@ impl LocalServicesServer {
             runtime,
         }
     }
+
+    #[must_use]
+    pub fn served(&self) -> NodeNetworkState {
+        read(&self.state)
+    }
 }
 
 impl LocalServices for LocalServicesServer {

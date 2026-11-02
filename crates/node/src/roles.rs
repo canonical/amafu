@@ -37,7 +37,7 @@ const MAXIMUM_RESTART_DELAY: Duration = Duration::from_secs(30);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 const NODE_IDENTIFIER_FILE: &str = "node-id";
 const STATE_DIRECTORY: &str = "state";
-const VM_DIRECTORY: &str = "vms";
+pub const VM_DIRECTORY: &str = "vms";
 
 pub struct Services {
     pub store: Arc<dyn Store>,
