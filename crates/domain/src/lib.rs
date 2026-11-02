@@ -1,3 +1,4 @@
+pub mod change;
 pub mod kinds;
 pub mod name;
 pub mod object;
@@ -5,6 +6,7 @@ pub mod object_id;
 pub mod resource;
 pub mod validation;
 
+pub use change::{Change, ChangeError, apply_change, confirm_removal};
 pub use name::{InvalidName, NodeName, ObjectName, ProjectName};
 pub use object::{Metadata, Object, ObjectReference};
 pub use object_id::ObjectId;
