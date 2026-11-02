@@ -58,3 +58,10 @@ impl fmt::Display for Verb {
         })
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClusterPolicy {
+    ManagedByNodes,
+    SharedInfrastructure,
+}

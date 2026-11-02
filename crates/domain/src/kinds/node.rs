@@ -3,6 +3,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+use crate::access::ClusterPolicy;
 use crate::resource::{Resource, Scope};
 use crate::validation::{Validate, ValidationError};
 
@@ -14,6 +15,7 @@ impl Resource for Node {
     const PLURAL_NAME: &'static str = "nodes";
     const VERSION: u32 = 1;
     const SCOPE: Scope = Scope::Cluster;
+    const CLUSTER_POLICY: ClusterPolicy = ClusterPolicy::ManagedByNodes;
     type Specification = NodeSpecification;
     type Status = NodeStatus;
 }

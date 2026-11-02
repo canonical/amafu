@@ -1,4 +1,4 @@
-use amafu_domain::access::{Role, Verb};
+use amafu_domain::access::{ClusterPolicy, Role, Verb};
 use amafu_domain::registry::KindDescriptor;
 use amafu_domain::{ProjectName, Scope};
 
@@ -17,9 +17,12 @@ pub fn is_allowed(principal: &Principal, verb: Verb, kind: &KindDescriptor, targ
         return true;
     }
     match (kind.scope, target) {
-        (Scope::Cluster, Target::Cluster) => {
-            principal.role == Role::Operator && (verb.is_read() || verb == Verb::Update)
-        }
+        (Scope::Cluster, Target::Cluster) => match (kind.cluster_policy, principal.role) {
+            (ClusterPolicy::ManagedByNodes, Role::Operator) => verb.is_read() || verb == Verb::Update,
+            (ClusterPolicy::SharedInfrastructure, Role::Operator) => true,
+            (ClusterPolicy::SharedInfrastructure, Role::Member | Role::Viewer) => verb.is_read(),
+            _ => false,
+        },
         (Scope::Project, Target::Project(project)) if *project == principal.project => match principal.role {
             Role::Admin | Role::Operator | Role::Member => true,
             Role::Viewer => verb.is_read(),

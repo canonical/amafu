@@ -14,6 +14,10 @@ const READ_AND_UPDATE: &[Verb] = &[Get, List, Watch, Update];
 const NOTHING: &[Verb] = &[];
 
 const TABLE: &[Row] = &[
+    Row { role: Admin, kind: "StorageBackend", in_own_project: EVERY_VERB, in_other_project: EVERY_VERB },
+    Row { role: Operator, kind: "StorageBackend", in_own_project: EVERY_VERB, in_other_project: EVERY_VERB },
+    Row { role: Member, kind: "StorageBackend", in_own_project: READ, in_other_project: READ },
+    Row { role: Viewer, kind: "StorageBackend", in_own_project: READ, in_other_project: READ },
     Row { role: Admin, kind: "Node", in_own_project: EVERY_VERB, in_other_project: EVERY_VERB },
     Row { role: Operator, kind: "Node", in_own_project: READ_AND_UPDATE, in_other_project: READ_AND_UPDATE },
     Row { role: Member, kind: "Node", in_own_project: NOTHING, in_other_project: NOTHING },
@@ -22,6 +26,22 @@ const TABLE: &[Row] = &[
     Row { role: Operator, kind: "Vm", in_own_project: EVERY_VERB, in_other_project: NOTHING },
     Row { role: Member, kind: "Vm", in_own_project: EVERY_VERB, in_other_project: NOTHING },
     Row { role: Viewer, kind: "Vm", in_own_project: READ, in_other_project: NOTHING },
+    Row { role: Admin, kind: "Image", in_own_project: EVERY_VERB, in_other_project: EVERY_VERB },
+    Row { role: Operator, kind: "Image", in_own_project: EVERY_VERB, in_other_project: NOTHING },
+    Row { role: Member, kind: "Image", in_own_project: EVERY_VERB, in_other_project: NOTHING },
+    Row { role: Viewer, kind: "Image", in_own_project: READ, in_other_project: NOTHING },
+    Row { role: Admin, kind: "Volume", in_own_project: EVERY_VERB, in_other_project: EVERY_VERB },
+    Row { role: Operator, kind: "Volume", in_own_project: EVERY_VERB, in_other_project: NOTHING },
+    Row { role: Member, kind: "Volume", in_own_project: EVERY_VERB, in_other_project: NOTHING },
+    Row { role: Viewer, kind: "Volume", in_own_project: READ, in_other_project: NOTHING },
+    Row { role: Admin, kind: "Network", in_own_project: EVERY_VERB, in_other_project: EVERY_VERB },
+    Row { role: Operator, kind: "Network", in_own_project: EVERY_VERB, in_other_project: NOTHING },
+    Row { role: Member, kind: "Network", in_own_project: EVERY_VERB, in_other_project: NOTHING },
+    Row { role: Viewer, kind: "Network", in_own_project: READ, in_other_project: NOTHING },
+    Row { role: Admin, kind: "SecurityGroup", in_own_project: EVERY_VERB, in_other_project: EVERY_VERB },
+    Row { role: Operator, kind: "SecurityGroup", in_own_project: EVERY_VERB, in_other_project: NOTHING },
+    Row { role: Member, kind: "SecurityGroup", in_own_project: EVERY_VERB, in_other_project: NOTHING },
+    Row { role: Viewer, kind: "SecurityGroup", in_own_project: READ, in_other_project: NOTHING },
 ];
 
 #[must_use]

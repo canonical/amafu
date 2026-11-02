@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
+use crate::access::ClusterPolicy;
 use crate::change::{Change, ChangeError, apply_change, confirm_removal};
 use crate::kinds::image::Image;
 use crate::kinds::network::Network;
@@ -54,6 +55,7 @@ pub struct KindDescriptor {
     pub plural_name: &'static str,
     pub version: u32,
     pub scope: Scope,
+    pub cluster_policy: ClusterPolicy,
     pub apply_change: ApplyUntyped,
     pub confirm_removal: ConfirmUntypedRemoval,
 }
@@ -66,6 +68,7 @@ impl KindDescriptor {
             plural_name: R::PLURAL_NAME,
             version: R::VERSION,
             scope: R::SCOPE,
+            cluster_policy: R::CLUSTER_POLICY,
             apply_change: apply_untyped::<R>,
             confirm_removal: confirm_untyped_removal::<R>,
         }
