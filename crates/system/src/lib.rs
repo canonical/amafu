@@ -1,5 +1,7 @@
 pub mod boot_media;
 pub mod early_boot;
+pub mod firmware;
+pub mod host;
 pub mod modules;
 pub mod processes;
 
