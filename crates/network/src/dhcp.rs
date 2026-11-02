@@ -83,7 +83,23 @@ pub struct DhcpMessage {
     pub message_type: MessageType,
     pub requested_address: Option<Ipv4Addr>,
     pub server_identifier: Option<Ipv4Addr>,
+    pub lease: Lease,
     pub reply_options: Vec<(u8, Vec<u8>)>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Lease {
+    pub subnet_mask: Option<Ipv4Addr>,
+    pub router: Option<Ipv4Addr>,
+    pub dns_servers: Vec<Ipv4Addr>,
+    pub domain_name: Option<String>,
+}
+
+impl Lease {
+    #[must_use]
+    pub fn prefix_length(&self) -> Option<u8> {
+        self.subnet_mask.map(|mask| u8::try_from(u32::from(mask).count_ones()).unwrap_or(32))
+    }
 }
 
 fn address_at(bytes: &[u8], offset: usize) -> Ipv4Addr {
@@ -114,6 +130,7 @@ impl DhcpMessage {
         let mut message_type = None;
         let mut requested_address = None;
         let mut server_identifier = None;
+        let mut lease = Lease::default();
         let mut offset = FIXED_HEADER_BYTES + MAGIC_COOKIE.len();
         while offset < bytes.len() {
             let code = bytes[offset];
@@ -133,6 +150,16 @@ impl DhcpMessage {
                 OPTION_MESSAGE_TYPE => message_type = value.first().copied().and_then(MessageType::from_code),
                 OPTION_REQUESTED_ADDRESS => requested_address = option_address(value),
                 OPTION_SERVER_IDENTIFIER => server_identifier = option_address(value),
+                OPTION_SUBNET_MASK => lease.subnet_mask = option_address(value),
+                OPTION_ROUTER => lease.router = value.get(..4).and_then(option_address),
+                OPTION_DNS_SERVERS => {
+                    lease.dns_servers =
+                        value.as_chunks::<4>().0.iter().map(|octets| Ipv4Addr::from(*octets)).collect();
+                }
+                OPTION_DOMAIN_NAME => {
+                    lease.domain_name =
+                        std::str::from_utf8(value).ok().filter(|name| name.is_ascii()).map(str::to_owned);
+                }
                 _ => {}
             }
             offset += 2 + length;
@@ -148,6 +175,7 @@ impl DhcpMessage {
             message_type: message_type.ok_or(MalformedMessage("the message type is missing"))?,
             requested_address,
             server_identifier,
+            lease,
             reply_options: Vec::new(),
         })
     }
@@ -203,6 +231,7 @@ fn reply(
         message_type,
         requested_address: None,
         server_identifier: None,
+        lease: Lease::default(),
         reply_options: options,
     }
 }
@@ -297,6 +326,7 @@ pub mod tests {
             message_type,
             requested_address: requested,
             server_identifier: None,
+            lease: Lease::default(),
             reply_options: Vec::new(),
         }
     }
@@ -320,7 +350,12 @@ pub mod tests {
         assert_eq!(offer.your_address, Ipv4Addr::new(10, 1, 0, 2));
         let encoded = offer.encode();
         assert!(encoded.len() >= MINIMUM_REPLY_BYTES && encoded.len() <= 1500);
-        assert_eq!(DhcpMessage::parse(&encoded).unwrap().your_address, Ipv4Addr::new(10, 1, 0, 2));
+        let received = DhcpMessage::parse(&encoded).unwrap();
+        assert_eq!(received.your_address, Ipv4Addr::new(10, 1, 0, 2));
+        assert_eq!(received.lease.prefix_length(), Some(24));
+        assert_eq!(received.lease.router, Some(Ipv4Addr::new(10, 1, 0, 1)));
+        assert_eq!(received.lease.dns_servers, vec![Ipv4Addr::new(10, 1, 0, 1)]);
+        assert_eq!(received.lease.domain_name.as_deref(), Some("default.project-a.internal"));
     }
 
     #[test]
