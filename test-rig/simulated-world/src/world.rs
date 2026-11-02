@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use amafu_api::authentication::TokenIdentity;
+use amafu_api::diagnostics::SandboxCheck;
 use amafu_api::{ApiClient, ApiState, Principal, RouterTransport, TokenAuthenticator, router};
 use amafu_checkers::invariants::check_all;
 use amafu_controllers::{
@@ -24,7 +25,7 @@ use amafu_interfaces::{
 use amafu_network::dhcp::{self, DhcpMessage, Lease, MessageType};
 use amafu_reconciler::{Controller, ReconcilerSettings, run_controller};
 use amafu_scenario::{
-    Cluster, ClusterObservation, Fault, FaultHandle, Level, ObservedAttachment, ObservedInstance,
+    Cluster, ClusterObservation, Fault, FaultHandle, Level, NfsExport, ObservedAttachment, ObservedInstance,
     ObservedPort, ScenarioDefinition, ScenarioError, ScenarioResult,
 };
 use rand::{RngExt, SeedableRng};
@@ -41,6 +42,8 @@ use crate::fakes::{
 
 const PROJECTS: [&str; 2] = ["project-a", "project-b"];
 const START_UNIX_SECONDS: i64 = 1_767_225_600;
+const SIMULATED_NFS_SERVER: &str = "filer.lab";
+const SIMULATED_NFS_EXPORT: &str = "/srv/amafu";
 const RECENT_EVENT_COUNT: usize = 200;
 const ROLE_CRASH_PROBABILITY: f64 = 0.02;
 const BOOT_DURATION: Duration = Duration::from_secs(1);
@@ -445,6 +448,7 @@ impl SimulatedWorld {
                     workload,
                     disks: instance.launch.disks.iter().map(|disk| disk.path.clone()).collect(),
                     offered_addresses,
+                    console: String::new(),
                 });
             }
             for (target, path) in services.storage.attachments() {
@@ -622,6 +626,17 @@ impl Cluster for SimulatedWorld {
             .await
             .map_err(|error| ScenarioError::Lab(error.to_string()))?;
         Ok(found.is_some())
+    }
+
+    async fn sandbox_checks(&self) -> Result<Option<Vec<SandboxCheck>>, ScenarioError> {
+        Ok(None)
+    }
+
+    fn nfs_export(&self) -> Option<NfsExport> {
+        Some(NfsExport {
+            server: String::from(SIMULATED_NFS_SERVER),
+            export: String::from(SIMULATED_NFS_EXPORT),
+        })
     }
 
     fn clock(&self) -> &dyn Clock {

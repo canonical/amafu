@@ -17,6 +17,8 @@ pub struct ObservedInstance {
     pub disks: Vec<PathBuf>,
     #[serde(default)]
     pub offered_addresses: Vec<Ipv4Addr>,
+    #[serde(default)]
+    pub console: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

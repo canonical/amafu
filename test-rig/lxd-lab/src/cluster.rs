@@ -1,14 +1,18 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use amafu_api::diagnostics::{AUDIT_PATH, INSTANCES_PATH, NodeInstance};
+use amafu_api::diagnostics::{
+    ATTACHMENTS_PATH, AUDIT_PATH, INSTANCES_PATH, NETWORK_PATH, NodeAttachment, NodeInstance,
+    NodeNetworkFacts, SANDBOX_PATH, SandboxCheck,
+};
 use amafu_api::wire::ListResponse;
 use amafu_api::{ApiClient, HttpTransport, Transport};
 use amafu_domain::access::Role;
 use amafu_domain::{NodeName, ProjectName};
 use amafu_interfaces::Clock;
 use amafu_scenario::{
-    Cluster, ClusterObservation, Fault, FaultHandle, Level, ObservedInstance, ScenarioError,
+    Cluster, ClusterObservation, Fault, FaultHandle, Level, NfsExport, ObservedAttachment, ObservedInstance,
+    ObservedPort, ScenarioError,
 };
 use futures::future::BoxFuture;
 use http::Method;
@@ -37,6 +41,7 @@ pub struct VirtualLab {
     lxd: LxdClient,
     transport: Arc<dyn Transport>,
     diagnostics: reqwest::Client,
+    probes: reqwest::Client,
     clock: WallClock,
 }
 
@@ -48,11 +53,12 @@ impl VirtualLab {
     pub fn connect(state: LabState) -> anyhow::Result<Self> {
         let lxd = lxd_client(&state.settings)?;
         let diagnostics = reqwest::Client::builder().timeout(Duration::from_secs(10)).build()?;
+        let probes = reqwest::Client::builder().timeout(Duration::from_secs(120)).build()?;
         let core = state.topology.nodes.first().ok_or_else(|| anyhow::anyhow!("the lab has no node"))?;
         let endpoint = core.api_endpoint(&state.settings);
         let transport =
             Arc::new(HttpTransport::new(&endpoint, Some(state.server.certificate_authority.as_bytes()))?);
-        Ok(Self { state, lxd, transport, diagnostics, clock: WallClock })
+        Ok(Self { state, lxd, transport, diagnostics, probes, clock: WallClock })
     }
 
     fn core_node(&self) -> Result<&LabNode, ScenarioError> {
@@ -67,19 +73,62 @@ impl VirtualLab {
         ApiClient::new(Arc::clone(&self.transport), token)
     }
 
-    async fn node_instances(&self, node: &LabNode) -> Vec<NodeInstance> {
-        let url = format!("{}{INSTANCES_PATH}", node.diagnostics_endpoint(&self.state.settings));
+    async fn node_facts<Facts: serde::de::DeserializeOwned + Default>(
+        &self,
+        node: &LabNode,
+        path: &str,
+    ) -> Facts {
+        let url = format!("{}{path}", node.diagnostics_endpoint(&self.state.settings));
         match self.diagnostics.get(url).send().await {
             Ok(response) if response.status().is_success() => response.json().await.unwrap_or_default(),
-            _ => Vec::new(),
+            _ => Facts::default(),
         }
+    }
+
+    async fn observe_node(
+        &self,
+        node: &LabNode,
+        observation: &mut ClusterObservation,
+    ) -> Result<(), ScenarioError> {
+        let name = NodeName::new(node.name.as_str()).map_err(lab_failure)?;
+        let instances: Vec<NodeInstance> = self.node_facts(node, INSTANCES_PATH).await;
+        let network: NodeNetworkFacts = self.node_facts(node, NETWORK_PATH).await;
+        let attachments: Vec<NodeAttachment> = self.node_facts(node, ATTACHMENTS_PATH).await;
+        for instance in instances {
+            let offered_addresses = instance
+                .mac_addresses
+                .iter()
+                .filter_map(|mac| network.ports.iter().find(|port| port.mac == *mac).map(|port| port.address))
+                .collect();
+            observation.instances.push(ObservedInstance {
+                node: name.clone(),
+                vm_id: instance.vm_id,
+                state: instance.state,
+                workload: instance.workload,
+                disks: instance.disks,
+                offered_addresses,
+                console: instance.console_tail,
+            });
+        }
+        observation.attachments.extend(attachments.into_iter().map(|attachment| ObservedAttachment {
+            node: name.clone(),
+            volume: attachment.volume,
+            path: attachment.path,
+        }));
+        observation.ports.extend(network.ports.into_iter().map(|port| ObservedPort {
+            node: name.clone(),
+            vm_id: port.vm_id,
+            segment: port.segment,
+            address: port.address,
+        }));
+        Ok(())
     }
 
     async fn stored_objects(&self) -> Result<Vec<serde_json::Value>, ScenarioError> {
         let project = ProjectName::new(crate::credentials::PROJECTS[0]).map_err(lab_failure)?;
         let admin = self.client_in_project(Role::Admin, &project).await;
         let mut objects = Vec::new();
-        for path in ["/v1/vms?all-projects=true", "/v1/nodes"] {
+        for path in ["/v1/vms?all-projects=true", "/v1/volumes?all-projects=true", "/v1/nodes"] {
             let response = admin.raw(Method::GET, path, None).await?;
             if response.status == 200 {
                 let list: ListResponse = serde_json::from_slice(&response.body).map_err(lab_failure)?;
@@ -122,25 +171,26 @@ impl Cluster for VirtualLab {
     }
 
     async fn observe(&self) -> Result<ClusterObservation, ScenarioError> {
-        let mut instances = Vec::new();
+        let mut observation = ClusterObservation::default();
         for node in &self.state.topology.nodes {
-            let name = NodeName::new(node.name.as_str()).map_err(lab_failure)?;
-            for instance in self.node_instances(node).await {
-                instances.push(ObservedInstance {
-                    node: name.clone(),
-                    vm_id: instance.vm_id,
-                    state: instance.state,
-                    workload: None,
-                    disks: Vec::new(),
-                    offered_addresses: Vec::new(),
-                });
-            }
+            self.observe_node(node, &mut observation).await?;
         }
-        Ok(ClusterObservation {
-            instances,
-            stored_objects: self.stored_objects().await.unwrap_or_default(),
-            ..ClusterObservation::default()
-        })
+        observation.stored_objects = self.stored_objects().await.unwrap_or_default();
+        Ok(observation)
+    }
+
+    async fn sandbox_checks(&self) -> Result<Option<Vec<SandboxCheck>>, ScenarioError> {
+        let node = self.core_node()?;
+        let url = format!("{}{SANDBOX_PATH}", node.diagnostics_endpoint(&self.state.settings));
+        let response = self.probes.post(url).send().await.map_err(lab_failure)?;
+        Ok(Some(response.json().await.map_err(lab_failure)?))
+    }
+
+    fn nfs_export(&self) -> Option<NfsExport> {
+        self.state
+            .nfs
+            .as_ref()
+            .map(|nfs| NfsExport { server: nfs.address.to_string(), export: nfs.export.clone() })
     }
 
     async fn audit_contains(&self, request_id: Uuid) -> Result<bool, ScenarioError> {

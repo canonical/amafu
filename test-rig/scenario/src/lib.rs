@@ -5,7 +5,7 @@ pub mod error;
 pub mod observation;
 
 pub use assertions::{always_during, ensure, ensure_equal, eventually};
-pub use cluster::{Cluster, Fault, FaultHandle, Level};
+pub use cluster::{Cluster, Fault, FaultHandle, Level, NfsExport};
 pub use definition::ScenarioDefinition;
 pub use error::{ScenarioError, ScenarioResult, Violation};
 pub use observation::{ClusterObservation, ObservedAttachment, ObservedInstance, ObservedPort};

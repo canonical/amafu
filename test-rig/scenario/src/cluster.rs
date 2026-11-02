@@ -1,6 +1,7 @@
 use std::fmt;
 
 use amafu_api::ApiClient;
+use amafu_api::diagnostics::SandboxCheck;
 use amafu_domain::access::Role;
 use amafu_domain::{NodeName, ProjectName};
 use amafu_interfaces::Clock;
@@ -34,6 +35,12 @@ pub enum Fault {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FaultHandle(pub u64);
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NfsExport {
+    pub server: String,
+    pub export: String,
+}
+
 #[async_trait::async_trait(?Send)]
 pub trait Cluster {
     async fn client_in_project(&self, role: Role, project: &ProjectName) -> ApiClient;
@@ -51,6 +58,10 @@ pub trait Cluster {
     async fn observe(&self) -> Result<ClusterObservation, ScenarioError>;
 
     async fn audit_contains(&self, request_id: Uuid) -> Result<bool, ScenarioError>;
+
+    async fn sandbox_checks(&self) -> Result<Option<Vec<SandboxCheck>>, ScenarioError>;
+
+    fn nfs_export(&self) -> Option<NfsExport>;
 
     fn clock(&self) -> &dyn Clock;
 
