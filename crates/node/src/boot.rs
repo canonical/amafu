@@ -13,6 +13,7 @@ const MODULE_LIST: &str = "/usr/lib/amafu/modules/load-order";
 const SYSFS_BLOCK: &str = "/sys/class/block";
 const BOOT_MOUNT: &str = "/run/amafu/boot";
 const CONFIGURATION_FILE: &str = "/run/amafu/boot/amafu/node-configuration.yaml";
+const RESOLVER_FILE: &str = "/etc/resolv.conf";
 const PARTITION_WAIT: Duration = Duration::from_secs(10);
 const PARTITION_POLL: Duration = Duration::from_millis(100);
 
@@ -29,6 +30,15 @@ async fn wait_for_partition(name: &str) -> anyhow::Result<std::path::PathBuf> {
     }
 }
 
+fn write_name_resolution(resolvers: &[std::net::Ipv4Addr]) -> anyhow::Result<()> {
+    if resolvers.is_empty() {
+        return Ok(());
+    }
+    let lines: Vec<String> = resolvers.iter().map(|resolver| format!("nameserver {resolver}")).collect();
+    std::fs::write(RESOLVER_FILE, lines.join("\n") + "\n")?;
+    Ok(())
+}
+
 pub async fn early_boot() -> anyhow::Result<NodeConfiguration> {
     mount_essential_filesystems()?;
     let loaded = load_listed_modules(Path::new(MODULES_DIRECTORY), Path::new(MODULE_LIST))?;
@@ -42,5 +52,6 @@ pub async fn early_boot() -> anyhow::Result<NodeConfiguration> {
     if let Some(underlay) = &configuration.network {
         amafu_network::configure_underlay(underlay).await?;
     }
+    write_name_resolution(&configuration.compute.resolvers)?;
     Ok(configuration)
 }

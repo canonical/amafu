@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use amafu_api::TokenIdentity;
@@ -22,8 +22,34 @@ pub struct NodeConfiguration {
     pub state: StateSection,
     #[serde(default)]
     pub directories: Directories,
+    #[serde(default)]
+    pub compute: ComputeSection,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diagnostics: Option<DiagnosticsSection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ComputeSection {
+    pub firmware: PathBuf,
+    pub container_kernel: PathBuf,
+    pub container_initramfs: PathBuf,
+    pub nft: PathBuf,
+    pub mkfs_erofs: PathBuf,
+    pub resolvers: Vec<Ipv4Addr>,
+}
+
+impl Default for ComputeSection {
+    fn default() -> Self {
+        Self {
+            firmware: PathBuf::from("/usr/lib/amafu/firmware/CLOUDHV.fd"),
+            container_kernel: PathBuf::from("/run/amafu/boot/amafu/vmlinuz"),
+            container_initramfs: PathBuf::from("/usr/lib/amafu/container/initramfs"),
+            nft: PathBuf::from("/usr/sbin/nft"),
+            mkfs_erofs: PathBuf::from("/usr/bin/mkfs.erofs"),
+            resolvers: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,6 +92,21 @@ pub struct Directories {
     pub data: PathBuf,
     pub runtime: PathBuf,
     pub images: PathBuf,
+}
+
+const IMAGE_CACHE_DIRECTORY: &str = "image-cache";
+const VOLUMES_DIRECTORY: &str = "volumes";
+
+impl Directories {
+    #[must_use]
+    pub fn image_cache(&self) -> PathBuf {
+        self.data.join(IMAGE_CACHE_DIRECTORY)
+    }
+
+    #[must_use]
+    pub fn volumes(&self) -> PathBuf {
+        self.data.join(VOLUMES_DIRECTORY)
+    }
 }
 
 impl Default for Directories {
@@ -137,6 +178,7 @@ api:
         assert_eq!(configuration.state, StateSection::default());
         assert!(configuration.has_role(NodeRole::Compute));
         assert_eq!(configuration.network, None);
+        assert_eq!(configuration.compute, ComputeSection::default());
     }
 
     #[test]
