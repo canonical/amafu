@@ -11,7 +11,7 @@ pub mod storage_backend;
 mod testing;
 pub mod volume;
 
-pub use compute::{ComputeAction, ComputeController, ComputeKey, ComputeObservation};
+pub use compute::{ComputeAction, ComputeController, ComputeKey, ComputeObservation, ComputeServices};
 pub use image::ImageController;
 pub use network::{NetworkController, SecurityGroupController};
 pub use node::{NodeAction, NodeController, NodeIdentity, NodeObservation};
