@@ -1,4 +1,5 @@
 mod connection;
+mod image;
 mod node;
 mod output;
 mod resources;
@@ -26,6 +27,8 @@ struct Arguments {
 enum Command {
     #[command(subcommand, about = "Create and manage virtual machines")]
     Vm(vm::VmCommand),
+    #[command(subcommand, about = "Register disk and container images")]
+    Image(image::ImageCommand),
     #[command(subcommand, about = "Inspect and manage nodes")]
     Node(node::NodeCommand),
 }
@@ -34,6 +37,7 @@ async fn run(arguments: Arguments) -> anyhow::Result<()> {
     let client = arguments.connection.client()?;
     match arguments.command {
         Command::Vm(command) => vm::run(&client, command, arguments.output).await,
+        Command::Image(command) => image::run(&client, command, arguments.output).await,
         Command::Node(command) => node::run(&client, command, arguments.output).await,
     }
 }
