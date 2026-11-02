@@ -1,5 +1,6 @@
 pub mod adapter;
 pub mod boot;
+pub mod control;
 pub mod images;
 pub mod plan;
 pub mod probe;
