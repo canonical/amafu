@@ -13,7 +13,7 @@ use rustix::process::Signal;
 
 use crate::boot::{BootError, BootSources};
 use crate::control::{self, ControlChannel, Instructions, Work};
-use crate::plan::VmProcessPlan;
+use crate::plan::{DiskFormat, VmProcessPlan};
 use crate::probe::{Attempt, ProbeOutcome, outcome_of};
 use crate::process::{is_running_vm_process, send_signal};
 use crate::runtime::{RuntimeDirectory, VmDirectory};
@@ -248,9 +248,16 @@ impl Hypervisor for CloudHypervisor {
         if is_alive(&directory) {
             return Ok(());
         }
+        let disk_formats = launch
+            .disks
+            .iter()
+            .map(|disk| DiskFormat::of(&disk.path))
+            .collect::<std::io::Result<Vec<_>>>()
+            .map_err(io_failure("reading a disk"))?;
         let plan = VmProcessPlan {
             launch: launch.clone(),
             boot,
+            disk_formats,
             serial_log: directory.serial_log(),
             vsock_socket: directory.vsock_socket(),
         };

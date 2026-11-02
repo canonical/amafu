@@ -1,5 +1,6 @@
+use std::io::Read;
 use std::os::fd::RawFd;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use amafu_interfaces::VmLaunchSpecification;
 use serde::{Deserialize, Serialize};
@@ -7,11 +8,36 @@ use serde::{Deserialize, Serialize};
 use crate::boot::BootFiles;
 
 pub const GUEST_CONTEXT_IDENTIFIER: u32 = 3;
+const QCOW2_MAGIC: &[u8; 4] = b"QFI\xfb";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DiskFormat {
+    Raw,
+    Qcow2,
+}
+
+impl DiskFormat {
+    pub fn of(path: &Path) -> std::io::Result<Self> {
+        let mut magic = [0_u8; 4];
+        let mut file = std::fs::File::open(path)?;
+        let is_qcow2 = file.read_exact(&mut magic).is_ok() && &magic == QCOW2_MAGIC;
+        Ok(if is_qcow2 { Self::Qcow2 } else { Self::Raw })
+    }
+
+    fn image_type(self) -> &'static str {
+        match self {
+            Self::Raw => "raw",
+            Self::Qcow2 => "qcow2",
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VmProcessPlan {
     pub launch: VmLaunchSpecification,
     pub boot: BootFiles,
+    pub disk_formats: Vec<DiskFormat>,
     pub serial_log: PathBuf,
     pub vsock_socket: PathBuf,
 }
@@ -41,11 +67,13 @@ impl VmProcessPlan {
         self.launch
             .disks
             .iter()
-            .map(|disk| {
+            .zip(&self.disk_formats)
+            .map(|(disk, format)| {
                 format!(
-                    "path={},readonly={},backing_files=on",
+                    "path={},readonly={},image_type={},backing_files=on",
                     disk.path.display(),
-                    toggle(disk.is_read_only)
+                    toggle(disk.is_read_only),
+                    format.image_type()
                 )
             })
             .collect()
@@ -101,9 +129,21 @@ mod tests {
         VmProcessPlan {
             launch,
             boot: BootFiles::Firmware { firmware: PathBuf::from("/usr/share/cloud-hypervisor/CLOUDHV.fd") },
+            disk_formats: vec![DiskFormat::Qcow2, DiskFormat::Raw],
             serial_log: PathBuf::from("/run/vm/serial.log"),
             vsock_socket: PathBuf::from("/run/vm/vsock.socket"),
         }
+    }
+
+    #[test]
+    fn qcow2_images_are_recognized_by_their_magic() {
+        let directory = tempfile::tempdir().unwrap();
+        let qcow2 = directory.path().join("disk.qcow2");
+        std::fs::write(&qcow2, b"QFI\xfb\x00\x00\x00\x03").unwrap();
+        let raw = directory.path().join("root.erofs");
+        std::fs::write(&raw, b"\x00").unwrap();
+        assert_eq!(DiskFormat::of(&qcow2).unwrap(), DiskFormat::Qcow2);
+        assert_eq!(DiskFormat::of(&raw).unwrap(), DiskFormat::Raw);
     }
 
     #[test]
@@ -112,8 +152,8 @@ mod tests {
         assert_eq!(
             plan.disk_options(),
             vec![
-                "path=/volumes/root.qcow2,readonly=off,backing_files=on",
-                "path=/images/seed.raw,readonly=on,backing_files=on"
+                "path=/volumes/root.qcow2,readonly=off,image_type=qcow2,backing_files=on",
+                "path=/images/seed.raw,readonly=on,image_type=raw,backing_files=on"
             ]
         );
         assert_eq!(plan.network_options(&[5]), vec!["fd=[5],mac=02:00:00:00:00:01"]);
