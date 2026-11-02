@@ -9,9 +9,11 @@ ip link set lo up
 for interface in /sys/class/net/eth*; do
     [ -e "${interface}" ] || continue
     name="$(basename "${interface}")"
-    udhcpc -i "${name}" -s /bin/lease -q -n -t 10 -T 1 >/dev/null 2>&1 || echo "amafu test guest got no lease on ${name}"
+    echo "amafu test guest asks for a lease on ${name}"
+    timeout 30 udhcpc -i "${name}" -s /bin/lease -q -n -t 10 -T 1 2>/dev/null || echo "amafu test guest got no lease on ${name}"
 done
 seed="$(cat /sys/class/dmi/id/product_serial 2>/dev/null)"
+echo "amafu test guest seed ${seed:-none}"
 case "${seed}" in
     *"s=http"*)
         source_url="${seed##*s=}"

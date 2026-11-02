@@ -1,5 +1,9 @@
 #!/bin/busybox sh
 case "$1" in
+    deconfig)
+        ip link set "${interface}" up
+        ip address flush dev "${interface}"
+        ;;
     bound|renew)
         ip address flush dev "${interface}"
         ip address add "${ip}/${mask}" dev "${interface}"
