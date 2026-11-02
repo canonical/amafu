@@ -150,9 +150,11 @@ name = "amafu-hypervisor"
 version = "0.1.0"
 dependencies = [
  "amafu-domain",
+ "amafu-guest-agent",
  "amafu-interfaces",
  "async-trait",
  "hypervisor",
+ "landlock",
  "rustix",
  "seccompiler",
  "serde",
@@ -161,6 +163,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "tun-rs",
  "uuid",
  "vmm",
  "vmm-sys-util",
@@ -240,6 +243,7 @@ dependencies = [
  "amafu-network",
  "amafu-reconciler",
  "amafu-state",
+ "amafu-storage",
  "amafu-system",
  "anyhow",
  "axum",

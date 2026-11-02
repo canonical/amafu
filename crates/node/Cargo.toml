@@ -25,6 +25,7 @@ amafu-interfaces.workspace = true
 amafu-network.workspace = true
 amafu-reconciler.workspace = true
 amafu-state.workspace = true
+amafu-storage.workspace = true
 amafu-system.workspace = true
 anyhow.workspace = true
 axum.workspace = true

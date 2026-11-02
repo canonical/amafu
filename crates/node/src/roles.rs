@@ -1,18 +1,30 @@
 use std::collections::BTreeSet;
 use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use amafu_api::server::{serve, tls_configuration};
 use amafu_api::{ApiState, TokenAuthenticator, router};
-use amafu_controllers::{ComputeController, NodeController, NodeIdentity, PlacementController};
-use amafu_domain::ObjectId;
+use amafu_controllers::{
+    ComputeController, ComputeServices, ImageController, NetworkController, NodeController, NodeIdentity,
+    NodeNetworkController, PlacementController, SecurityGroupController, StorageBackendController,
+    VolumeController,
+};
 use amafu_domain::kinds::node::{NodeCapacity, NodeRole};
-use amafu_hypervisor::{CloudHypervisor, RuntimeDirectory};
-use amafu_interfaces::{AuditLog, Clock, Hypervisor, RandomIdentifiers, Store};
+use amafu_domain::{NodeName, ObjectId};
+use amafu_hypervisor::{
+    BootSources, CloudHypervisor, CloudHypervisorSettings, HybridVsockAgents, RuntimeDirectory,
+    prepare_kvm_access,
+};
+use amafu_interfaces::{
+    AuditLog, Clock, Datapath, GuestAgents, Hypervisor, ImageStore, LocalServices, RandomIdentifiers,
+    Storage, Store,
+};
+use amafu_network::{KernelDatapath, LocalServicesServer};
 use amafu_reconciler::{Controller, ReconcilerSettings, run_controller};
 use amafu_state::{QuoriumAuditLog, QuoriumStore, start_single_voter};
+use amafu_storage::{BuiltInStorage, CachedImages};
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use uuid::Uuid;
@@ -30,8 +42,16 @@ const VM_DIRECTORY: &str = "vms";
 pub struct Services {
     pub store: Arc<dyn Store>,
     pub audit: Arc<dyn AuditLog>,
-    pub hypervisor: Arc<dyn Hypervisor>,
     pub clock: Arc<dyn Clock>,
+}
+
+pub struct ComputeAdapters {
+    pub hypervisor: Arc<CloudHypervisor>,
+    pub storage: Arc<BuiltInStorage>,
+    pub images: Arc<CachedImages>,
+    pub datapath: Arc<KernelDatapath>,
+    pub agents: Arc<HybridVsockAgents>,
+    pub local_services: Arc<LocalServicesServer>,
 }
 
 async fn supervise<Role, Running>(name: &'static str, role: Role)
@@ -126,32 +146,125 @@ fn start_api(
     Ok(())
 }
 
+fn compute_adapters(
+    configuration: &NodeConfiguration,
+    hypervisor: &Arc<CloudHypervisor>,
+    underlay: String,
+) -> anyhow::Result<ComputeAdapters> {
+    let directories = &configuration.directories;
+    let compute = &configuration.compute;
+    let runtime = RuntimeDirectory::new(directories.runtime.join(VM_DIRECTORY));
+    Ok(ComputeAdapters {
+        hypervisor: Arc::clone(hypervisor),
+        storage: Arc::new(BuiltInStorage::new(configuration.node.name.clone(), directories.volumes())),
+        images: Arc::new(CachedImages::new(directories.image_cache(), compute.mkfs_erofs.clone())?),
+        datapath: Arc::new(KernelDatapath::new(underlay, compute.nft.clone())),
+        agents: Arc::new(HybridVsockAgents::new(runtime)),
+        local_services: Arc::new(LocalServicesServer::start(
+            compute.resolvers.clone(),
+            tokio::runtime::Handle::current(),
+        )),
+    })
+}
+
+fn cloud_hypervisor(configuration: &NodeConfiguration) -> anyhow::Result<CloudHypervisor> {
+    let directories = &configuration.directories;
+    let compute = &configuration.compute;
+    Ok(CloudHypervisor::new(CloudHypervisorSettings {
+        runtime: RuntimeDirectory::new(directories.runtime.join(VM_DIRECTORY)),
+        boot: BootSources {
+            bundles_directory: directories.images.clone(),
+            firmware: compute.firmware.clone(),
+            container_kernel: compute.container_kernel.clone(),
+            container_initramfs: compute.container_initramfs.clone(),
+        },
+        executable: std::env::current_exe()?,
+        shared_readable: vec![directories.image_cache()],
+    }))
+}
+
+fn core_roles(roles: &mut JoinSet<()>, services: &Services, adapters: &ComputeAdapters, node: &NodeName) {
+    let store = || Arc::clone(&services.store);
+    let settings = ReconcilerSettings::default();
+    controller_role(roles, "placement", Arc::new(PlacementController::new(store())), services, settings);
+    controller_role(roles, "network", Arc::new(NetworkController::new(store())), services, settings);
+    controller_role(
+        roles,
+        "security-group",
+        Arc::new(SecurityGroupController::new(store())),
+        services,
+        settings,
+    );
+    let volume = VolumeController::new(
+        store(),
+        Arc::clone(&adapters.storage) as Arc<dyn Storage>,
+        Arc::clone(&adapters.images) as Arc<dyn ImageStore>,
+    );
+    controller_role(roles, "volume", Arc::new(volume), services, settings);
+    let image =
+        ImageController::new(node.clone(), store(), Arc::clone(&adapters.images) as Arc<dyn ImageStore>);
+    controller_role(roles, "image", Arc::new(image), services, settings);
+    let backend = StorageBackendController::new(store(), Arc::clone(&adapters.storage) as Arc<dyn Storage>);
+    controller_role(roles, "storage-backend", Arc::new(backend), services, settings);
+}
+
+fn compute_roles(
+    roles: &mut JoinSet<()>,
+    services: &Services,
+    adapters: &ComputeAdapters,
+    node: &NodeName,
+    settings: ReconcilerSettings,
+) {
+    let compute = ComputeController::new(
+        node.clone(),
+        ComputeServices {
+            store: Arc::clone(&services.store),
+            hypervisor: Arc::clone(&adapters.hypervisor) as Arc<dyn Hypervisor>,
+            storage: Arc::clone(&adapters.storage) as Arc<dyn Storage>,
+            images: Arc::clone(&adapters.images) as Arc<dyn ImageStore>,
+            datapath: Arc::clone(&adapters.datapath) as Arc<dyn Datapath>,
+            agents: Arc::clone(&adapters.agents) as Arc<dyn GuestAgents>,
+        },
+    );
+    controller_role(roles, "compute", Arc::new(compute), services, settings);
+    let node_network = NodeNetworkController::new(
+        node.clone(),
+        Arc::clone(&services.store),
+        Arc::clone(&adapters.datapath) as Arc<dyn Datapath>,
+        Arc::clone(&adapters.local_services) as Arc<dyn LocalServices>,
+    );
+    controller_role(roles, "node-network", Arc::new(node_network), services, settings);
+}
+
 pub async fn run(configuration: NodeConfiguration) -> anyhow::Result<()> {
     let directories = &configuration.directories;
-    std::fs::create_dir_all(&directories.data)?;
-    std::fs::create_dir_all(&directories.runtime)?;
+    for directory in
+        [&directories.data, &directories.runtime, &directories.image_cache(), &directories.volumes()]
+    {
+        std::fs::create_dir_all(directory)?;
+    }
     let quorium =
         start_single_voter(&directories.data.join(STATE_DIRECTORY), configuration.state.listen).await?;
-    let executable: PathBuf = std::env::current_exe()?;
+    let hypervisor = Arc::new(cloud_hypervisor(&configuration)?);
     let services = Services {
         store: Arc::new(QuoriumStore::new(quorium.clone())),
         audit: Arc::new(QuoriumAuditLog::new(quorium.clone())),
-        hypervisor: Arc::new(CloudHypervisor::new(
-            RuntimeDirectory::new(directories.runtime.join(VM_DIRECTORY)),
-            directories.images.clone(),
-            executable,
-        )),
         clock: Arc::new(SystemClock),
     };
+    let underlay = amafu_network::bring_up(
+        configuration.network.as_ref().and_then(|network| network.interface.as_deref()),
+    )
+    .await?;
+    let adapters = compute_adapters(&configuration, &hypervisor, underlay)?;
     let mut roles = JoinSet::new();
     let responsive = ReconcilerSettings {
         periodic_resynchronization: Duration::from_secs(2),
         ..ReconcilerSettings::default()
     };
+    let node_name = configuration.node.name.clone();
     if configuration.has_role(NodeRole::Core) {
         start_api(&mut roles, &configuration, &services)?;
-        let placement = Arc::new(PlacementController::new(Arc::clone(&services.store)));
-        controller_role(&mut roles, "placement", placement, &services, ReconcilerSettings::default());
+        core_roles(&mut roles, &services, &adapters, &node_name);
     }
     let identity = node_identity(&configuration)?;
     let node =
@@ -162,14 +275,12 @@ pub async fn run(configuration: NodeConfiguration) -> anyhow::Result<()> {
     };
     controller_role(&mut roles, "node", node, &services, heartbeat);
     if configuration.has_role(NodeRole::Compute) {
-        let compute = Arc::new(ComputeController::new(
-            configuration.node.name.clone(),
-            Arc::clone(&services.store),
-            Arc::clone(&services.hypervisor),
-        ));
-        controller_role(&mut roles, "compute", compute, &services, responsive);
+        if let Err(error) = prepare_kvm_access() {
+            tracing::warn!(%error, "VM processes cannot be given access to /dev/kvm");
+        }
+        compute_roles(&mut roles, &services, &adapters, &node_name, responsive);
     }
-    crate::diagnostics::start(&mut roles, &configuration, &services);
+    crate::diagnostics::start(&mut roles, &configuration, &services, &adapters);
     while let Some(ended) = roles.join_next().await {
         tracing::error!(?ended, "a role supervisor ended");
     }

@@ -2,7 +2,7 @@ use std::sync::OnceLock;
 
 use tokio::task::JoinSet;
 
-use crate::roles::Services;
+use crate::roles::{ComputeAdapters, Services};
 use amafu_node::configuration::NodeConfiguration;
 
 static SECONDS_FROM_KERNEL_START_TO_SERVING: OnceLock<f64> = OnceLock::new();
@@ -14,17 +14,27 @@ pub fn record_serving() {
 }
 
 #[cfg(not(feature = "diagnostics"))]
-pub fn start(_roles: &mut JoinSet<()>, configuration: &NodeConfiguration, _services: &Services) {
+pub fn start(
+    _roles: &mut JoinSet<()>,
+    configuration: &NodeConfiguration,
+    _services: &Services,
+    _adapters: &ComputeAdapters,
+) {
     if configuration.diagnostics.is_some() {
         tracing::warn!("diagnostics are configured but this is a release build, so they stay off");
     }
 }
 
 #[cfg(feature = "diagnostics")]
-pub fn start(roles: &mut JoinSet<()>, configuration: &NodeConfiguration, services: &Services) {
+pub fn start(
+    roles: &mut JoinSet<()>,
+    configuration: &NodeConfiguration,
+    services: &Services,
+    adapters: &ComputeAdapters,
+) {
     if let Some(diagnostics) = &configuration.diagnostics {
         let listen = diagnostics.listen;
-        let application = test_channel::router(services);
+        let application = test_channel::router(services, adapters);
         roles.spawn(async move {
             match tokio::net::TcpListener::bind(listen).await {
                 Ok(listener) => {
@@ -57,7 +67,7 @@ mod test_channel {
     use http::StatusCode;
 
     use super::SECONDS_FROM_KERNEL_START_TO_SERVING;
-    use crate::roles::Services;
+    use crate::roles::{ComputeAdapters, Services};
 
     const TEST_IMAGE: &str = "test-guest";
     const VM_PROCESS_COMMAND: &[u8] = b"vm-process";
@@ -77,14 +87,14 @@ mod test_channel {
         audit: Arc<dyn AuditLog>,
     }
 
-    pub fn router(services: &Services) -> Router {
+    pub fn router(services: &Services, adapters: &ComputeAdapters) -> Router {
         Router::new()
             .route(INSTANCES_PATH, get(instances))
             .route(BOOT_PATH, get(boot))
             .route(HYPERVISOR_CONTRACT_PATH, post(contract))
             .route(&format!("{AUDIT_PATH}/{{request_id}}"), get(audit_entry))
             .with_state(ChannelState {
-                hypervisor: Arc::clone(&services.hypervisor),
+                hypervisor: Arc::clone(&adapters.hypervisor) as Arc<dyn Hypervisor>,
                 audit: Arc::clone(&services.audit),
             })
     }
@@ -153,12 +163,8 @@ mod test_channel {
         let Ok(image) = ObjectName::new(TEST_IMAGE) else {
             return Json(ContractOutcome { violation: Some(String::from("the test image name is invalid")) });
         };
-        let launch = VmLaunchSpecification {
-            vm_id: ObjectId::from_uuid(uuid::Uuid::new_v4()),
-            cpu_count: 1,
-            memory_mebibytes: 256,
-            image,
-        };
+        let launch =
+            VmLaunchSpecification::of_bundle(ObjectId::from_uuid(uuid::Uuid::new_v4()), 1, 256, image);
         let outcome = hypervisor_contract(state.hypervisor.as_ref(), &launch).await;
         Json(ContractOutcome { violation: outcome.err().map(|violation| violation.to_string()) })
     }
