@@ -12,8 +12,8 @@ use crate::topology::LabSettings;
 pub const NFS_INSTANCE: &str = "nfs-server";
 pub const NFS_EXPORT: &str = "/srv/amafu";
 const NFS_PORT: u16 = 2049;
-const IMAGE_SERVER: &str = "https://images.lxd.canonical.com";
-const IMAGE_ALIAS: &str = "ubuntu/24.04/cloud";
+const IMAGE_SERVER: &str = "https://cloud-images.ubuntu.com/releases";
+const IMAGE_ALIAS: &str = "24.04";
 const READY_TIMEOUT: Duration = Duration::from_secs(600);
 const READY_POLL: Duration = Duration::from_secs(2);
 
