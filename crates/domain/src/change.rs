@@ -88,6 +88,7 @@ pub fn apply_change<R: Resource>(
                 return Err(ChangeError::IsDeleting);
             }
             specification.validate()?;
+            specification.validate_update(&object.specification)?;
             if object.specification != specification {
                 object.specification = specification;
                 object.metadata.generation += 1;

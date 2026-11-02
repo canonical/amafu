@@ -47,4 +47,8 @@ impl fmt::Display for ValidationError {
 
 pub trait Validate {
     fn validate(&self) -> Result<(), ValidationError>;
+
+    fn validate_update(&self, _previous: &Self) -> Result<(), ValidationError> {
+        Ok(())
+    }
 }
