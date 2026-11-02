@@ -1,0 +1,6 @@
+#!/bin/busybox sh
+/bin/busybox --install -s /bin
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+echo "amafu test guest is running"
+while true; do sleep 3600; done

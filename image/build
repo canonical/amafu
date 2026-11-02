@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly image_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly repository="$(dirname "${image_directory}")"
+readonly kernel_version="${AMAFU_KERNEL_VERSION:-7.0.0-42}"
+readonly kernel_release="${kernel_version}-generic"
+readonly variant="${1:-}"
+
+usage() {
+    echo "usage: image/build test|release [path to amafu-node]" >&2
+    exit 2
+}
+
+case "${variant}" in
+    test) cargo_features=(--features diagnostics) ;;
+    release) cargo_features=() ;;
+    *) usage ;;
+esac
+
+readonly output="${image_directory}/output/${variant}"
+readonly cache="${image_directory}/output/cache"
+readonly staging="${image_directory}/output/staging-${variant}"
+binary="${2:-}"
+
+build_binary() {
+    if [[ -z "${binary}" ]]; then
+        cargo build --manifest-path "${repository}/Cargo.toml" --release -p amafu-node "${cargo_features[@]}"
+        binary="${repository}/target/release/amafu-node"
+    fi
+}
+
+download_packages() {
+    mkdir -p "${cache}"
+    local packages=(
+        "linux-image-${kernel_release}"
+        "linux-modules-${kernel_release}"
+        shim-signed
+        grub-efi-amd64-signed
+        busybox-static
+    )
+    (
+        cd "${cache}"
+        for package in "${packages[@]}"; do
+            if ! compgen -G "${package}_*.deb" >/dev/null; then
+                apt-get download "${package}"
+            fi
+        done
+    )
+}
+
+extract_packages() {
+    rm -rf "${cache}/extracted"
+    mkdir -p "${cache}/extracted"
+    for package in "${cache}"/*.deb; do
+        dpkg-deb --extract "${package}" "${cache}/extracted"
+    done
+    if [[ ! -e "${cache}/extracted/lib" ]]; then
+        ln -s usr/lib "${cache}/extracted/lib"
+    fi
+    depmod --basedir "${cache}/extracted" "${kernel_release}"
+}
+
+resolve_modules() {
+    local modules_root="${cache}/extracted/usr/lib/modules/${kernel_release}"
+    python3 - "${modules_root}" "${image_directory}/modules" <<'PYTHON'
+import sys
+from pathlib import Path
+
+modules_root = Path(sys.argv[1])
+wanted = [line.strip() for line in Path(sys.argv[2]).read_text().splitlines() if line.strip()]
+dependencies = {}
+for line in (modules_root / "modules.dep").read_text().splitlines():
+    module, _, needed = line.partition(":")
+    dependencies[module] = needed.split()
+by_name = {Path(module).name.split(".ko")[0]: module for module in dependencies}
+ordered = []
+
+def visit(module):
+    for dependency in dependencies[module]:
+        visit(dependency)
+    if module not in ordered:
+        ordered.append(module)
+
+for name in wanted:
+    visit(by_name[name])
+print("\n".join(ordered))
+PYTHON
+}
+
+stage_modules() {
+    local modules_root="${cache}/extracted/usr/lib/modules/${kernel_release}"
+    local target="${staging}/usr/lib/amafu/modules"
+    mkdir -p "${target}"
+    : > "${target}/load-order"
+    while read -r module; do
+        local name
+        name="$(basename "${module}" .zst)"
+        zstd --quiet --decompress --force "${modules_root}/${module}" -o "${target}/${name}"
+        echo "${name}" >> "${target}/load-order"
+    done < <(resolve_modules)
+}
+
+stage_libraries() {
+    ldd "${binary}" | awk '/=>/ { print $3 } /^\t\// { print $1 }' | while read -r library; do
+        mkdir -p "${staging}$(dirname "${library}")"
+        cp --dereference "${library}" "${staging}${library}"
+    done
+}
+
+build_test_guest() {
+    local guest="${image_directory}/output/test-guest"
+    rm -rf "${guest}"
+    mkdir -p "${guest}/bin" "${guest}/proc" "${guest}/sys" "${guest}/dev"
+    cp "${cache}/extracted/usr/bin/busybox" "${guest}/bin/busybox"
+    cp "${image_directory}/test-guest/init" "${guest}/init"
+    local target="${staging}/usr/lib/amafu/images/test-guest"
+    mkdir -p "${target}"
+    (cd "${guest}" && find . | LC_ALL=C sort | cpio --quiet --create --format=newc --reproducible) | zstd --quiet -19 > "${target}/initramfs"
+    ln -s /run/amafu/boot/amafu/vmlinuz "${target}/kernel"
+    cp "${image_directory}/test-guest/command-line" "${target}/command-line"
+}
+
+stage_root() {
+    rm -rf "${staging}"
+    mkdir -p "${staging}"/{dev,proc,sys,run,tmp,var/lib/amafu,usr/bin}
+    install -m 0755 "${binary}" "${staging}/usr/bin/amafu-node"
+    ln -s usr/bin/amafu-node "${staging}/init"
+    stage_libraries
+    stage_modules
+    if [[ "${variant}" == test ]]; then
+        build_test_guest
+    fi
+}
+
+pack() {
+    rm -rf "${output}"
+    mkdir -p "${output}/esp/EFI/BOOT" "${output}/esp/EFI/ubuntu" "${output}/esp/amafu"
+    (cd "${staging}" && find . | LC_ALL=C sort | cpio --quiet --create --format=newc --reproducible) | zstd --quiet -19 -T0 > "${output}/esp/amafu/initramfs"
+    cp "${cache}/extracted/boot/vmlinuz-${kernel_release}" "${output}/esp/amafu/vmlinuz"
+    cp "${cache}/extracted/usr/lib/shim/shimx64.efi.signed.latest" "${output}/esp/EFI/BOOT/BOOTX64.EFI"
+    cp "${cache}/extracted/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed" "${output}/esp/EFI/BOOT/grubx64.efi"
+    cp "${image_directory}/grub.cfg" "${output}/esp/EFI/ubuntu/grub.cfg"
+    (cd "${output}/esp" && find . -type f | LC_ALL=C sort | xargs sha256sum) > "${output}/SHA256SUMS"
+    du -sb "${output}/esp" | awk '{ printf "image size: %.1f MiB\n", $1 / 1048576 }'
+}
+
+build_binary
+download_packages
+extract_packages
+stage_root
+pack
+rm -rf "${staging}"
+echo "built the ${variant} image in ${output}"
