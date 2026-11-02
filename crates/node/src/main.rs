@@ -52,7 +52,14 @@ async fn run_as_process_one() -> anyhow::Result<()> {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         loop {
             interval.tick().await;
-            let _ = amafu_system::reap_orphans();
+            for reaped in amafu_system::reap_orphans() {
+                tracing::info!(
+                    process_id = reaped.process_id,
+                    exit_code = reaped.exit_code,
+                    signal = reaped.signal,
+                    "a child process ended"
+                );
+            }
         }
     });
     roles::run(configuration).await

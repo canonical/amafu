@@ -7,4 +7,4 @@ pub mod modules;
 pub mod processes;
 
 pub use early_boot::{EarlyBootError, mount_essential_filesystems};
-pub use processes::{is_process_one, reap_orphans, reboot};
+pub use processes::{ReapedProcess, is_process_one, reap_orphans, reboot};
