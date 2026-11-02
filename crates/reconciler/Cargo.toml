@@ -1,0 +1,21 @@
+[package]
+name = "amafu-reconciler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+amafu-domain.workspace = true
+amafu-interfaces.workspace = true
+futures.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
