@@ -62,7 +62,7 @@ fn server_script(label: &str) -> String {
 
 fn probe_script(server: &str) -> String {
     format!(
-        "sleep 2; for attempt in 1 2 3 4 5 6 7 8 9 10; do if wget -q -T 3 -O - http://{server}:{SERVER_PORT}/ | grep -q served; then echo OVERLAY-REACHED; break; fi; sleep 2; done; echo OVERLAY-DONE; sleep 3600"
+        "sleep 2; for attempt in $(seq 60); do if wget -q -T 3 -O - http://{server}:{SERVER_PORT}/ | grep -q served; then echo OVERLAY-REACHED; break; fi; sleep 2; done; echo OVERLAY-DONE; sleep 3600"
     )
 }
 
