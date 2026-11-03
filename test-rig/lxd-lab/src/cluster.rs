@@ -41,7 +41,14 @@ impl Clock for WallClock {
     }
 }
 
+#[derive(Default)]
+struct ActiveFaults {
+    next_handle: u64,
+    partitions: std::collections::BTreeMap<FaultHandle, String>,
+}
+
 pub struct VirtualLab {
+    faults: std::cell::RefCell<ActiveFaults>,
     state: LabState,
     lxd: LxdClient,
     transport: Arc<dyn Transport>,
@@ -69,7 +76,16 @@ impl VirtualLab {
             core_transports
                 .push(Arc::new(HttpTransport::new(&node.api_endpoint(&state.settings), Some(authority))?));
         }
-        Ok(Self { state, lxd, transport, core_transports, diagnostics, probes, clock: WallClock })
+        Ok(Self {
+            faults: std::cell::RefCell::new(ActiveFaults::default()),
+            state,
+            lxd,
+            transport,
+            core_transports,
+            diagnostics,
+            probes,
+            clock: WallClock,
+        })
     }
 
     fn core_node(&self) -> Result<&LabNode, ScenarioError> {
@@ -78,6 +94,20 @@ impl VirtualLab {
             .nodes
             .first()
             .ok_or_else(|| ScenarioError::Lab(String::from("the lab has no node")))
+    }
+
+    fn switch_port(&self, node: &NodeName) -> Result<String, ScenarioError> {
+        self.state
+            .topology
+            .node(node.as_str())
+            .map(|node| node.machine.switch_port.clone())
+            .ok_or_else(|| ScenarioError::Lab(format!("the lab has no node named {node}")))
+    }
+
+    async fn apply_partitions(&self) -> Result<(), ScenarioError> {
+        let isolated: std::collections::BTreeSet<String> =
+            self.faults.borrow().partitions.values().cloned().collect();
+        crate::switch::apply_partitions(&self.lxd, &isolated).await.map_err(lab_failure)
     }
 
     fn client_with_token(&self, token: Option<String>) -> ApiClient {
@@ -101,7 +131,7 @@ impl VirtualLab {
         node: &LabNode,
         observation: &mut ClusterObservation,
     ) -> Result<(), ScenarioError> {
-        let name = NodeName::new(node.name.as_str()).map_err(lab_failure)?;
+        let name = NodeName::new(node.name()).map_err(lab_failure)?;
         let instances: Vec<NodeInstance> = self.node_facts(node, INSTANCES_PATH).await;
         let network: NodeNetworkFacts = self.node_facts(node, NETWORK_PATH).await;
         let attachments: Vec<NodeAttachment> = self.node_facts(node, ATTACHMENTS_PATH).await;
@@ -188,22 +218,33 @@ impl Cluster for VirtualLab {
     }
 
     async fn nodes(&self) -> Vec<NodeName> {
-        self.state.topology.nodes.iter().filter_map(|node| NodeName::new(node.name.as_str()).ok()).collect()
+        self.state.topology.nodes.iter().filter_map(|node| NodeName::new(node.name()).ok()).collect()
     }
 
     async fn inject(&self, fault: Fault) -> Result<FaultHandle, ScenarioError> {
+        let handle = {
+            let mut faults = self.faults.borrow_mut();
+            let handle = FaultHandle(faults.next_handle);
+            faults.next_handle += 1;
+            handle
+        };
         match &fault {
             Fault::PowerCycle { node } => {
                 self.lxd.change_state(node.as_str(), "restart", true).await.map_err(lab_failure)?;
             }
             Fault::Partition { node } => {
-                return Err(ScenarioError::Lab(format!("{node} cannot be partitioned without a lab switch")));
+                self.faults.borrow_mut().partitions.insert(handle, self.switch_port(node)?);
+                self.apply_partitions().await?;
             }
         }
-        Ok(FaultHandle(0))
+        Ok(handle)
     }
 
-    async fn heal(&self, _handle: FaultHandle) -> Result<(), ScenarioError> {
+    async fn heal(&self, handle: FaultHandle) -> Result<(), ScenarioError> {
+        let removed = self.faults.borrow_mut().partitions.remove(&handle);
+        if removed.is_some() {
+            self.apply_partitions().await?;
+        }
         Ok(())
     }
 

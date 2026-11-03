@@ -52,7 +52,7 @@ enum Command {
 enum LabCommand {
     #[command(about = "Create the virtual lab from image/output/test")]
     Up {
-        #[arg(long, default_value_t = 1)]
+        #[arg(long, default_value_t = 4)]
         nodes: u8,
     },
     #[command(about = "Delete the virtual lab and its LXD project")]
@@ -179,7 +179,7 @@ async fn lab(command: LabCommand) -> anyhow::Result<()> {
                 for instance in instances {
                     println!(
                         "{} {} {:?} workload {:?} disks {:?}\n--- console\n{}\n--- VM process\n{}",
-                        node.name,
+                        node.name(),
                         instance.vm_id,
                         instance.state,
                         instance.workload,
@@ -201,7 +201,7 @@ async fn lab(command: LabCommand) -> anyhow::Result<()> {
                     Subsystem::Network | Subsystem::Attachments => http.get(url),
                 };
                 let facts: serde_json::Value = request.send().await?.error_for_status()?.json().await?;
-                println!("{}:", node.name);
+                println!("{}:", node.name());
                 match facts.get("ruleset").and_then(serde_json::Value::as_str) {
                     Some(ruleset) => {
                         println!("{}\n{ruleset}", serde_json::to_string_pretty(&facts["ports"])?);
@@ -220,9 +220,9 @@ async fn lab(command: LabCommand) -> anyhow::Result<()> {
                 match outcome.violation {
                     None => println!(
                         "{}: the Cloud Hypervisor adapter honours the hypervisor contract",
-                        node.name
+                        node.name()
                     ),
-                    Some(violation) => bail!("{}: {violation}", node.name),
+                    Some(violation) => bail!("{}: {violation}", node.name()),
                 }
             }
             Ok(())
