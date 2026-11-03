@@ -87,8 +87,10 @@ mod tests {
                 subnet: "10.1.0.0/24".parse().unwrap(),
                 is_outbound_access_allowed: true,
                 domain: String::from("default.project-a.internal"),
+                segment_id: None,
             }],
             ports,
+            ..NodeNetworkState::default()
         }
     }
 

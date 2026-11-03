@@ -25,7 +25,8 @@ pub use identifiers::{Identifiers, RandomIdentifiers};
 pub use images::{CachedImage, ContainerConfiguration, ImageRequest, ImageStore};
 pub use lease::{HeldLease, Leases};
 pub use network::{
-    Datapath, LocalServices, NodeNetworkState, Port, PortKey, RealizedNetwork, Segment, SegmentKey,
+    Datapath, FloatingAddress, LocalServices, NodeNetworkState, Port, PortKey, RealizedNetwork,
+    RemoteEndpoint, Segment, SegmentKey,
 };
 pub use objects::ObjectStoreError;
 pub use storage::{AttachTarget, Storage, StorageProtocol, StorageProvider, VolumeAttacher, VolumeRequest};

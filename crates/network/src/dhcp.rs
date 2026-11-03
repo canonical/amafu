@@ -310,6 +310,7 @@ pub mod tests {
                 subnet: "10.1.0.0/24".parse().unwrap(),
                 is_outbound_access_allowed: true,
                 domain: String::from("default.project-a.internal"),
+                segment_id: None,
             }],
             ports: vec![Port {
                 key: PortKey { vm_id: ObjectId::from_uuid(uuid::Uuid::nil()), index: 0 },
@@ -320,6 +321,7 @@ pub mod tests {
                 rules: Vec::new(),
                 user_data: None,
             }],
+            ..NodeNetworkState::default()
         }
     }
 

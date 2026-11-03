@@ -11,6 +11,7 @@ fn desired() -> Result<NodeNetworkState, Box<dyn std::error::Error>> {
             subnet: "10.250.0.0/24".parse()?,
             is_outbound_access_allowed: true,
             domain: String::from("default.contract.internal"),
+            segment_id: None,
         }],
         ports: vec![Port {
             key: PortKey { vm_id: ObjectId::from_uuid(uuid::Uuid::from_u128(7)), index: 0 },
@@ -21,6 +22,7 @@ fn desired() -> Result<NodeNetworkState, Box<dyn std::error::Error>> {
             rules: Vec::new(),
             user_data: None,
         }],
+        ..NodeNetworkState::default()
     })
 }
 

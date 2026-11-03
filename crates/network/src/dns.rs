@@ -121,12 +121,17 @@ pub fn answer(query: &Query, segment: &SegmentKey, state: &NodeNetworkState) -> 
         None if query.name.contains('.') => return Decision::Forward,
         None => query.name.clone(),
     };
-    let found: Vec<[u8; 4]> = state
+    let local = state
         .ports
         .iter()
         .filter(|port| &port.segment == segment && port.hostname.eq_ignore_ascii_case(&short_name))
-        .map(|port| port.address.octets())
-        .collect();
+        .map(|port| port.address.octets());
+    let remote = state
+        .remote_endpoints
+        .iter()
+        .filter(|remote| &remote.segment == segment && remote.hostname.eq_ignore_ascii_case(&short_name))
+        .map(|remote| remote.address.octets());
+    let found: Vec<[u8; 4]> = local.chain(remote).collect();
     if found.is_empty() {
         return Decision::Answer(response(query, RESPONSE_CODE_NAME_ERROR, &[]));
     }
@@ -137,6 +142,8 @@ pub fn answer(query: &Query, segment: &SegmentKey, state: &NodeNetworkState) -> 
 
 #[cfg(test)]
 mod tests {
+    use amafu_interfaces::RemoteEndpoint;
+
     use super::*;
     use crate::dhcp::tests::{segment, state};
 
@@ -167,6 +174,21 @@ mod tests {
             assert_eq!(&bytes[bytes.len() - 4..], &[10, 1, 0, 2]);
             assert_eq!(read_u16(&bytes, 0), Some(0xbeef));
         }
+    }
+
+    #[test]
+    fn names_of_ports_on_other_nodes_resolve_too() {
+        let mut with_remote = state();
+        with_remote.remote_endpoints.push(RemoteEndpoint {
+            segment: segment(),
+            mac: "02:00:00:00:00:09".parse().unwrap(),
+            address: std::net::Ipv4Addr::new(10, 1, 0, 9),
+            hostname: String::from("database"),
+            node_address: std::net::Ipv4Addr::new(192, 0, 2, 11),
+        });
+        let parsed = Query::parse(&query("database", RECORD_TYPE_A)).unwrap();
+        let Decision::Answer(bytes) = answer(&parsed, &segment(), &with_remote) else { panic!("forwarded") };
+        assert_eq!(&bytes[bytes.len() - 4..], &[10, 1, 0, 9]);
     }
 
     #[test]

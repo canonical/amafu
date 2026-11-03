@@ -3,7 +3,7 @@ use std::fmt;
 use std::net::Ipv4Addr;
 
 use amafu_domain::kinds::security_group::{Direction, PortRange, Protocol};
-use amafu_domain::{Ipv4Network, MacAddress, ObjectId};
+use amafu_domain::{Ipv4Network, MacAddress, ObjectId, SegmentId};
 use serde::{Deserialize, Serialize};
 
 use crate::error::ActionError;
@@ -53,6 +53,8 @@ pub struct Segment {
     pub subnet: Ipv4Network,
     pub is_outbound_access_allowed: bool,
     pub domain: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segment_id: Option<SegmentId>,
 }
 
 impl Segment {
@@ -99,10 +101,32 @@ pub struct Port {
     pub user_data: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct RemoteEndpoint {
+    pub segment: SegmentKey,
+    pub mac: MacAddress,
+    pub address: Ipv4Addr,
+    pub hostname: String,
+    pub node_address: Ipv4Addr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct FloatingAddress {
+    pub address: Ipv4Addr,
+    pub private_address: Ipv4Addr,
+    pub segment: SegmentKey,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct NodeNetworkState {
     pub segments: Vec<Segment>,
     pub ports: Vec<Port>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remote_endpoints: Vec<RemoteEndpoint>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub floating_addresses: Vec<FloatingAddress>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underlay_address: Option<Ipv4Addr>,
 }
 
 impl NodeNetworkState {
@@ -119,6 +143,11 @@ impl NodeNetworkState {
     #[must_use]
     pub fn port_with_address(&self, segment: &SegmentKey, address: Ipv4Addr) -> Option<&Port> {
         self.ports.iter().find(|port| &port.segment == segment && port.address == address)
+    }
+
+    #[must_use]
+    pub fn remote_with_hostname(&self, segment: &SegmentKey, hostname: &str) -> Option<&RemoteEndpoint> {
+        self.remote_endpoints.iter().find(|remote| &remote.segment == segment && remote.hostname == hostname)
     }
 }
 
