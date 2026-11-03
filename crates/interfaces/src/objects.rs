@@ -167,6 +167,27 @@ async fn apply_with_fence<R: Resource>(
     serde_json::from_value(updated).map_err(|error| ObjectStoreError::Corrupt(error.to_string()))
 }
 
+pub async fn update_status<R: Resource>(
+    store: &dyn Store,
+    reference: &ObjectReference,
+    compute: impl Fn(&Object<R>) -> Option<R::Status> + Send + Sync,
+) -> Result<Object<R>, ObjectStoreError> {
+    let updated = update_with(store, reference, None, |current| {
+        let current = current
+            .map(|value| serde_json::from_value::<Object<R>>(value.clone()))
+            .transpose()
+            .map_err(|error| ObjectStoreError::Corrupt(error.to_string()))?
+            .ok_or(ObjectStoreError::Change(ChangeError::NotFound))?;
+        let Some(status) = compute(&current) else {
+            return encode(&current);
+        };
+        let observed_generation = current.metadata.generation;
+        encode(&apply_change(Some(current), Change::UpdateStatus { observed_generation, status })?)
+    })
+    .await?;
+    serde_json::from_value(updated).map_err(|error| ObjectStoreError::Corrupt(error.to_string()))
+}
+
 pub async fn remove<R: Resource>(
     store: &dyn Store,
     reference: &ObjectReference,
