@@ -7,14 +7,15 @@
 | `crates/domain` | Resource kinds, names, the generation and status rules, the kind registry, roles and verbs |
 | `crates/interfaces` | Traits for every side effect, typed store helpers, error classification, contract suites |
 | `crates/reconciler` | The controller shape, keyed work queue, backoff and run loop |
-| `crates/controllers` | Placement with address allocation, compute, node, image, volume, storage backend, network, security group and node network controllers |
-| `crates/state` | The `Store` and audit log on a single-voter Quorium node |
+| `crates/scheduler` | Placement as a pure function: filters, scores and the placement benchmark |
+| `crates/controllers` | The scheduler, compute, node, node health, image, volume, local volume, storage backend, network, security group, node network, floating IP and retirement controllers |
+| `crates/state` | The `Store`, audit log and leases on Quorium voters, and the subscribed store with its local state cache |
 | `crates/hypervisor` | The sandboxed per-VM process embedding Cloud Hypervisor, the node-side adapter and the guest agent client |
-| `crates/storage` | Local and NFS volumes as qcow2 files, and the image cache with its OCI registry client |
+| `crates/storage` | Local and NFS volumes as qcow2 files, NVMe/TCP volumes on SPDK, Ceph RBD volumes, and the image cache with its OCI registry client |
 | `crates/guest-agent` | The init of container VMs, and the protocol the node speaks to it |
-| `crates/api` | Routes, authentication, authorization, admission, audit, the TLS server and the client |
+| `crates/api` | Routes, authentication, authorization, admission, audit, the TLS server and the client, and the node API with its client |
 | `crates/system` | What PID 1 needs: mounts, kernel modules, boot media, firmware facts |
-| `crates/network` | The underlay, bridges and taps, the nftables ruleset, and the DHCP, DNS and metadata services |
+| `crates/network` | The underlay, bridges, taps and VXLAN tunnels, floating addresses, the nftables ruleset, and the DHCP, DNS and metadata services |
 | `crates/node` | `amafu-node`: PID 1, role wiring, the test-only diagnostic channel |
 | `crates/command-line` | `amafu` |
 | `test-rig/*` | The `Cluster` trait, scenarios, checkers, the simulated world, the LXD lab, and `cargo rig` |
@@ -28,11 +29,17 @@ cargo fmt --all --check
 cargo clippy --workspace --all-targets --features amafu-node/diagnostics
 cargo test --workspace
 cargo rig simulate --seeds 200 --crash-roles
+cargo bench -p amafu-scheduler
 ```
+
+The simulated world runs the first three nodes of a scenario as core members holding leases and the rest as nodes
+outside the core, on their subscribed share through the node API. `Fault::Partition` cuts a node off; a cut-off core
+member loses its leases.
 
 A failing seed is replayed with `cargo rig replay <seed> [--scenario <part of its name>] [--crash-roles]`.
 
-Some tests need root and are ignored by default: the kernel datapath contract (`crates/network/tests`), the VM
+Some tests need root and are ignored by default: the kernel datapath contract and the tunnel and floating address
+test (`crates/network/tests`), the VM
 process sandbox (`crates/node/tests/sandbox.rs`), and a real registry pull (`crates/storage/tests`). Build them with
 `cargo test --no-run` and run the test binary with `sudo ... --ignored`.
 
@@ -40,7 +47,7 @@ process sandbox (`crates/node/tests/sandbox.rs`), and a real registry pull (`cra
 
 | Crate | Targets |
 |---|---|
-| `crates/api/fuzz` | `create_body`, `update_body` |
+| `crates/api/fuzz` | `create_body`, `update_body`, `node_swap`, `slice_change` |
 | `crates/network/fuzz` | `dhcp_message`, `dns_query`, `metadata_request` |
 | `crates/guest-agent/fuzz` | `agent_messages` |
 
@@ -63,9 +70,13 @@ The lab runs on an LXD server reachable as the `amafu-lab` remote of the snap's 
 certificate and the pinned server certificate are read from `~/snap/lxd/common/config`). The defaults in
 `test-rig/lxd-lab/src/topology.rs` describe that server's address, bridge and storage pool.
 
+The lab (decision 0016) has four nodes, three of them core members, a lab switch VM that owns the underlay
+`10.216.0.0/24`, an NFS server, an SPDK NVMe/TCP target and a MicroCeph VM. The first `lab up` builds the SPDK target
+image, which takes a while and is kept for later labs.
+
 ```sh
 image/build test
-cargo rig lab up          # creates the amafu-lab LXD project, the NFS server VM, and boots node-0
+cargo rig lab up          # creates the project, the switch, the storage targets and boots the four nodes
 cargo rig lab contract    # the hypervisor contract against the real Cloud Hypervisor adapter
 cargo rig lab run         # every scenario at the virtual-lab level
 cargo rig lab instances   # VM processes on each node, with their console and VM process log
@@ -103,4 +114,17 @@ amafu volume create noble-root --size 4 --backend local --from-image noble
 amafu vm create ubuntu --from-disk --volume noble-root --memory 1024 --network private --user-data cloud.yaml --wait
 ```
 
-The lab's NFS export is `10.215.2.40:/srv/amafu` (`amafu storage-backend create shared --nfs 10.215.2.40:/srv/amafu`).
+The lab's NFS export is `10.216.0.40:/srv/amafu` (`amafu storage-backend create shared --nfs 10.216.0.40:/srv/amafu`).
+
+Milestone 3 kinds, from the command line:
+
+```sh
+amafu vm create web-1 --kernel test-guest --network private --anti-affinity-group web --priority 10 --wait
+amafu external-network create lab --subnet 10.216.0.0/24 --first 10.216.0.100 --last 10.216.0.149
+amafu floating-ip create public --external-network lab --vm web-1
+amafu floating-ip move public --vm web-2
+amafu storage-backend create fast --provider-file nvme.yaml    # an NvmeTcp or CephRbd provider, as in lab.json
+amafu node list
+```
+
+`lab.json` holds the block backends the lab created (`block_backends`), with their credentials.
