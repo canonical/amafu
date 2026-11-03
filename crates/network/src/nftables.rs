@@ -153,6 +153,7 @@ fn inet_table(output: &mut String, state: &NodeNetworkState, infrastructure: &[I
     let _ = writeln!(output, "\t\toifname \"{BRIDGE_PREFIX}\" drop");
     if !infrastructure.is_empty() {
         let networks: Vec<String> = infrastructure.iter().map(ToString::to_string).collect();
+        let _ = writeln!(output, "\t\tiifname \"{BRIDGE_PREFIX}\" ct state established,related accept");
         let _ =
             writeln!(output, "\t\tiifname \"{BRIDGE_PREFIX}\" ip daddr {{ {} }} drop", networks.join(", "));
     }
