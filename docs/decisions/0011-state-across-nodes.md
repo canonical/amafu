@@ -7,7 +7,8 @@ Status: accepted for milestone 3 (refines 0002)
 - **Core members run three Quorium voters over mutual TLS.** A node with the `core` role and more than one entry in
   `state.voters` starts Quorium with static discovery and three replicas. Every voter presents its node certificate,
   which names `amafu-state` as a DNS name, the name Quorium verifies. A one-node cluster still starts in Quorium's
-  single-node mode.
+  single-node mode. Voters send a heartbeat every 500 ms: with Quorium's 100 ms default, the nested lab VMs missed
+  pre-votes and leadership changed every few seconds.
 - **Every core member serves the API.** The rig and the command line can use any of them; a write through a member
   that has lost the majority fails as unavailable.
 - **Other nodes subscribe to their share of the state through a core member**, over the same HTTPS listener as the
@@ -38,5 +39,8 @@ Status: accepted for milestone 3 (refines 0002)
   heartbeat and `node-health` are what milestone 3 needs to stop placing on lost nodes.
 - The kind catalog is still one entity per kind (0002). Four nodes and the scheduler benchmark do not need sharding
   yet; the 1,000-node scenario in milestone 6 decides.
+- A restarted voter starts serving only once Quorium has caught it up with the leader, about 20 seconds after its
+  kernel starts in the lab. A warm core member therefore misses the 20-second boot budget; serving reads from the
+  local log while catching up needs a change in Quorium.
 - A core member computes a subscriber's share from a full listing on every change. That is simple and correct for
   the lab; the 1,000-node scenario will show whether it needs an index.
