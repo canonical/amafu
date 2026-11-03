@@ -79,6 +79,16 @@ pub async fn shared_backend(
     .await
 }
 
+pub async fn every_node_ready(cluster: &dyn Cluster) -> ScenarioResult {
+    let operator = amafu_scenario::cluster::client(cluster, amafu_domain::access::Role::Operator).await;
+    let expected = cluster.nodes().await.len();
+    eventually(cluster, START_TIMEOUT, "every node has registered and is ready", async || {
+        let nodes = operator.list::<amafu_domain::kinds::node::Node>().await?;
+        Ok(nodes.len() == expected && nodes.iter().all(|node| node.status.is_ready()))
+    })
+    .await
+}
+
 pub async fn vm_in_phase(
     client: &ApiClient,
     cluster: &dyn Cluster,

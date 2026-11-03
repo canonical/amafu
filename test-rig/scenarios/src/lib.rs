@@ -1,5 +1,7 @@
 pub mod containers;
 pub mod networking;
+pub mod placement;
+pub mod rogue_nodes;
 pub mod sandbox;
 pub mod security;
 pub mod storage;
@@ -23,6 +25,11 @@ pub fn all() -> Vec<ScenarioDefinition> {
         networking::ADDRESSES_ARE_DISTINCT,
         networking::SECURITY_GROUPS_DECIDE,
         sandbox::HOSTILE_GUEST_IS_CONFINED,
+        placement::ANTI_AFFINITY_SPREADS_VMS,
+        placement::CORDONED_NODE_IS_AVOIDED,
+        placement::NODE_KEEPS_SERVING_WITHOUT_THE_CORE,
+        rogue_nodes::ROGUE_NODES_ARE_REFUSED,
+        rogue_nodes::NODES_WRITE_ONLY_THEIR_SHARE,
     ]
 }
 
