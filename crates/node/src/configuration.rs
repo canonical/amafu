@@ -3,8 +3,8 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 
 use amafu_api::TokenIdentity;
-use amafu_domain::NodeName;
 use amafu_domain::kinds::node::NodeRole;
+use amafu_domain::{NodeName, ZoneName};
 use amafu_interfaces::ExternalTool;
 use amafu_network::UnderlayConfiguration;
 use serde::{Deserialize, Serialize};
@@ -77,6 +77,8 @@ impl Default for ComputeSection {
 pub struct NodeSection {
     pub name: NodeName,
     pub roles: BTreeSet<NodeRole>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone: Option<ZoneName>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

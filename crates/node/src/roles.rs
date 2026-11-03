@@ -11,7 +11,7 @@ use amafu_controllers::{
     NodeNetworkController, PlacementController, SecurityGroupController, StorageBackendController,
     VolumeController,
 };
-use amafu_domain::kinds::node::{NodeCapacity, NodeRole};
+use amafu_domain::kinds::node::{CpuBaseline, NodeCapacity, NodeRole};
 use amafu_domain::{NodeName, ObjectId};
 use amafu_hypervisor::{
     BootSources, CloudHypervisor, CloudHypervisorSettings, HybridVsockAgents, RuntimeDirectory,
@@ -107,6 +107,11 @@ fn node_identity(configuration: &NodeConfiguration) -> anyhow::Result<NodeIdenti
         id: node_identifier(&configuration.directories.data)?,
         roles: configuration.node.roles.iter().copied().collect::<BTreeSet<NodeRole>>(),
         capacity: NodeCapacity { cpu_count: capacity.cpu_count, memory_mebibytes: capacity.memory_mebibytes },
+        cpu_baseline: CpuBaseline::from_flags(
+            amafu_system::host::host_cpu_flags(Path::new("/proc")).iter().map(String::as_str),
+        ),
+        zone: configuration.node.zone.clone(),
+        underlay_address: configuration.network.as_ref().map(|network| network.address.address),
         software_version: String::from(env!("CARGO_PKG_VERSION")),
         heartbeat_interval: HEARTBEAT_INTERVAL,
     })

@@ -16,7 +16,7 @@ use amafu_controllers::{
     VolumeController,
 };
 use amafu_domain::access::Role;
-use amafu_domain::kinds::node::{NodeCapacity, NodeRole};
+use amafu_domain::kinds::node::{CpuBaseline, NodeCapacity, NodeRole};
 use amafu_domain::{MacAddress, NodeName, ObjectId, ObjectName, ProjectName};
 use amafu_interfaces::{
     AuditLog, Clock, Datapath, GuestAgents, Hypervisor, Identifiers, ImageStore, LocalServices,
@@ -296,6 +296,9 @@ impl SimulatedWorld {
             id: ObjectId::from_uuid(identifiers.generate()),
             roles,
             capacity: NodeCapacity { cpu_count: 16, memory_mebibytes: 65_536 },
+            cpu_baseline: CpuBaseline::X86_64Version3,
+            zone: None,
+            underlay_address: None,
             software_version: String::from(env!("CARGO_PKG_VERSION")),
             heartbeat_interval: Duration::from_secs(10),
         };

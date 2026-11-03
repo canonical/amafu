@@ -82,6 +82,7 @@ fn node_configuration(
         node: NodeSection {
             name: NodeName::new(node.name.as_str())?,
             roles: BTreeSet::from([NodeRole::Core, NodeRole::Compute]),
+            zone: None,
         },
         network: Some(UnderlayConfiguration {
             interface: None,

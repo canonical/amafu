@@ -93,6 +93,7 @@ macro_rules! label_name {
 label_name!(ObjectName);
 label_name!(ProjectName);
 label_name!(NodeName);
+label_name!(ZoneName);
 
 #[cfg(test)]
 mod tests {

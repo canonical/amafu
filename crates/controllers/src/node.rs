@@ -2,8 +2,12 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use amafu_domain::kinds::node::{Node, NodeCapacity, NodePhase, NodeRole, NodeSpecification, NodeStatus};
-use amafu_domain::{Change, NodeName, Object, ObjectId, ObjectName, ObjectReference};
+use std::net::Ipv4Addr;
+
+use amafu_domain::kinds::node::{
+    CpuBaseline, Node, NodeCapacity, NodePhase, NodeRole, NodeSpecification, NodeStatus,
+};
+use amafu_domain::{Change, NodeName, Object, ObjectId, ObjectName, ObjectReference, ZoneName};
 use amafu_interfaces::objects::{apply, get, remove};
 use amafu_interfaces::{ActionError, Clock, Consistency, Store};
 use amafu_reconciler::{Controller, KeyMapping, WatchedKind};
@@ -15,8 +19,25 @@ pub struct NodeIdentity {
     pub id: ObjectId,
     pub roles: std::collections::BTreeSet<NodeRole>,
     pub capacity: NodeCapacity,
+    pub cpu_baseline: CpuBaseline,
+    pub zone: Option<ZoneName>,
+    pub underlay_address: Option<Ipv4Addr>,
     pub software_version: String,
     pub heartbeat_interval: Duration,
+}
+
+impl NodeIdentity {
+    #[must_use]
+    pub fn status(&self, now: OffsetDateTime) -> NodeStatus {
+        NodeStatus {
+            phase: NodePhase::Ready,
+            capacity: self.capacity,
+            cpu_baseline: self.cpu_baseline,
+            underlay_address: self.underlay_address,
+            software_version: self.software_version.clone(),
+            last_heartbeat: Some(now),
+        }
+    }
 }
 
 pub struct NodeController {
@@ -70,27 +91,23 @@ pub fn plan_node(observation: &NodeObservation) -> Vec<NodeAction> {
         return vec![NodeAction::Register(NodeSpecification {
             roles: identity.roles.clone(),
             is_cordoned: false,
+            zone: identity.zone.clone(),
         })];
     };
     if node.metadata.is_deleting {
         return vec![NodeAction::Remove];
     }
+    let reported =
+        NodeStatus { last_heartbeat: node.status.last_heartbeat, ..identity.status(observation.now) };
     let is_current = node.is_status_current()
-        && node.status.phase == NodePhase::Ready
-        && node.status.capacity == identity.capacity
-        && node.status.software_version == identity.software_version
+        && node.status == reported
         && !is_heartbeat_due(&node.status, observation.now, identity.heartbeat_interval);
     if is_current {
         return Vec::new();
     }
     vec![NodeAction::ReportReady {
         observed_generation: node.metadata.generation,
-        status: NodeStatus {
-            phase: NodePhase::Ready,
-            capacity: identity.capacity,
-            software_version: identity.software_version.clone(),
-            last_heartbeat: Some(observation.now),
-        },
+        status: identity.status(observation.now),
     }]
 }
 
@@ -170,6 +187,9 @@ mod tests {
             id: ObjectId::from_uuid(uuid::Uuid::new_v4()),
             roles: BTreeSet::from([NodeRole::Core, NodeRole::Compute]),
             capacity: NodeCapacity { cpu_count: 8, memory_mebibytes: 16_384 },
+            cpu_baseline: CpuBaseline::X86_64Version3,
+            zone: None,
+            underlay_address: Some(Ipv4Addr::new(10, 0, 0, 1)),
             software_version: String::from("0.1.0"),
             heartbeat_interval: Duration::from_secs(10),
         }
@@ -197,12 +217,7 @@ mod tests {
     }
 
     fn ready(identity: &NodeIdentity, heartbeat: OffsetDateTime) -> NodeStatus {
-        NodeStatus {
-            phase: NodePhase::Ready,
-            capacity: identity.capacity,
-            software_version: identity.software_version.clone(),
-            last_heartbeat: Some(heartbeat),
-        }
+        identity.status(heartbeat)
     }
 
     #[test]
@@ -211,7 +226,11 @@ mod tests {
         let actions = plan_node(&NodeObservation { identity: identity.clone(), node: None, now: at(0) });
         assert_eq!(
             actions,
-            vec![NodeAction::Register(NodeSpecification { roles: identity.roles, is_cordoned: false })]
+            vec![NodeAction::Register(NodeSpecification {
+                roles: identity.roles,
+                is_cordoned: false,
+                zone: None
+            })]
         );
     }
 
