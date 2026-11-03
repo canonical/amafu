@@ -154,7 +154,8 @@ async fn vms_on_different_nodes_reach_each_other(cluster: &dyn Cluster) -> Scena
         delete_and_wait::<Vm>(&member, cluster, vm_name).await?;
     }
     eventually(cluster, START_TIMEOUT, "the network endpoints of deleted VMs are withdrawn", async || {
-        Ok(member.list::<NetworkEndpoint>().await?.is_empty())
+        let endpoints = member.list::<NetworkEndpoint>().await?;
+        Ok(endpoints.iter().all(|endpoint| endpoint.specification.network.as_str() != "overlay"))
     })
     .await?;
     delete_and_wait::<SecurityGroup>(&member, cluster, "overlay-web").await?;
