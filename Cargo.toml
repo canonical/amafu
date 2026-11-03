@@ -15,6 +15,7 @@ amafu-domain = { path = "crates/domain" }
 amafu-interfaces = { path = "crates/interfaces" }
 amafu-reconciler = { path = "crates/reconciler" }
 amafu-controllers = { path = "crates/controllers" }
+amafu-scheduler = { path = "crates/scheduler" }
 amafu-state = { path = "crates/state" }
 amafu-storage = { path = "crates/storage" }
 amafu-guest-agent = { path = "crates/guest-agent" }

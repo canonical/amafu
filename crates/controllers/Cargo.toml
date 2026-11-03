@@ -10,6 +10,7 @@ publish.workspace = true
 amafu-domain.workspace = true
 amafu-interfaces.workspace = true
 amafu-reconciler.workspace = true
+amafu-scheduler.workspace = true
 time.workspace = true
 tracing.workspace = true
 

@@ -22,6 +22,13 @@ pub enum StorageProviderSpecification {
     Nfs { server: String, export: String },
 }
 
+impl StorageProviderSpecification {
+    #[must_use]
+    pub fn is_file_based(&self) -> bool {
+        matches!(self, Self::LocalDisk | Self::Nfs { .. })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StorageBackendSpecification {

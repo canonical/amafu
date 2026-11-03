@@ -8,8 +8,8 @@ use amafu_api::server::{serve, tls_configuration};
 use amafu_api::{ApiState, TokenAuthenticator, router};
 use amafu_controllers::{
     ComputeController, ComputeServices, ImageController, NetworkController, NodeController, NodeIdentity,
-    NodeNetworkController, PlacementController, SecurityGroupController, StorageBackendController,
-    VolumeController,
+    NodeNetworkController, SchedulerController, SchedulingSettings, SecurityGroupController,
+    StorageBackendController, VolumeController,
 };
 use amafu_domain::kinds::node::{CpuBaseline, NodeCapacity, NodeRole};
 use amafu_domain::{NodeName, ObjectId};
@@ -18,12 +18,12 @@ use amafu_hypervisor::{
     prepare_kvm_access,
 };
 use amafu_interfaces::{
-    AuditLog, Clock, Datapath, GuestAgents, Hypervisor, ImageStore, LocalServices, RandomIdentifiers,
-    Storage, Store,
+    AuditLog, Clock, Datapath, Fence, GuestAgents, Hypervisor, ImageStore, Leases, LocalServices,
+    RandomIdentifiers, Storage, Store,
 };
 use amafu_network::{KernelDatapath, LocalServicesServer};
-use amafu_reconciler::{Controller, ReconcilerSettings, run_controller};
-use amafu_state::{QuoriumAuditLog, QuoriumStore, start_single_voter};
+use amafu_reconciler::{Controller, ReconcilerSettings, run_controller, run_singleton};
+use amafu_state::{QuoriumAuditLog, QuoriumLeases, QuoriumStore, start_single_voter};
 use amafu_storage::{BuiltInStorage, CachedImages};
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
@@ -44,6 +44,7 @@ pub struct Services {
     pub store: Arc<dyn Store>,
     pub audit: Arc<dyn AuditLog>,
     pub clock: Arc<dyn Clock>,
+    pub leases: Option<Arc<dyn Leases>>,
 }
 
 pub struct ComputeAdapters {
@@ -84,6 +85,31 @@ fn controller_role<C: Controller>(
         let clock = Arc::clone(&clock);
         async move {
             run_controller(controller.as_ref(), store.as_ref(), clock.as_ref(), settings).await.to_string()
+        }
+    }));
+}
+
+fn singleton_role<C, Make>(
+    roles: &mut JoinSet<()>,
+    name: &'static str,
+    make: Make,
+    services: &Services,
+    settings: ReconcilerSettings,
+) where
+    C: Controller,
+    Make: Fn(Fence) -> C + Clone + Send + Sync + 'static,
+{
+    let Some(leases) = services.leases.clone() else {
+        tracing::error!(role = name, "a singleton role needs leases, which only core members hold");
+        return;
+    };
+    let store = Arc::clone(&services.store);
+    let clock = Arc::clone(&services.clock);
+    roles.spawn(supervise(name, move || {
+        let (leases, store, clock, make) =
+            (Arc::clone(&leases), Arc::clone(&store), Arc::clone(&clock), make.clone());
+        async move {
+            run_singleton(leases.as_ref(), make, store.as_ref(), clock.as_ref(), settings).await.to_string()
         }
     }));
 }
@@ -192,26 +218,67 @@ fn cloud_hypervisor(configuration: &NodeConfiguration) -> anyhow::Result<CloudHy
 fn core_roles(roles: &mut JoinSet<()>, services: &Services, adapters: &ComputeAdapters, node: &NodeName) {
     let store = || Arc::clone(&services.store);
     let settings = ReconcilerSettings::default();
-    controller_role(roles, "placement", Arc::new(PlacementController::new(store())), services, settings);
-    controller_role(roles, "network", Arc::new(NetworkController::new(store())), services, settings);
-    controller_role(
+    let scheduler_store = store();
+    singleton_role(
         roles,
-        "security-group",
-        Arc::new(SecurityGroupController::new(store())),
+        "scheduler",
+        move |fence| {
+            SchedulerController::new(Arc::clone(&scheduler_store), fence, SchedulingSettings::default())
+        },
         services,
         settings,
     );
-    let volume = VolumeController::new(
+    let network_store = store();
+    singleton_role(
+        roles,
+        "network",
+        move |_| NetworkController::new(Arc::clone(&network_store)),
+        services,
+        settings,
+    );
+    let group_store = store();
+    singleton_role(
+        roles,
+        "security-group",
+        move |_| SecurityGroupController::new(Arc::clone(&group_store)),
+        services,
+        settings,
+    );
+    let (volume_store, volume_storage, volume_images) = (
         store(),
         Arc::clone(&adapters.storage) as Arc<dyn Storage>,
         Arc::clone(&adapters.images) as Arc<dyn ImageStore>,
     );
-    controller_role(roles, "volume", Arc::new(volume), services, settings);
-    let image =
-        ImageController::new(node.clone(), store(), Arc::clone(&adapters.images) as Arc<dyn ImageStore>);
-    controller_role(roles, "image", Arc::new(image), services, settings);
-    let backend = StorageBackendController::new(store(), Arc::clone(&adapters.storage) as Arc<dyn Storage>);
-    controller_role(roles, "storage-backend", Arc::new(backend), services, settings);
+    singleton_role(
+        roles,
+        "volume",
+        move |_| {
+            VolumeController::new(
+                Arc::clone(&volume_store),
+                Arc::clone(&volume_storage),
+                Arc::clone(&volume_images),
+            )
+        },
+        services,
+        settings,
+    );
+    let (image_store, image_cache, image_node) =
+        (store(), Arc::clone(&adapters.images) as Arc<dyn ImageStore>, node.clone());
+    singleton_role(
+        roles,
+        "image",
+        move |_| ImageController::new(image_node.clone(), Arc::clone(&image_store), Arc::clone(&image_cache)),
+        services,
+        settings,
+    );
+    let (backend_store, backend_storage) = (store(), Arc::clone(&adapters.storage) as Arc<dyn Storage>);
+    singleton_role(
+        roles,
+        "storage-backend",
+        move |_| StorageBackendController::new(Arc::clone(&backend_store), Arc::clone(&backend_storage)),
+        services,
+        settings,
+    );
 }
 
 fn compute_roles(
@@ -256,6 +323,7 @@ pub async fn run(configuration: NodeConfiguration, modules: Option<ModuleLoading
         store: Arc::new(QuoriumStore::new(quorium.clone())),
         audit: Arc::new(QuoriumAuditLog::new(quorium.clone())),
         clock: Arc::new(SystemClock),
+        leases: Some(Arc::new(QuoriumLeases::new(quorium.clone()))),
     };
     let underlay = amafu_network::bring_up(
         configuration.network.as_ref().and_then(|network| network.interface.as_deref()),

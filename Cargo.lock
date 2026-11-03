@@ -106,6 +106,7 @@ dependencies = [
  "amafu-domain",
  "amafu-interfaces",
  "amafu-reconciler",
+ "amafu-scheduler",
  "proptest",
  "time",
  "tracing",

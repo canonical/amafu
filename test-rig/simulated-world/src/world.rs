@@ -12,18 +12,18 @@ use amafu_api::{ApiClient, ApiState, Principal, RouterTransport, TokenAuthentica
 use amafu_checkers::invariants::check_all;
 use amafu_controllers::{
     ComputeController, ComputeServices, ImageController, NetworkController, NodeController, NodeIdentity,
-    NodeNetworkController, PlacementController, SecurityGroupController, StorageBackendController,
-    VolumeController,
+    NodeNetworkController, SchedulerController, SchedulingSettings, SecurityGroupController,
+    StorageBackendController, VolumeController,
 };
 use amafu_domain::access::Role;
 use amafu_domain::kinds::node::{CpuBaseline, NodeCapacity, NodeRole};
 use amafu_domain::{MacAddress, NodeName, ObjectId, ObjectName, ProjectName};
 use amafu_interfaces::{
-    AuditLog, Clock, Datapath, GuestAgents, Hypervisor, Identifiers, ImageStore, LocalServices,
-    NodeNetworkState, Storage, Store, WorkloadState,
+    AuditLog, Clock, Datapath, Fence, GuestAgents, Hypervisor, Identifiers, ImageStore, Leases,
+    LocalServices, NodeNetworkState, Storage, Store, WorkloadState,
 };
 use amafu_network::dhcp::{self, DhcpMessage, Lease, MessageType};
-use amafu_reconciler::{Controller, ReconcilerSettings, run_controller};
+use amafu_reconciler::{Controller, ReconcilerSettings, run_controller, run_singleton};
 use amafu_scenario::{
     Cluster, ClusterObservation, Fault, FaultHandle, Level, NfsExport, ObservedAttachment, ObservedInstance,
     ObservedPort, ScenarioDefinition, ScenarioError, ScenarioResult,
@@ -36,7 +36,7 @@ use uuid::Uuid;
 use crate::clock::VirtualClock;
 use crate::executor::{Executor, StepOutcome, TaskFuture, TaskId};
 use crate::fakes::{
-    FakeBackends, FakeDatapath, FakeHypervisor, FakeImageStore, FakeLocalServices, FakeStorage,
+    FakeBackends, FakeDatapath, FakeHypervisor, FakeImageStore, FakeLeases, FakeLocalServices, FakeStorage,
     MemoryAuditLog, MemoryStore, SeededIdentifiers,
 };
 
@@ -48,6 +48,7 @@ const RECENT_EVENT_COUNT: usize = 200;
 const ROLE_CRASH_PROBABILITY: f64 = 0.02;
 const BOOT_DURATION: Duration = Duration::from_secs(1);
 const TEST_BUNDLE: &str = "test-guest";
+const CORE_MEMBER_COUNT: usize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SimulationSettings {
@@ -144,6 +145,7 @@ struct WorldShared {
     executor: Executor,
     clock: VirtualClock,
     store: Arc<MemoryStore>,
+    leases: Arc<FakeLeases>,
     backends: Arc<FakeBackends>,
     audit: Arc<MemoryAuditLog>,
     router: axum::Router,
@@ -189,6 +191,39 @@ fn controller_role<C: Controller>(
         let label = task_label.clone();
         Box::pin(async move {
             let failure = run_controller(&controller, store.as_ref(), clock.as_ref(), settings).await;
+            failures.borrow_mut().push(format!("{label}: {failure}"));
+        })
+    });
+    RoleTask { label, start, task: Cell::new(TaskId::default()) }
+}
+
+struct SingletonServices {
+    leases: Arc<dyn Leases>,
+    store: Arc<dyn Store>,
+    clock: Arc<dyn Clock>,
+    failures: Rc<RefCell<Vec<String>>>,
+}
+
+fn singleton_role<C: Controller>(
+    label: String,
+    make: impl Fn(Fence) -> C + Clone + 'static,
+    services: &SingletonServices,
+    settings: ReconcilerSettings,
+) -> RoleTask {
+    let task_label = label.clone();
+    let (leases, store, clock, failures) = (
+        Arc::clone(&services.leases),
+        Arc::clone(&services.store),
+        Arc::clone(&services.clock),
+        Rc::clone(&services.failures),
+    );
+    let start: Rc<dyn Fn() -> TaskFuture> = Rc::new(move || {
+        let (leases, store, clock, failures) =
+            (Arc::clone(&leases), Arc::clone(&store), Arc::clone(&clock), Rc::clone(&failures));
+        let (make, label) = (make.clone(), task_label.clone());
+        Box::pin(async move {
+            let failure =
+                run_singleton(leases.as_ref(), make, store.as_ref(), clock.as_ref(), settings).await;
             failures.borrow_mut().push(format!("{label}: {failure}"));
         })
     });
@@ -241,6 +276,7 @@ impl SimulatedWorld {
                 executor: Executor::new(clock.clone()),
                 clock,
                 store,
+                leases: FakeLeases::new(),
                 backends: FakeBackends::new(),
                 audit,
                 router,
@@ -253,7 +289,11 @@ impl SimulatedWorld {
             }),
         };
         for index in 0..node_count {
-            world.add_node(&valid_name(&format!("node-{index}")), index == 0, identifiers.as_ref());
+            world.add_node(
+                &valid_name(&format!("node-{index}")),
+                index < CORE_MEMBER_COUNT,
+                identifiers.as_ref(),
+            );
         }
         world
     }
@@ -345,37 +385,78 @@ impl SimulatedWorld {
         services: &NodeServices,
         settings: ReconcilerSettings,
     ) -> Vec<RoleTask> {
+        let shared = &self.shared;
+        let singletons = SingletonServices {
+            leases: Arc::new(shared.leases.for_node(name.clone())),
+            store: Arc::clone(store),
+            clock: Arc::new(shared.clock.clone()),
+            failures: Rc::clone(&shared.failures),
+        };
         let storage: Arc<dyn Storage> = Arc::clone(&services.storage) as Arc<dyn Storage>;
         let images: Arc<dyn ImageStore> = Arc::clone(&services.images) as Arc<dyn ImageStore>;
-        let (placement_store, network_store, group_store) =
+        let (scheduler_store, network_store, group_store) =
             (Arc::clone(store), Arc::clone(store), Arc::clone(store));
         let (volume_store, volume_storage, volume_images) =
             (Arc::clone(store), Arc::clone(&storage), Arc::clone(&images));
         let (image_store, image_cache, image_node) = (Arc::clone(store), Arc::clone(&images), name.clone());
         let (backend_store, backend_storage) = (Arc::clone(store), Arc::clone(&storage));
         vec![
-            self.role(format!("{name}/placement"), settings, move || {
-                PlacementController::new(Arc::clone(&placement_store))
-            }),
-            self.role(format!("{name}/network"), settings, move || {
-                NetworkController::new(Arc::clone(&network_store))
-            }),
-            self.role(format!("{name}/security-group"), settings, move || {
-                SecurityGroupController::new(Arc::clone(&group_store))
-            }),
-            self.role(format!("{name}/volume"), settings, move || {
-                VolumeController::new(
-                    Arc::clone(&volume_store),
-                    Arc::clone(&volume_storage),
-                    Arc::clone(&volume_images),
-                )
-            }),
-            self.role(format!("{name}/image"), settings, move || {
-                ImageController::new(image_node.clone(), Arc::clone(&image_store), Arc::clone(&image_cache))
-            }),
-            self.role(format!("{name}/storage-backend"), settings, move || {
-                StorageBackendController::new(Arc::clone(&backend_store), Arc::clone(&backend_storage))
-            }),
+            singleton_role(
+                format!("{name}/scheduler"),
+                move |fence| {
+                    SchedulerController::new(
+                        Arc::clone(&scheduler_store),
+                        fence,
+                        SchedulingSettings::default(),
+                    )
+                },
+                &singletons,
+                settings,
+            ),
+            singleton_role(
+                format!("{name}/network"),
+                move |_| NetworkController::new(Arc::clone(&network_store)),
+                &singletons,
+                settings,
+            ),
+            singleton_role(
+                format!("{name}/security-group"),
+                move |_| SecurityGroupController::new(Arc::clone(&group_store)),
+                &singletons,
+                settings,
+            ),
+            singleton_role(
+                format!("{name}/volume"),
+                move |_| {
+                    VolumeController::new(
+                        Arc::clone(&volume_store),
+                        Arc::clone(&volume_storage),
+                        Arc::clone(&volume_images),
+                    )
+                },
+                &singletons,
+                settings,
+            ),
+            singleton_role(
+                format!("{name}/image"),
+                move |_| {
+                    ImageController::new(
+                        image_node.clone(),
+                        Arc::clone(&image_store),
+                        Arc::clone(&image_cache),
+                    )
+                },
+                &singletons,
+                settings,
+            ),
+            singleton_role(
+                format!("{name}/storage-backend"),
+                move |_| {
+                    StorageBackendController::new(Arc::clone(&backend_store), Arc::clone(&backend_storage))
+                },
+                &singletons,
+                settings,
+            ),
         ]
     }
 
