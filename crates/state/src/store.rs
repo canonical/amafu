@@ -1,14 +1,14 @@
 use std::collections::VecDeque;
 
 use amafu_domain::{ObjectReference, ProjectName};
-use amafu_interfaces::{Consistency, Store, StoreError, StoredRecord, WatchEvent};
+use amafu_interfaces::{Consistency, Fence, Store, StoreError, StoredRecord, WatchEvent};
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use quorium::{Quorium, Watch};
 use serde_json::Value;
 
 use crate::entities::{Change, KindCatalog, ObjectEntity};
-use crate::errors::store_error;
+use crate::errors::{fenced_store_error, store_error};
 
 #[derive(Clone)]
 pub struct QuoriumStore {
@@ -96,29 +96,17 @@ impl Store for QuoriumStore {
         expected_revision: Option<u64>,
         replacement: Option<Value>,
     ) -> Result<u64, StoreError> {
-        let (kind, project, name) = object_key(reference);
-        let catalog = self.node.entity::<KindCatalog>(kind.clone());
-        let is_creation = expected_revision.is_none() && replacement.is_some();
-        let is_removal = replacement.is_none();
-        if is_creation {
-            catalog.add_member(project.clone(), name.clone()).await.map_err(store_error)?;
-        }
-        let bytes = replacement.as_ref().map(encode).transpose()?;
-        let revision = self
-            .node
-            .entity::<ObjectEntity>((kind, project.clone(), name.clone()))
-            .compare_and_swap(expected_revision, bytes)
-            .await
-            .map_err(store_error)?;
-        let noted = if is_removal {
-            catalog.remove_member(project, name).await
-        } else {
-            catalog.record_change(project, name).await
-        };
-        if let Err(error) = noted {
-            tracing::warn!(error = %store_error(error), "the change was stored but watchers were not told");
-        }
-        Ok(revision)
+        self.swap(reference, expected_revision, replacement, None).await
+    }
+
+    async fn compare_and_swap_fenced(
+        &self,
+        reference: &ObjectReference,
+        expected_revision: Option<u64>,
+        replacement: Option<Value>,
+        fence: &Fence,
+    ) -> Result<u64, StoreError> {
+        self.swap(reference, expected_revision, replacement, Some(fence)).await
     }
 
     fn watch(&self, kind: &str) -> BoxStream<'static, WatchEvent> {
@@ -139,6 +127,42 @@ impl Store for QuoriumStore {
             }
         })
         .boxed()
+    }
+}
+
+impl QuoriumStore {
+    async fn swap(
+        &self,
+        reference: &ObjectReference,
+        expected_revision: Option<u64>,
+        replacement: Option<Value>,
+        fence: Option<&Fence>,
+    ) -> Result<u64, StoreError> {
+        let (kind, project, name) = object_key(reference);
+        let catalog = self.node.entity::<KindCatalog>(kind.clone());
+        let is_creation = expected_revision.is_none() && replacement.is_some();
+        let is_removal = replacement.is_none();
+        if is_creation {
+            catalog.add_member(project.clone(), name.clone()).await.map_err(store_error)?;
+        }
+        let bytes = replacement.as_ref().map(encode).transpose()?;
+        let entity = self.node.entity::<ObjectEntity>((kind, project.clone(), name.clone()));
+        let revision = match fence {
+            Some(fence) => entity
+                .fenced_compare_and_swap(fence.name.clone(), fence.token, expected_revision, bytes)
+                .await
+                .map_err(|error| fenced_store_error(error, fence))?,
+            None => entity.compare_and_swap(expected_revision, bytes).await.map_err(store_error)?,
+        };
+        let noted = if is_removal {
+            catalog.remove_member(project, name).await
+        } else {
+            catalog.record_change(project, name).await
+        };
+        if let Err(error) = noted {
+            tracing::warn!(error = %store_error(error), "the change was stored but watchers were not told");
+        }
+        Ok(revision)
     }
 }
 

@@ -12,6 +12,7 @@ amafu-interfaces.workspace = true
 async-trait.workspace = true
 crc32fast.workspace = true
 futures.workspace = true
+postcard.workspace = true
 quorium.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -2,7 +2,7 @@ use amafu_domain::{ObjectName, ObjectReference, ProjectName};
 use serde_json::json;
 
 use super::{ContractViolation, ensure, succeed};
-use crate::store::{Consistency, Store, StoreError};
+use crate::store::{Consistency, Fence, Store, StoreError};
 
 fn reference(kind: &str, project: Option<&str>, name: &str) -> Result<ObjectReference, ContractViolation> {
     let project = project.map(ProjectName::new).transpose();
@@ -82,5 +82,58 @@ pub async fn store_contract(store: &dyn Store) -> Result<(), ContractViolation> 
         store.compare_and_swap(&first, None, Some(json!({"value": 7}))).await,
         "recreating an object works",
     )?;
-    ensure(recreated > updated, "revisions keep increasing after removal", (updated, recreated))
+    ensure(recreated > updated, "revisions keep increasing after removal", (updated, recreated))?;
+    fenced_contract(store).await
+}
+
+async fn fenced_contract(store: &dyn Store) -> Result<(), ContractViolation> {
+    let assignment = reference("FencedContractKind", Some("project-a"), "assignment")?;
+    let fence = |token| Fence { name: String::from("scheduler"), token };
+    let first = succeed(
+        store.compare_and_swap_fenced(&assignment, None, Some(json!({"node": "a"})), &fence(5)).await,
+        "a fenced creation works",
+    )?;
+    let stale =
+        store.compare_and_swap_fenced(&assignment, Some(first), Some(json!({"node": "b"})), &fence(4)).await;
+    ensure(
+        matches!(stale, Err(StoreError::Fenced { token: 4, .. })),
+        "a write with an older token than one accepted is refused",
+        &stale,
+    )?;
+    let same_holder = succeed(
+        store.compare_and_swap_fenced(&assignment, Some(first), Some(json!({"node": "c"})), &fence(5)).await,
+        "the current holder writes again",
+    )?;
+    let newer = succeed(
+        store
+            .compare_and_swap_fenced(&assignment, Some(same_holder), Some(json!({"node": "d"})), &fence(6))
+            .await,
+        "a newer holder writes",
+    )?;
+    let deposed =
+        store.compare_and_swap_fenced(&assignment, Some(newer), Some(json!({"node": "e"})), &fence(5)).await;
+    ensure(matches!(deposed, Err(StoreError::Fenced { .. })), "a deposed holder is refused", &deposed)?;
+    let conflicting = store.compare_and_swap_fenced(&assignment, Some(first), None, &fence(7)).await;
+    ensure(
+        conflicting == Err(StoreError::Conflict),
+        "a fenced write still checks the revision",
+        &conflicting,
+    )?;
+    let unfenced = succeed(
+        store
+            .compare_and_swap(&assignment, Some(newer), Some(json!({"node": "d", "phase": "running"})))
+            .await,
+        "unfenced writes are unaffected by fences",
+    )?;
+    let other_fence = Fence { name: String::from("other"), token: 1 };
+    succeed(
+        store.compare_and_swap_fenced(&assignment, Some(unfenced), None, &other_fence).await,
+        "each fence name keeps its own tokens",
+    )?;
+    let after_removal = store.compare_and_swap_fenced(&assignment, None, Some(json!({})), &fence(5)).await;
+    ensure(
+        matches!(after_removal, Err(StoreError::Fenced { .. })),
+        "tokens are remembered after the object is removed",
+        &after_removal,
+    )
 }

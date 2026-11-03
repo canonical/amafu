@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
@@ -9,11 +9,49 @@ pub const AUDIT_SEGMENT_CAPACITY: u64 = 256;
 #[error("the stored revision differs from the expected one")]
 pub struct RevisionMismatch;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
+pub enum FencedSwapError {
+    #[error("the stored revision differs from the expected one")]
+    RevisionMismatch,
+    #[error("a newer fencing token was already accepted")]
+    StaleToken,
+}
+
 #[derive(quorium::State, Debug, Clone, Default, Serialize, Deserialize)]
-#[state(key = (String, String, String), name = "amafu.object")]
+#[state(key = (String, String, String), name = "amafu.object", version = 2, migrate = migrate_object)]
 pub struct ObjectEntity {
     revision: u64,
     object: Option<Vec<u8>>,
+    fences: BTreeMap<String, u64>,
+}
+
+#[derive(Deserialize)]
+struct ObjectEntityVersion1 {
+    revision: u64,
+    object: Option<Vec<u8>>,
+}
+
+fn migrate_object(from: u32, bytes: &[u8]) -> Result<ObjectEntity, quorium::MigrationError> {
+    match from {
+        1 => {
+            let previous: ObjectEntityVersion1 = postcard::from_bytes(bytes)
+                .map_err(|error| quorium::MigrationError::new(error.to_string()))?;
+            Ok(ObjectEntity { revision: previous.revision, object: previous.object, fences: BTreeMap::new() })
+        }
+        version => Err(quorium::MigrationError::new(format!("unknown object entity version {version}"))),
+    }
+}
+
+impl ObjectEntity {
+    fn swap(&mut self, expected_revision: Option<u64>, replacement: Option<Vec<u8>>) -> Option<u64> {
+        let current_revision = self.object.as_ref().map(|_| self.revision);
+        if current_revision != expected_revision {
+            return None;
+        }
+        self.revision += 1;
+        self.object = replacement;
+        Some(self.revision)
+    }
 }
 
 #[quorium::state]
@@ -24,13 +62,23 @@ impl ObjectEntity {
         expected_revision: Option<u64>,
         replacement: Option<Vec<u8>>,
     ) -> Result<u64, RevisionMismatch> {
-        let current_revision = self.object.as_ref().map(|_| self.revision);
-        if current_revision != expected_revision {
-            return Err(RevisionMismatch);
+        self.swap(expected_revision, replacement).ok_or(RevisionMismatch)
+    }
+
+    #[quorium(id = 2)]
+    pub fn fenced_compare_and_swap(
+        &mut self,
+        fence: String,
+        token: u64,
+        expected_revision: Option<u64>,
+        replacement: Option<Vec<u8>>,
+    ) -> Result<u64, FencedSwapError> {
+        if self.fences.get(&fence).is_some_and(|highest| token < *highest) {
+            return Err(FencedSwapError::StaleToken);
         }
-        self.revision += 1;
-        self.object = replacement;
-        Ok(self.revision)
+        let revision = self.swap(expected_revision, replacement).ok_or(FencedSwapError::RevisionMismatch)?;
+        self.fences.insert(fence, token);
+        Ok(revision)
     }
 
     #[must_use]
@@ -188,5 +236,33 @@ mod tests {
         assert_eq!(entity.compare_and_swap(Some(1), None), Ok(2));
         assert_eq!(entity.record(), None);
         assert_eq!(entity.compare_and_swap(None, Some(vec![3])), Ok(3));
+    }
+
+    #[test]
+    fn a_fenced_swap_refuses_tokens_older_than_one_accepted() {
+        let mut entity = ObjectEntity::default();
+        let fence = || String::from("scheduler");
+        assert_eq!(entity.fenced_compare_and_swap(fence(), 5, None, Some(vec![1])), Ok(1));
+        assert_eq!(
+            entity.fenced_compare_and_swap(fence(), 4, Some(1), Some(vec![2])),
+            Err(FencedSwapError::StaleToken)
+        );
+        assert_eq!(
+            entity.fenced_compare_and_swap(fence(), 6, Some(7), Some(vec![2])),
+            Err(FencedSwapError::RevisionMismatch)
+        );
+        assert_eq!(entity.fenced_compare_and_swap(fence(), 6, Some(1), Some(vec![2])), Ok(2));
+        assert_eq!(
+            entity.fenced_compare_and_swap(fence(), 5, Some(2), None),
+            Err(FencedSwapError::StaleToken)
+        );
+    }
+
+    #[test]
+    fn version_one_objects_are_migrated_without_fences() {
+        let stored = postcard::to_allocvec(&(3_u64, Some(vec![7_u8]))).unwrap();
+        let migrated = migrate_object(1, &stored).unwrap();
+        assert_eq!(migrated.record(), Some((3, vec![7])));
+        assert!(migrated.fences.is_empty());
     }
 }

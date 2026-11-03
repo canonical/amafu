@@ -166,8 +166,11 @@ impl Operation {
             }
             ObjectStoreError::Change(_) => (StatusCode::CONFLICT, ErrorCode::Conflict),
             ObjectStoreError::Malformed(_) => (StatusCode::BAD_REQUEST, ErrorCode::Malformed),
-            ObjectStoreError::Store(StoreError::Unavailable(_) | StoreError::Conflict)
+            ObjectStoreError::Store(
+                StoreError::Unavailable(_) | StoreError::Conflict | StoreError::Fenced { .. },
+            )
             | ObjectStoreError::Contended => (StatusCode::SERVICE_UNAVAILABLE, ErrorCode::Unavailable),
+            ObjectStoreError::Store(StoreError::Refused(_)) => (StatusCode::FORBIDDEN, ErrorCode::Forbidden),
             ObjectStoreError::Store(StoreError::Corrupt(_)) | ObjectStoreError::Corrupt(_) => {
                 tracing::error!(%error, "stored data is corrupt");
                 (StatusCode::INTERNAL_SERVER_ERROR, ErrorCode::Internal)

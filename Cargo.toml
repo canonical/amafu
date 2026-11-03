@@ -41,6 +41,7 @@ http-body-util = "0.1.5"
 hyper = { version = "1.12.0", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1.21", features = ["tokio", "server", "server-auto", "service", "http1", "http2"] }
 proptest = "1.12.0"
+postcard = { version = "1", default-features = false, features = ["alloc"] }
 crc32fast = "1.5"
 quorium = { git = "https://github.com/canonical/quorium", rev = "b0a97b08a9bffebf0c977692f5ac5dd64dd9fd7a", default-features = false }
 rand = "0.10.3"

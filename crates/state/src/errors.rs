@@ -1,4 +1,6 @@
-use amafu_interfaces::StoreError;
+use amafu_interfaces::{Fence, StoreError};
+
+use crate::entities::FencedSwapError;
 
 pub fn store_error<E>(error: quorium::Error<E>) -> StoreError {
     match error {
@@ -8,5 +10,14 @@ pub fn store_error<E>(error: quorium::Error<E>) -> StoreError {
         quorium::Error::Timeout => StoreError::Unavailable(String::from("the store did not answer in time")),
         quorium::Error::Shutdown => StoreError::Unavailable(String::from("the store is shutting down")),
         _ => StoreError::Unavailable(String::from("the store refused the request")),
+    }
+}
+
+pub fn fenced_store_error(error: quorium::Error<FencedSwapError>, fence: &Fence) -> StoreError {
+    match error {
+        quorium::Error::Rejected(FencedSwapError::StaleToken) => {
+            StoreError::Fenced { name: fence.name.clone(), token: fence.token }
+        }
+        other => store_error(other),
     }
 }

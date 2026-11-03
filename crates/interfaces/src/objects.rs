@@ -5,7 +5,7 @@ use amafu_domain::{
 use serde_json::Value;
 
 use crate::error::ActionError;
-use crate::store::{Consistency, Store, StoreError, StoredRecord};
+use crate::store::{Consistency, Fence, Store, StoreError, StoredRecord};
 
 const MAXIMUM_ATTEMPTS: usize = 8;
 
@@ -39,9 +39,10 @@ impl From<ObjectStoreError> for ActionError {
             ObjectStoreError::Store(StoreError::Corrupt(_)) | ObjectStoreError::Corrupt(_) => {
                 Self::fatal(error)
             }
-            ObjectStoreError::Change(ChangeError::Invalid(_)) | ObjectStoreError::Malformed(_) => {
-                Self::invalid(error)
-            }
+            ObjectStoreError::Change(ChangeError::Invalid(_))
+            | ObjectStoreError::Malformed(_)
+            | ObjectStoreError::Store(StoreError::Refused(_)) => Self::invalid(error),
+            ObjectStoreError::Store(StoreError::Fenced { .. }) => Self::fatal(error),
             ObjectStoreError::Store(_) | ObjectStoreError::Change(_) | ObjectStoreError::Contended => {
                 Self::retryable(error)
             }
@@ -61,6 +62,7 @@ fn encode<R: Resource>(object: &Object<R>) -> Result<Value, ObjectStoreError> {
 async fn update_with<F>(
     store: &dyn Store,
     reference: &ObjectReference,
+    fence: Option<&Fence>,
     mut change: F,
 ) -> Result<Value, ObjectStoreError>
 where
@@ -75,7 +77,15 @@ where
             return Ok(updated);
         }
         let expected_revision = current.map(|record| record.revision);
-        match store.compare_and_swap(reference, expected_revision, Some(updated.clone())).await {
+        let swapped = match fence {
+            Some(fence) => {
+                store
+                    .compare_and_swap_fenced(reference, expected_revision, Some(updated.clone()), fence)
+                    .await
+            }
+            None => store.compare_and_swap(reference, expected_revision, Some(updated.clone())).await,
+        };
+        match swapped {
             Ok(_) => return Ok(updated),
             Err(StoreError::Conflict) => {}
             Err(error) => return Err(error.into()),
@@ -111,7 +121,8 @@ pub async fn apply_untyped(
     reference: &ObjectReference,
     change: UntypedChange,
 ) -> Result<Value, ObjectStoreError> {
-    update_with(store, reference, |current| Ok((descriptor.apply_change)(current, change.clone())?)).await
+    update_with(store, reference, None, |current| Ok((descriptor.apply_change)(current, change.clone())?))
+        .await
 }
 
 pub async fn remove_untyped(
@@ -127,7 +138,25 @@ pub async fn apply<R: Resource>(
     reference: &ObjectReference,
     change: Change<R>,
 ) -> Result<Object<R>, ObjectStoreError> {
-    let updated = update_with(store, reference, |current| {
+    apply_with_fence(store, reference, None, change).await
+}
+
+pub async fn apply_fenced<R: Resource>(
+    store: &dyn Store,
+    reference: &ObjectReference,
+    fence: &Fence,
+    change: Change<R>,
+) -> Result<Object<R>, ObjectStoreError> {
+    apply_with_fence(store, reference, Some(fence), change).await
+}
+
+async fn apply_with_fence<R: Resource>(
+    store: &dyn Store,
+    reference: &ObjectReference,
+    fence: Option<&Fence>,
+    change: Change<R>,
+) -> Result<Object<R>, ObjectStoreError> {
+    let updated = update_with(store, reference, fence, |current| {
         let current = current
             .map(|value| serde_json::from_value::<Object<R>>(value.clone()))
             .transpose()

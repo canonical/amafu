@@ -366,6 +366,7 @@ dependencies = [
  "async-trait",
  "crc32fast",
  "futures",
+ "postcard",
  "quorium",
  "serde",
  "serde_json",

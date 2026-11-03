@@ -6,10 +6,12 @@ pub mod guest;
 pub mod hypervisor;
 pub mod identifiers;
 pub mod images;
+pub mod lease;
 pub mod network;
 pub mod objects;
 pub mod storage;
 pub mod store;
+pub mod subscription;
 pub mod tools;
 
 pub use audit::{AuditEntry, AuditLog, AuditOutcome};
@@ -21,10 +23,12 @@ pub use hypervisor::{
 };
 pub use identifiers::{Identifiers, RandomIdentifiers};
 pub use images::{CachedImage, ContainerConfiguration, ImageRequest, ImageStore};
+pub use lease::{HeldLease, Leases};
 pub use network::{
     Datapath, LocalServices, NodeNetworkState, Port, PortKey, RealizedNetwork, Segment, SegmentKey,
 };
 pub use objects::ObjectStoreError;
 pub use storage::{AttachTarget, Storage, StorageProtocol, StorageProvider, VolumeAttacher, VolumeRequest};
-pub use store::{Consistency, Store, StoreError, StoredRecord, WatchEvent};
+pub use store::{Consistency, Fence, Store, StoreError, StoredRecord, WatchEvent};
+pub use subscription::{CoreConnection, SliceChange, SliceChanges, SliceRecord};
 pub use tools::ExternalTool;
