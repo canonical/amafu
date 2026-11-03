@@ -1,5 +1,6 @@
 pub mod containers;
 pub mod networking;
+pub mod overlay;
 pub mod placement;
 pub mod rogue_nodes;
 pub mod sandbox;
@@ -30,6 +31,8 @@ pub fn all() -> Vec<ScenarioDefinition> {
         placement::NODE_KEEPS_SERVING_WITHOUT_THE_CORE,
         rogue_nodes::ROGUE_NODES_ARE_REFUSED,
         rogue_nodes::NODES_WRITE_ONLY_THEIR_SHARE,
+        overlay::OVERLAY_CONNECTS_NODES,
+        overlay::FLOATING_IP_MOVES,
     ]
 }
 

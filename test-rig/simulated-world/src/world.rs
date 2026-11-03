@@ -15,11 +15,13 @@ use amafu_api::{
 };
 use amafu_checkers::invariants::check_all;
 use amafu_controllers::{
-    ComputeController, ComputeServices, ImageController, LocalVolumeController, NetworkController,
-    NodeController, NodeHealthController, NodeIdentity, NodeNetworkController, SchedulerController,
-    SchedulingSettings, SecurityGroupController, StorageBackendController, VolumeController,
+    CertificateRevocationController, ComputeController, ComputeServices, ExternalNetworkController,
+    FloatingIpController, ImageController, LocalVolumeController, NetworkController, NodeController,
+    NodeHealthController, NodeIdentity, NodeNetworkController, SchedulerController, SchedulingSettings,
+    SecurityGroupController, StorageBackendController, VolumeController,
 };
 use amafu_domain::access::Role;
+use amafu_domain::kinds::external_network::ExternalNetworkSpecification;
 use amafu_domain::kinds::node::{CpuBaseline, NodeCapacity, NodeRole};
 use amafu_domain::{MacAddress, NodeName, ObjectId, ObjectName, ProjectName};
 use amafu_interfaces::{
@@ -30,8 +32,8 @@ use amafu_network::dhcp::{self, DhcpMessage, Lease, MessageType};
 use amafu_reconciler::{Controller, ReconcilerSettings, run_controller, run_singleton};
 use amafu_scenario::{
     CertificateAuthority, Cluster, ClusterObservation, Fault, FaultHandle, Level, NfsExport,
-    ObservedAttachment, ObservedInstance, ObservedPort, ScenarioDefinition, ScenarioError, ScenarioResult,
-    TlsIdentity,
+    ObservedAttachment, ObservedFencedWrite, ObservedFloatingAddress, ObservedInstance, ObservedPort,
+    ObservedRemoteEndpoint, ScenarioDefinition, ScenarioError, ScenarioResult, TlsIdentity,
 };
 use amafu_state::{LocalStateCache, SubscribedStore};
 use rand::{RngExt, SeedableRng};
@@ -50,6 +52,7 @@ const PROJECTS: [&str; 2] = ["project-a", "project-b"];
 const START_UNIX_SECONDS: i64 = 1_767_225_600;
 const SIMULATED_NFS_SERVER: &str = "filer.lab";
 const SIMULATED_NFS_EXPORT: &str = "/srv/amafu";
+const SIMULATED_EXTERNAL_SUBNET: &str = "198.51.100.0/24";
 const RECENT_EVENT_COUNT: usize = 200;
 const ROLE_CRASH_PROBABILITY: f64 = 0.02;
 const BOOT_DURATION: Duration = Duration::from_secs(1);
@@ -320,7 +323,7 @@ impl SimulatedWorld {
         };
         for index in 0..node_count {
             world.add_node(
-                &valid_name(&format!("node-{index}")),
+                u8::try_from(index).unwrap_or(u8::MAX),
                 index < CORE_MEMBER_COUNT,
                 identifiers.as_ref(),
             );
@@ -383,7 +386,9 @@ impl SimulatedWorld {
         (Arc::new(store), Some(follower))
     }
 
-    fn add_node(&self, name: &NodeName, is_core: bool, identifiers: &dyn Identifiers) {
+    fn add_node(&self, index: u8, is_core: bool, identifiers: &dyn Identifiers) {
+        let name: &NodeName = &valid_name(&format!("node-{index}"));
+        let underlay_address = Ipv4Addr::new(192, 0, 2, index.saturating_add(10));
         let shared = &self.shared;
         let clock: Arc<dyn Clock> = Arc::new(shared.clock.clone());
         let link = NodeLink::new();
@@ -407,7 +412,7 @@ impl SimulatedWorld {
             capacity: NodeCapacity { cpu_count: 16, memory_mebibytes: 65_536 },
             cpu_baseline: CpuBaseline::X86_64Version3,
             zone: None,
-            underlay_address: None,
+            underlay_address: Some(underlay_address),
             software_version: String::from(env!("CARGO_PKG_VERSION")),
             heartbeat_interval: Duration::from_secs(10),
         };
@@ -458,6 +463,7 @@ impl SimulatedWorld {
         tasks.push(self.role(format!("{name}/node-network"), &store, fast, move || {
             NodeNetworkController::new(
                 node_name.clone(),
+                Some(underlay_address),
                 Arc::clone(&network_store),
                 Arc::clone(&datapath) as Arc<dyn Datapath>,
                 Arc::clone(&local_services) as Arc<dyn LocalServices>,
@@ -496,9 +502,29 @@ impl SimulatedWorld {
         let (volume_store, volume_storage, volume_images) =
             (Arc::clone(store), Arc::clone(&storage), Arc::clone(&images));
         let (backend_store, backend_storage) = (Arc::clone(store), Arc::clone(&storage));
+        let floating_store = Arc::clone(store);
+        let (external_store, revocation_store) = (Arc::clone(store), Arc::clone(store));
         let (health_store, health_clock) =
             (Arc::clone(store), Arc::new(shared.clock.clone()) as Arc<dyn Clock>);
         vec![
+            singleton_role(
+                format!("{name}/external-network"),
+                move |_| ExternalNetworkController::new(Arc::clone(&external_store)),
+                &singletons,
+                settings,
+            ),
+            singleton_role(
+                format!("{name}/certificate-revocation"),
+                move |_| CertificateRevocationController::new(Arc::clone(&revocation_store)),
+                &singletons,
+                settings,
+            ),
+            singleton_role(
+                format!("{name}/floating-ip"),
+                move |_| FloatingIpController::new(Arc::clone(&floating_store)),
+                &singletons,
+                settings,
+            ),
             singleton_role(
                 format!("{name}/node-health"),
                 move |_| {
@@ -621,8 +647,21 @@ impl SimulatedWorld {
 
     #[must_use]
     pub fn ground_truth(&self) -> ClusterObservation {
+        let fenced_writes = self
+            .shared
+            .store
+            .fenced_writes()
+            .into_iter()
+            .map(|write| ObservedFencedWrite {
+                object: write.reference.to_string(),
+                fence: write.fence.name,
+                token: write.fence.token,
+                is_accepted: write.is_accepted,
+            })
+            .collect();
         let mut observation = ClusterObservation {
             stored_objects: self.shared.store.all_objects(),
+            fenced_writes,
             ..ClusterObservation::default()
         };
         for (name, node) in self.shared.nodes.borrow().iter() {
@@ -658,12 +697,28 @@ impl SimulatedWorld {
                     path,
                 });
             }
-            for port in services.datapath.state().ports {
+            let programmed = services.datapath.state();
+            for port in programmed.ports {
                 observation.ports.push(ObservedPort {
                     node: name.clone(),
                     vm_id: port.key.vm_id,
                     segment: port.segment.to_string(),
                     address: port.address,
+                });
+            }
+            for remote in programmed.remote_endpoints {
+                observation.remote_endpoints.push(ObservedRemoteEndpoint {
+                    node: name.clone(),
+                    segment: remote.segment.to_string(),
+                    address: remote.address,
+                    node_address: remote.node_address,
+                });
+            }
+            for floating in programmed.floating_addresses {
+                observation.floating_addresses.push(ObservedFloatingAddress {
+                    node: name.clone(),
+                    address: floating.address,
+                    private_address: floating.private_address,
                 });
             }
         }
@@ -840,6 +895,22 @@ impl Cluster for SimulatedWorld {
 
     fn certificate_authority(&self) -> &CertificateAuthority {
         &self.shared.authority
+    }
+
+    fn external_network(&self) -> ExternalNetworkSpecification {
+        ExternalNetworkSpecification {
+            subnet: valid_name(SIMULATED_EXTERNAL_SUBNET),
+            first_address: Ipv4Addr::new(198, 51, 100, 10),
+            last_address: Ipv4Addr::new(198, 51, 100, 29),
+        }
+    }
+
+    async fn probe_from_outside(
+        &self,
+        _address: Ipv4Addr,
+        _port: u16,
+    ) -> Result<Option<String>, ScenarioError> {
+        Ok(None)
     }
 
     async fn node_connection(

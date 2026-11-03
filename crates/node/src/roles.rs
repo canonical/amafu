@@ -10,12 +10,13 @@ use amafu_api::{
     Transport, node_router, router,
 };
 use amafu_controllers::{
-    ComputeController, ComputeServices, ImageController, LocalVolumeController, NetworkController,
-    NodeController, NodeHealthController, NodeIdentity, NodeNetworkController, SchedulerController,
-    SchedulingSettings, SecurityGroupController, StorageBackendController, VolumeController,
+    CertificateRevocationController, ComputeController, ComputeServices, ExternalNetworkController,
+    FloatingIpController, ImageController, LocalVolumeController, NetworkController, NodeController,
+    NodeHealthController, NodeIdentity, NodeNetworkController, SchedulerController, SchedulingSettings,
+    SecurityGroupController, StorageBackendController, VolumeController,
 };
+use amafu_domain::ObjectId;
 use amafu_domain::kinds::node::{CpuBaseline, NodeCapacity, NodeRole};
-use amafu_domain::{NodeName, ObjectId};
 use amafu_hypervisor::{
     BootSources, CloudHypervisor, CloudHypervisorSettings, HybridVsockAgents, RuntimeDirectory,
     prepare_kvm_access,
@@ -312,6 +313,30 @@ fn core_roles(roles: &mut JoinSet<()>, services: &Services, adapters: &ComputeAd
         services,
         settings,
     );
+    let external_store = store();
+    singleton_role(
+        roles,
+        "external-network",
+        move |_| ExternalNetworkController::new(Arc::clone(&external_store)),
+        services,
+        settings,
+    );
+    let revocation_store = store();
+    singleton_role(
+        roles,
+        "certificate-revocation",
+        move |_| CertificateRevocationController::new(Arc::clone(&revocation_store)),
+        services,
+        settings,
+    );
+    let floating_store = store();
+    singleton_role(
+        roles,
+        "floating-ip",
+        move |_| FloatingIpController::new(Arc::clone(&floating_store)),
+        services,
+        settings,
+    );
     let (backend_store, backend_storage) = (store(), Arc::clone(&adapters.storage) as Arc<dyn Storage>);
     singleton_role(
         roles,
@@ -326,9 +351,10 @@ fn compute_roles(
     roles: &mut JoinSet<()>,
     services: &Services,
     adapters: &ComputeAdapters,
-    node: &NodeName,
+    identity: &NodeIdentity,
     settings: ReconcilerSettings,
 ) {
+    let (node, underlay_address) = (&identity.name, identity.underlay_address);
     let compute = ComputeController::new(
         node.clone(),
         ComputeServices {
@@ -357,6 +383,7 @@ fn compute_roles(
     controller_role(roles, "local-volume", Arc::new(local_volume), services, settings);
     let node_network = NodeNetworkController::new(
         node.clone(),
+        underlay_address,
         Arc::clone(&services.store),
         Arc::clone(&adapters.datapath) as Arc<dyn Datapath>,
         Arc::clone(&adapters.local_services) as Arc<dyn LocalServices>,
@@ -455,14 +482,16 @@ pub async fn run(configuration: NodeConfiguration, modules: Option<ModuleLoading
         periodic_resynchronization: Duration::from_secs(2),
         ..ReconcilerSettings::default()
     };
-    let node_name = configuration.node.name.clone();
     if is_core {
         start_api(&mut roles, &configuration, &services)?;
         core_roles(&mut roles, &services, &adapters);
     }
     let identity = node_identity(&configuration)?;
-    let node =
-        Arc::new(NodeController::new(identity, Arc::clone(&services.store), Arc::clone(&services.clock)));
+    let node = Arc::new(NodeController::new(
+        identity.clone(),
+        Arc::clone(&services.store),
+        Arc::clone(&services.clock),
+    ));
     let heartbeat = ReconcilerSettings {
         periodic_resynchronization: HEARTBEAT_INTERVAL / 2,
         ..ReconcilerSettings::default()
@@ -475,7 +504,7 @@ pub async fn run(configuration: NodeConfiguration, modules: Option<ModuleLoading
         if let Err(error) = prepare_kvm_access() {
             tracing::warn!(%error, "VM processes cannot be given access to /dev/kvm");
         }
-        compute_roles(&mut roles, &services, &adapters, &node_name, responsive);
+        compute_roles(&mut roles, &services, &adapters, &identity, responsive);
     }
     crate::diagnostics::start(&mut roles, &configuration, &services, &adapters);
     while let Some(ended) = roles.join_next().await {

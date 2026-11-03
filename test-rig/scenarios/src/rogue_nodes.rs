@@ -14,7 +14,7 @@ use amafu_scenario::{
 use futures::{FutureExt, StreamExt};
 use serde_json::json;
 
-use crate::support::{every_node_ready, name};
+use crate::support::{delete_and_wait, every_node_ready, name};
 
 pub const ROGUE_NODES_ARE_REFUSED: ScenarioDefinition = ScenarioDefinition {
     name: "nodes without a valid certificate cannot join, subscribe or write, and are audited",
@@ -107,8 +107,7 @@ async fn rogue_nodes_are_refused(cluster: &dyn Cluster) -> ScenarioResult {
         .create::<CertificateRevocation>(&ObjectName::new("node-9").map_err(lab_failure)?, &revocation)
         .await?;
     ensure_shut_out(cluster, &former, "a node with a revoked certificate").await?;
-    admin.delete::<CertificateRevocation>("node-9").await?;
-    Ok(())
+    delete_and_wait::<CertificateRevocation>(&admin, cluster, "node-9").await
 }
 
 async fn a_node_writes_only_its_share(cluster: &dyn Cluster) -> ScenarioResult {
