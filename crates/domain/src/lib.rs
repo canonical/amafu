@@ -8,6 +8,7 @@ pub mod object;
 pub mod object_id;
 pub mod registry;
 pub mod resource;
+pub mod slice;
 pub mod validation;
 
 pub use addressing::{InvalidAddress, Ipv4Network, MacAddress, SegmentId};
