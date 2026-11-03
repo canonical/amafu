@@ -21,7 +21,7 @@ use crate::references::{cluster_reference, project_reference};
 
 const STOP_GRACE_PERIOD: Duration = Duration::from_secs(10);
 
-const TRANSITION_REVISIT: std::time::Duration = std::time::Duration::from_millis(250);
+const TRANSITION_REVISIT: std::time::Duration = std::time::Duration::from_millis(100);
 
 #[derive(Clone)]
 pub struct ComputeServices {
