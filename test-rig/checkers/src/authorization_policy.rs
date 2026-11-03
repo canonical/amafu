@@ -14,6 +14,27 @@ const READ_AND_UPDATE: &[Verb] = &[Get, List, Watch, Update];
 const NOTHING: &[Verb] = &[];
 
 const TABLE: &[Row] = &[
+    Row { role: Admin, kind: "ExternalNetwork", in_own_project: EVERY_VERB, in_other_project: EVERY_VERB },
+    Row { role: Operator, kind: "ExternalNetwork", in_own_project: EVERY_VERB, in_other_project: EVERY_VERB },
+    Row { role: Member, kind: "ExternalNetwork", in_own_project: READ, in_other_project: READ },
+    Row { role: Viewer, kind: "ExternalNetwork", in_own_project: READ, in_other_project: READ },
+    Row {
+        role: Admin,
+        kind: "CertificateRevocation",
+        in_own_project: EVERY_VERB,
+        in_other_project: EVERY_VERB,
+    },
+    Row { role: Operator, kind: "CertificateRevocation", in_own_project: NOTHING, in_other_project: NOTHING },
+    Row { role: Member, kind: "CertificateRevocation", in_own_project: NOTHING, in_other_project: NOTHING },
+    Row { role: Viewer, kind: "CertificateRevocation", in_own_project: NOTHING, in_other_project: NOTHING },
+    Row { role: Admin, kind: "NetworkEndpoint", in_own_project: EVERY_VERB, in_other_project: EVERY_VERB },
+    Row { role: Operator, kind: "NetworkEndpoint", in_own_project: READ, in_other_project: NOTHING },
+    Row { role: Member, kind: "NetworkEndpoint", in_own_project: READ, in_other_project: NOTHING },
+    Row { role: Viewer, kind: "NetworkEndpoint", in_own_project: READ, in_other_project: NOTHING },
+    Row { role: Admin, kind: "FloatingIp", in_own_project: EVERY_VERB, in_other_project: EVERY_VERB },
+    Row { role: Operator, kind: "FloatingIp", in_own_project: EVERY_VERB, in_other_project: NOTHING },
+    Row { role: Member, kind: "FloatingIp", in_own_project: EVERY_VERB, in_other_project: NOTHING },
+    Row { role: Viewer, kind: "FloatingIp", in_own_project: READ, in_other_project: NOTHING },
     Row { role: Admin, kind: "StorageBackend", in_own_project: EVERY_VERB, in_other_project: EVERY_VERB },
     Row { role: Operator, kind: "StorageBackend", in_own_project: EVERY_VERB, in_other_project: EVERY_VERB },
     Row { role: Member, kind: "StorageBackend", in_own_project: READ, in_other_project: READ },

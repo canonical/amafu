@@ -1,4 +1,4 @@
-use amafu_domain::access::{ClusterPolicy, Role, Verb};
+use amafu_domain::access::{ClusterPolicy, ProjectPolicy, Role, Verb};
 use amafu_domain::registry::KindDescriptor;
 use amafu_domain::{ProjectName, Scope};
 
@@ -23,10 +23,12 @@ pub fn is_allowed(principal: &Principal, verb: Verb, kind: &KindDescriptor, targ
             (ClusterPolicy::SharedInfrastructure, Role::Member | Role::Viewer) => verb.is_read(),
             _ => false,
         },
-        (Scope::Project, Target::Project(project)) if *project == principal.project => match principal.role {
-            Role::Admin | Role::Operator | Role::Member => true,
-            Role::Viewer => verb.is_read(),
-        },
+        (Scope::Project, Target::Project(project)) if *project == principal.project => {
+            match (kind.project_policy, principal.role) {
+                (ProjectPolicy::ManagedByUsers, Role::Admin | Role::Operator | Role::Member) => true,
+                (ProjectPolicy::ManagedByUsers | ProjectPolicy::ManagedByNodes, _) => verb.is_read(),
+            }
+        }
         _ => false,
     }
 }
@@ -47,6 +49,28 @@ mod tests {
         assert!(is_allowed(&principal(Role::Admin), Verb::List, &vm, Target::EveryProject));
         for role in [Role::Operator, Role::Member, Role::Viewer] {
             assert!(!is_allowed(&principal(role), Verb::List, &vm, Target::EveryProject), "{role}");
+        }
+    }
+
+    #[test]
+    fn users_only_read_what_nodes_manage_in_their_project() {
+        let endpoint = kind_named("NetworkEndpoint").unwrap();
+        let project = ProjectName::new("project-a").unwrap();
+        for role in [Role::Operator, Role::Member, Role::Viewer] {
+            assert!(is_allowed(&principal(role), Verb::Get, &endpoint, Target::Project(&project)), "{role}");
+            assert!(
+                !is_allowed(&principal(role), Verb::Create, &endpoint, Target::Project(&project)),
+                "{role}"
+            );
+        }
+    }
+
+    #[test]
+    fn only_admins_see_certificate_revocations() {
+        let revocation = kind_named("CertificateRevocation").unwrap();
+        assert!(is_allowed(&principal(Role::Admin), Verb::Create, &revocation, Target::Cluster));
+        for role in [Role::Operator, Role::Member, Role::Viewer] {
+            assert!(!is_allowed(&principal(role), Verb::Get, &revocation, Target::Cluster), "{role}");
         }
     }
 

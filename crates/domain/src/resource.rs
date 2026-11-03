@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-use crate::access::ClusterPolicy;
+use crate::access::{ClusterPolicy, ProjectPolicy};
 use crate::validation::Validate;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -19,6 +19,7 @@ pub trait Resource: Clone + Debug + Send + Sync + 'static {
     const VERSION: u32;
     const SCOPE: Scope;
     const CLUSTER_POLICY: ClusterPolicy = ClusterPolicy::SharedInfrastructure;
+    const PROJECT_POLICY: ProjectPolicy = ProjectPolicy::ManagedByUsers;
     type Specification: Validate + Clone + Debug + PartialEq + Serialize + DeserializeOwned + Send + Sync;
     type Status: Clone + Debug + Default + PartialEq + Serialize + DeserializeOwned + Send + Sync;
 }

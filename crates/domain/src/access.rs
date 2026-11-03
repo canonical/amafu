@@ -64,4 +64,12 @@ impl fmt::Display for Verb {
 pub enum ClusterPolicy {
     ManagedByNodes,
     SharedInfrastructure,
+    AdminOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProjectPolicy {
+    ManagedByUsers,
+    ManagedByNodes,
 }

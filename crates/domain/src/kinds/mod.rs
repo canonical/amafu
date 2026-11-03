@@ -1,5 +1,9 @@
+pub mod certificate_revocation;
+pub mod external_network;
+pub mod floating_ip;
 pub mod image;
 pub mod network;
+pub mod network_endpoint;
 pub mod node;
 pub mod security_group;
 pub mod storage_backend;
