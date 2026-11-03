@@ -9,8 +9,8 @@ use amafu_scenario::{
 use futures::FutureExt;
 
 use crate::support::{
-    CONTAINER_START_BUDGET, REMOVAL_TIMEOUT, START_TIMEOUT, busybox, console_shows, delete_and_wait,
-    instance, name, ready_image, started_within_budget, vm_in_phase,
+    CONTAINER_START_BUDGET, REMOVAL_TIMEOUT, START_TIMEOUT, busybox, cached_on_every_node, console_shows,
+    delete_and_wait, instance, name, ready_image, started_within_budget, vm_in_phase,
 };
 
 pub const CONTAINER_RUNS: ScenarioDefinition = ScenarioDefinition {
@@ -44,6 +44,7 @@ fn container(image: &str, command: Vec<String>) -> Result<VmSpecification, Scena
 async fn a_container_runs_its_image_command(cluster: &dyn Cluster) -> ScenarioResult {
     let member = client(cluster, Role::Member).await;
     ready_image(&member, cluster, "busybox-runs", busybox()?).await?;
+    cached_on_every_node(&member, cluster, "busybox-runs").await?;
     let specification = container("busybox-runs", shell(&format!("echo {READY_MARKER}; sleep 3600")))?;
     let created = member.create::<Vm>(&name("box-runs")?, &specification).await?;
     started_within_budget(&member, cluster, "box-runs", CONTAINER_START_BUDGET).await?;

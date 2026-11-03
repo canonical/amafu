@@ -45,6 +45,18 @@ pub async fn ready_image(
     .await
 }
 
+pub async fn cached_on_every_node(
+    client: &ApiClient,
+    cluster: &dyn Cluster,
+    image_name: &str,
+) -> ScenarioResult {
+    let node_count = cluster.nodes().await.len();
+    eventually(cluster, IMAGE_TIMEOUT, "every node caches the image", async || {
+        Ok(client.get::<Image>(image_name).await?.status.cached_on.len() == node_count)
+    })
+    .await
+}
+
 pub fn busybox() -> Result<ImageSource, ScenarioError> {
     Ok(ImageSource::Container { reference: parsed::<OciReference>(BUSYBOX)? })
 }
