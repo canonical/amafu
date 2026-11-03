@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use amafu_domain::{ObjectReference, ProjectName};
 use amafu_interfaces::{CoreConnection, SliceChange, SliceChanges, StoreError, StoredRecord};
@@ -10,16 +10,19 @@ use http::{Method, Request, StatusCode};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use uuid::Uuid;
 
 use crate::client::{ClientError, ResponseBody, Transport, collect, decode, refusal};
 use crate::node_wire::{
     NODE_LIST_PATH, NODE_READ_PATH, NODE_SUBSCRIPTION_PATH, NODE_SWAP_PATH, NodeListRequest,
     NodeListResponse, NodeReadRequest, NodeReadResponse, NodeSwapRequest, NodeSwapResponse,
 };
+use crate::wire::REQUEST_ID_HEADER;
 
 pub struct NodeClient {
     core_members: Vec<Arc<dyn Transport>>,
     preferred: AtomicUsize,
+    last_request_id: Mutex<Option<Uuid>>,
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -54,7 +57,12 @@ fn request(method: Method, path: &str, body: Option<Vec<u8>>) -> Result<Request<
 impl NodeClient {
     #[must_use]
     pub fn new(core_members: Vec<Arc<dyn Transport>>) -> Self {
-        Self { core_members, preferred: AtomicUsize::new(0) }
+        Self { core_members, preferred: AtomicUsize::new(0), last_request_id: Mutex::new(None) }
+    }
+
+    #[must_use]
+    pub fn last_request_id(&self) -> Option<Uuid> {
+        *self.last_request_id.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn members_in_order(&self) -> impl Iterator<Item = (usize, &Arc<dyn Transport>)> {
@@ -73,6 +81,12 @@ impl NodeClient {
         body: Option<Vec<u8>>,
     ) -> Result<ResponseBody, StoreError> {
         let response = transport.send(request(method, path, body)?).await.map_err(store_error)?;
+        let request_id = response
+            .headers()
+            .get(REQUEST_ID_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| Uuid::parse_str(value).ok());
+        *self.last_request_id.lock().unwrap_or_else(PoisonError::into_inner) = request_id;
         let status = response.status().as_u16();
         if status != StatusCode::OK.as_u16() {
             let body = collect(response.into_body()).await.map_err(store_error)?;

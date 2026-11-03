@@ -4,6 +4,7 @@ pub mod hypervisor;
 pub mod identifiers;
 pub mod images;
 pub mod leases;
+pub mod partition;
 pub mod storage;
 pub mod store;
 
@@ -13,5 +14,6 @@ pub use hypervisor::{FakeHypervisor, FakeInstance};
 pub use identifiers::SeededIdentifiers;
 pub use images::FakeImageStore;
 pub use leases::{FakeLeases, NodeLeases};
+pub use partition::{NodeLink, PartitionedStore, PartitionedTransport};
 pub use storage::{FakeBackends, FakeStorage};
 pub use store::MemoryStore;

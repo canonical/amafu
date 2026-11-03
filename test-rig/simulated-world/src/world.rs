@@ -7,8 +7,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use amafu_api::authentication::TokenIdentity;
+use amafu_api::client::Transport;
 use amafu_api::diagnostics::SandboxCheck;
-use amafu_api::{ApiClient, ApiState, Principal, RouterTransport, TokenAuthenticator, router};
+use amafu_api::{
+    ApiClient, ApiState, NodeApiState, NodeAuthenticator, NodeClient, Principal, RouterTransport,
+    TokenAuthenticator, node_router, router,
+};
 use amafu_checkers::invariants::check_all;
 use amafu_controllers::{
     ComputeController, ComputeServices, ImageController, LocalVolumeController, NetworkController,
@@ -25,9 +29,11 @@ use amafu_interfaces::{
 use amafu_network::dhcp::{self, DhcpMessage, Lease, MessageType};
 use amafu_reconciler::{Controller, ReconcilerSettings, run_controller, run_singleton};
 use amafu_scenario::{
-    Cluster, ClusterObservation, Fault, FaultHandle, Level, NfsExport, ObservedAttachment, ObservedInstance,
-    ObservedPort, ScenarioDefinition, ScenarioError, ScenarioResult,
+    CertificateAuthority, Cluster, ClusterObservation, Fault, FaultHandle, Level, NfsExport,
+    ObservedAttachment, ObservedInstance, ObservedPort, ScenarioDefinition, ScenarioError, ScenarioResult,
+    TlsIdentity,
 };
+use amafu_state::{LocalStateCache, SubscribedStore};
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use time::OffsetDateTime;
@@ -37,7 +43,7 @@ use crate::clock::VirtualClock;
 use crate::executor::{Executor, StepOutcome, TaskFuture, TaskId};
 use crate::fakes::{
     FakeBackends, FakeDatapath, FakeHypervisor, FakeImageStore, FakeLeases, FakeLocalServices, FakeStorage,
-    MemoryAuditLog, MemoryStore, SeededIdentifiers,
+    MemoryAuditLog, MemoryStore, NodeLink, PartitionedStore, PartitionedTransport, SeededIdentifiers,
 };
 
 const PROJECTS: [&str; 2] = ["project-a", "project-b"];
@@ -49,6 +55,8 @@ const ROLE_CRASH_PROBABILITY: f64 = 0.02;
 const BOOT_DURATION: Duration = Duration::from_secs(1);
 const TEST_BUNDLE: &str = "test-guest";
 const CORE_MEMBER_COUNT: usize = 3;
+const SUBSCRIPTION_REFRESH: Duration = Duration::from_secs(5);
+const RESUBSCRIBE_DELAY: Duration = Duration::from_secs(1);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SimulationSettings {
@@ -136,6 +144,8 @@ impl NodeServices {
 struct SimulatedNode {
     services: NodeServices,
     roles: Vec<RoleTask>,
+    link: Arc<NodeLink>,
+    is_core: bool,
 }
 
 struct WorldShared {
@@ -151,6 +161,8 @@ struct WorldShared {
     router: axum::Router,
     tokens: BTreeMap<(Role, ProjectName), String>,
     expired_token: String,
+    authority: CertificateAuthority,
+    active_faults: RefCell<BTreeMap<FaultHandle, Fault>>,
     nodes: RefCell<BTreeMap<NodeName, SimulatedNode>>,
     failures: Rc<RefCell<Vec<String>>>,
     recent_events: RefCell<VecDeque<String>>,
@@ -261,13 +273,28 @@ impl SimulatedWorld {
 
         let store = Arc::new(MemoryStore::new());
         let audit = Arc::new(MemoryAuditLog::new());
+        let authority =
+            CertificateAuthority::generate("Amafu simulated cluster").unwrap_or_else(|_| unreachable!());
+        let node_authenticator = NodeAuthenticator::new(
+            authority.certificate_pem.as_bytes(),
+            Arc::clone(&store) as Arc<dyn Store>,
+        )
+        .unwrap_or_else(|_| unreachable!());
         let router = router(ApiState {
             store: Arc::clone(&store) as Arc<dyn Store>,
             authenticator: Arc::new(TokenAuthenticator::new(identities)),
             audit: Arc::clone(&audit) as Arc<dyn AuditLog>,
             clock: Arc::new(clock.clone()),
             identifiers: Arc::clone(&identifiers) as Arc<dyn Identifiers>,
-        });
+        })
+        .merge(node_router(NodeApiState {
+            store: Arc::clone(&store) as Arc<dyn Store>,
+            authenticator: Arc::new(node_authenticator),
+            audit: Arc::clone(&audit) as Arc<dyn AuditLog>,
+            clock: Arc::new(clock.clone()),
+            identifiers: Arc::clone(&identifiers) as Arc<dyn Identifiers>,
+            refresh_interval: SUBSCRIPTION_REFRESH,
+        }));
         let world = Self {
             shared: Rc::new(WorldShared {
                 seed: settings.seed,
@@ -282,6 +309,8 @@ impl SimulatedWorld {
                 router,
                 tokens,
                 expired_token,
+                authority,
+                active_faults: RefCell::new(BTreeMap::new()),
                 nodes: RefCell::new(BTreeMap::new()),
                 failures: Rc::new(RefCell::new(Vec::new())),
                 recent_events: RefCell::new(VecDeque::new()),
@@ -301,6 +330,7 @@ impl SimulatedWorld {
     fn role<C: Controller>(
         &self,
         label: String,
+        store: &Arc<dyn Store>,
         settings: ReconcilerSettings,
         make: impl Fn() -> C + 'static,
     ) -> RoleTask {
@@ -308,17 +338,55 @@ impl SimulatedWorld {
         controller_role(
             label,
             make,
-            Arc::clone(&shared.store) as Arc<dyn Store>,
+            Arc::clone(store),
             Arc::new(shared.clock.clone()),
             settings,
             Rc::clone(&shared.failures),
         )
     }
 
+    fn subscription_role(&self, label: String, store: SubscribedStore) -> RoleTask {
+        let clock = self.shared.clock.clone();
+        let start: Rc<dyn Fn() -> TaskFuture> = Rc::new(move || {
+            let (store, clock) = (store.clone(), clock.clone());
+            Box::pin(async move {
+                loop {
+                    let _ended = store.follow().await;
+                    clock.sleep(RESUBSCRIBE_DELAY).await;
+                }
+            })
+        });
+        RoleTask { label, start, task: Cell::new(TaskId::default()) }
+    }
+
+    fn node_store(
+        &self,
+        name: &NodeName,
+        is_core: bool,
+        link: &Arc<NodeLink>,
+    ) -> (Arc<dyn Store>, Option<RoleTask>) {
+        let shared = &self.shared;
+        if is_core {
+            let store = PartitionedStore::new(Arc::clone(&shared.store) as Arc<dyn Store>, Arc::clone(link));
+            return (Arc::new(store), None);
+        }
+        let identity =
+            shared.authority.issue_node(name, &[NodeRole::Compute]).unwrap_or_else(|_| unreachable!());
+        let transport: Arc<dyn Transport> = Arc::new(PartitionedTransport::new(
+            Arc::new(RouterTransport::presenting(shared.router.clone(), identity.certificate_der)),
+            Arc::clone(link),
+        ));
+        let store =
+            SubscribedStore::new(Arc::new(NodeClient::new(vec![transport])), LocalStateCache::in_memory());
+        let follower = self.subscription_role(format!("{name}/subscription"), store.clone());
+        (Arc::new(store), Some(follower))
+    }
+
     fn add_node(&self, name: &NodeName, is_core: bool, identifiers: &dyn Identifiers) {
         let shared = &self.shared;
         let clock: Arc<dyn Clock> = Arc::new(shared.clock.clone());
-        let store: Arc<dyn Store> = Arc::clone(&shared.store) as Arc<dyn Store>;
+        let link = NodeLink::new();
+        let (store, follower) = self.node_store(name, is_core, &link);
         let bundles = BTreeSet::from([valid_name::<ObjectName>(TEST_BUNDLE)]);
         let services = NodeServices {
             hypervisor: Arc::new(FakeHypervisor::new(Arc::clone(&clock), BOOT_DURATION, bundles)),
@@ -360,14 +428,15 @@ impl SimulatedWorld {
             Arc::clone(&services.images) as Arc<dyn ImageStore>,
             name.clone(),
         );
-        let mut tasks = vec![
-            self.role(format!("{name}/node"), heartbeat, move || {
+        let mut tasks: Vec<RoleTask> = follower.into_iter().collect();
+        tasks.extend([
+            self.role(format!("{name}/node"), &store, heartbeat, move || {
                 NodeController::new(identity.clone(), Arc::clone(&node_store), Arc::clone(&node_clock))
             }),
-            self.role(format!("{name}/compute"), fast, move || {
+            self.role(format!("{name}/compute"), &store, fast, move || {
                 ComputeController::new(node_name.clone(), compute.clone())
             }),
-            self.role(format!("{name}/local-volume"), fast, move || {
+            self.role(format!("{name}/local-volume"), &store, fast, move || {
                 LocalVolumeController::new(
                     volume_node.clone(),
                     Arc::clone(&volume_store),
@@ -375,7 +444,7 @@ impl SimulatedWorld {
                     Arc::clone(&volume_images),
                 )
             }),
-            self.role(format!("{name}/image"), fast, move || {
+            self.role(format!("{name}/image"), &store, fast, move || {
                 ImageController::new(
                     image_node.clone(),
                     Arc::clone(&image_store),
@@ -383,9 +452,9 @@ impl SimulatedWorld {
                     is_core,
                 )
             }),
-        ];
+        ]);
         let node_name = name.clone();
-        tasks.push(self.role(format!("{name}/node-network"), fast, move || {
+        tasks.push(self.role(format!("{name}/node-network"), &store, fast, move || {
             NodeNetworkController::new(
                 node_name.clone(),
                 Arc::clone(&network_store),
@@ -399,7 +468,10 @@ impl SimulatedWorld {
         for role in &tasks {
             role.task.set(shared.executor.spawn(role.label.clone(), (role.start)()));
         }
-        shared.nodes.borrow_mut().insert(name.clone(), SimulatedNode { services, roles: tasks });
+        shared
+            .nodes
+            .borrow_mut()
+            .insert(name.clone(), SimulatedNode { services, roles: tasks, link, is_core });
     }
 
     fn core_roles(
@@ -494,6 +566,24 @@ impl SimulatedWorld {
         }
         drop(nodes);
         self.record(format!("power cycled {node}"));
+        Ok(())
+    }
+
+    fn set_partitioned(&self, node: &NodeName, is_partitioned: bool) -> Result<(), ScenarioError> {
+        let nodes = self.shared.nodes.borrow();
+        let simulated =
+            nodes.get(node).ok_or_else(|| ScenarioError::Expectation(format!("no node named {node}")))?;
+        if is_partitioned {
+            simulated.link.cut();
+            if simulated.is_core {
+                self.shared.leases.isolate(node);
+            }
+        } else {
+            simulated.link.restore();
+            self.shared.leases.reconnect(node);
+        }
+        drop(nodes);
+        self.record(format!("{} {node}", if is_partitioned { "partitioned" } else { "reconnected" }));
         Ok(())
     }
 
@@ -699,13 +789,19 @@ impl Cluster for SimulatedWorld {
     async fn inject(&self, fault: Fault) -> Result<FaultHandle, ScenarioError> {
         match &fault {
             Fault::PowerCycle { node } => self.power_cycle(node)?,
+            Fault::Partition { node } => self.set_partitioned(node, true)?,
         }
         let handle = FaultHandle(self.shared.next_fault.get());
         self.shared.next_fault.set(handle.0 + 1);
+        self.shared.active_faults.borrow_mut().insert(handle, fault);
         Ok(handle)
     }
 
-    async fn heal(&self, _handle: FaultHandle) -> Result<(), ScenarioError> {
+    async fn heal(&self, handle: FaultHandle) -> Result<(), ScenarioError> {
+        let fault = self.shared.active_faults.borrow_mut().remove(&handle);
+        if let Some(Fault::Partition { node }) = fault {
+            self.set_partitioned(&node, false)?;
+        }
         Ok(())
     }
 
@@ -725,6 +821,23 @@ impl Cluster for SimulatedWorld {
 
     async fn sandbox_checks(&self) -> Result<Option<Vec<SandboxCheck>>, ScenarioError> {
         Ok(None)
+    }
+
+    fn certificate_authority(&self) -> &CertificateAuthority {
+        &self.shared.authority
+    }
+
+    async fn node_connection(
+        &self,
+        identity: Option<&TlsIdentity>,
+    ) -> Result<Arc<NodeClient>, ScenarioError> {
+        let transport = match identity {
+            Some(identity) => {
+                RouterTransport::presenting(self.shared.router.clone(), identity.certificate_der.clone())
+            }
+            None => RouterTransport::new(self.shared.router.clone()),
+        };
+        Ok(Arc::new(NodeClient::new(vec![Arc::new(transport)])))
     }
 
     fn nfs_export(&self) -> Option<NfsExport> {
