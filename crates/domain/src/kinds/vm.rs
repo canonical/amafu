@@ -4,6 +4,7 @@ use std::net::Ipv4Addr;
 use serde::{Deserialize, Serialize};
 
 use crate::addressing::MacAddress;
+use crate::kinds::node::CpuBaseline;
 use crate::name::{NodeName, ObjectName};
 use crate::resource::{Resource, Scope};
 use crate::validation::{Validate, ValidationError};
@@ -19,6 +20,7 @@ pub const MAXIMUM_COMMAND_ARGUMENTS: usize = 256;
 pub const MAXIMUM_ENVIRONMENT_VARIABLES: usize = 256;
 pub const CONTAINER_CPU_COUNT: u16 = 1;
 pub const CONTAINER_MEMORY_MEBIBYTES: u64 = 256;
+pub const MAXIMUM_PRIORITY: i32 = 1000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Vm;
@@ -80,6 +82,17 @@ pub struct VmSpecification {
     pub power_state: PowerState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_data: Option<String>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub priority: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anti_affinity_group: Option<ObjectName>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_cpu_baseline: Option<CpuBaseline>,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero(value: &i32) -> bool {
+    *value == 0
 }
 
 impl VmSpecification {
@@ -95,6 +108,9 @@ impl VmSpecification {
             network_interfaces: Vec::new(),
             power_state: PowerState::Running,
             user_data: None,
+            priority: 0,
+            anti_affinity_group: None,
+            minimum_cpu_baseline: None,
         }
     }
 
@@ -206,6 +222,11 @@ impl Validate for VmSpecification {
             self.user_data.as_ref().is_none_or(|data| data.len() <= MAXIMUM_USER_DATA_BYTES),
             "specification.user_data",
             "must be at most 64 KiB",
+        );
+        error.check(
+            (-MAXIMUM_PRIORITY..=MAXIMUM_PRIORITY).contains(&self.priority),
+            "specification.priority",
+            "must be between -1000 and 1000",
         );
         self.validate_boot(&mut error);
         self.validate_attachments(&mut error);

@@ -41,6 +41,19 @@ impl Attachments {
 }
 
 #[derive(clap::Args)]
+pub struct Placement {
+    #[arg(
+        long,
+        default_value_t = 0,
+        allow_negative_numbers = true,
+        help = "Higher priorities are placed first"
+    )]
+    pub priority: i32,
+    #[arg(long, value_name = "GROUP", help = "Never place two VMs of this group on the same node")]
+    pub anti_affinity_group: Option<ObjectName>,
+}
+
+#[derive(clap::Args)]
 #[group(required = true, multiple = false)]
 pub struct BootChoice {
     #[arg(long, value_name = "BUNDLE", help = "Boot a kernel bundle installed on the nodes")]
@@ -77,6 +90,8 @@ pub enum VmCommand {
         volumes: Vec<ObjectName>,
         #[command(flatten)]
         attachments: Attachments,
+        #[command(flatten)]
+        placement: Placement,
         #[arg(long, value_name = "FILE", help = "Serve this file as cloud-init user data")]
         user_data: Option<std::path::PathBuf>,
         #[arg(long, help = "Create the VM without starting it")]
@@ -208,6 +223,7 @@ pub async fn run(client: &ApiClient, command: VmCommand, format: OutputFormat) -
             boot,
             volumes,
             attachments,
+            placement,
             user_data,
             stopped,
             wait,
@@ -223,6 +239,9 @@ pub async fn run(client: &ApiClient, command: VmCommand, format: OutputFormat) -
                 network_interfaces: attachments.interfaces(),
                 power_state,
                 user_data,
+                priority: placement.priority,
+                anti_affinity_group: placement.anti_affinity_group,
+                minimum_cpu_baseline: None,
             };
             create_and_wait(client, &name, &specification, wait && !stopped, timeout, format).await
         }
