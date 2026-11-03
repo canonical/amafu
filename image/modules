@@ -12,4 +12,6 @@ nf_conntrack_bridge
 nfsv4
 vxlan
 nvme-tcp
+cmac
+camellia_generic
 rbd
