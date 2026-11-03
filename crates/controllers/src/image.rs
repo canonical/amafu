@@ -2,6 +2,8 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use amafu_domain::kinds::image::{Image, ImagePhase, ImageStatus};
+use amafu_domain::kinds::vm::Vm;
+use amafu_domain::kinds::volume::Volume;
 use amafu_domain::{Change, NodeName, Object, ObjectReference};
 use amafu_interfaces::objects::{apply, get, list, remove};
 use amafu_interfaces::{ActionError, CachedImage, Consistency, ImageRequest, ImageStore, Store};
@@ -25,6 +27,7 @@ pub struct ImageObservation {
     pub node: NodeName,
     pub image: Option<Object<Image>>,
     pub cached: Option<CachedImage>,
+    pub is_in_use: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,7 +44,9 @@ pub fn plan_image(observation: &ImageObservation) -> Vec<ImageAction> {
         return Vec::new();
     };
     if image.metadata.is_deleting {
-        return if observation.cached.is_some() {
+        return if observation.is_in_use {
+            Vec::new()
+        } else if observation.cached.is_some() {
             vec![ImageAction::DiscardCache]
         } else {
             vec![ImageAction::Remove]
@@ -70,14 +75,30 @@ pub fn plan_image(observation: &ImageObservation) -> Vec<ImageAction> {
     }
 }
 
+impl ImageController {
+    async fn is_in_use(&self, image: &Object<Image>) -> Result<bool, ActionError> {
+        let (store, project, name) =
+            (self.store.as_ref(), image.metadata.project.as_ref(), &image.metadata.name);
+        let volumes = list::<Volume>(store, project, Consistency::Linearizable).await?;
+        if volumes.iter().any(|volume| volume.specification.source_image.as_ref() == Some(name)) {
+            return Ok(true);
+        }
+        let vms = list::<Vm>(store, project, Consistency::Linearizable).await?;
+        Ok(vms.iter().any(|vm| vm.specification.container_image() == Some(name)))
+    }
+}
+
 impl Controller for ImageController {
     type Key = ObjectReference;
     type Observation = ImageObservation;
     type Action = ImageAction;
 
     const NAME: &'static str = "image";
-    const WATCHES: &'static [WatchedKind<ObjectReference>] =
-        &[WatchedKind { kind: "Image", mapping: KeyMapping::ObjectKey(|reference| Some(reference.clone())) }];
+    const WATCHES: &'static [WatchedKind<ObjectReference>] = &[
+        WatchedKind { kind: "Image", mapping: KeyMapping::ObjectKey(|reference| Some(reference.clone())) },
+        WatchedKind { kind: "Volume", mapping: KeyMapping::EveryKey },
+        WatchedKind { kind: "Vm", mapping: KeyMapping::EveryKey },
+    ];
 
     async fn discover_keys(&self) -> Result<Vec<ObjectReference>, ActionError> {
         let images = list::<Image>(self.store.as_ref(), None, Consistency::Linearizable).await?;
@@ -90,7 +111,11 @@ impl Controller for ImageController {
             Some(image) => self.images.cached(&image.metadata.id).await?,
             None => None,
         };
-        Ok(ImageObservation { node: self.node.clone(), image, cached })
+        let is_in_use = match &image {
+            Some(image) => self.is_in_use(image).await?,
+            None => false,
+        };
+        Ok(ImageObservation { node: self.node.clone(), image, cached, is_in_use })
     }
 
     fn plan(&self, observation: &ImageObservation) -> Vec<ImageAction> {
@@ -157,7 +182,12 @@ mod tests {
 
     #[test]
     fn an_uncached_image_is_fetched_then_reported_ready() {
-        let fresh = ImageObservation { node: here(), image: Some(image(ImagePhase::Pending)), cached: None };
+        let fresh = ImageObservation {
+            node: here(),
+            image: Some(image(ImagePhase::Pending)),
+            cached: None,
+            is_in_use: false,
+        };
         assert!(matches!(plan_image(&fresh).as_slice(), [ImageAction::Fetch { .. }]));
         let fetched = ImageObservation { cached: Some(cached()), ..fresh };
         let ImageAction::Report { status, .. } = only(plan_image(&fetched)) else {
@@ -169,7 +199,12 @@ mod tests {
 
     #[test]
     fn a_failed_image_is_not_fetched_again_at_the_same_generation() {
-        let failed = ImageObservation { node: here(), image: Some(image(ImagePhase::Failed)), cached: None };
+        let failed = ImageObservation {
+            node: here(),
+            image: Some(image(ImagePhase::Failed)),
+            cached: None,
+            is_in_use: false,
+        };
         assert_eq!(plan_image(&failed), Vec::new());
     }
 
@@ -177,7 +212,10 @@ mod tests {
     fn a_deleted_image_discards_its_cache_then_disappears() {
         let mut deleting = image(ImagePhase::Ready);
         deleting.metadata.is_deleting = true;
-        let with_cache = ImageObservation { node: here(), image: Some(deleting), cached: Some(cached()) };
+        let in_use =
+            ImageObservation { node: here(), image: Some(deleting), cached: Some(cached()), is_in_use: true };
+        assert_eq!(plan_image(&in_use), Vec::new());
+        let with_cache = ImageObservation { is_in_use: false, ..in_use };
         assert_eq!(plan_image(&with_cache), vec![ImageAction::DiscardCache]);
         let without_cache = ImageObservation { cached: None, ..with_cache };
         assert_eq!(plan_image(&without_cache), vec![ImageAction::Remove]);
