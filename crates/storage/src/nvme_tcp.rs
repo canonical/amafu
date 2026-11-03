@@ -63,7 +63,7 @@ impl SpdkTarget {
     }
 
     async fn call(&self, method: &str, parameters: Value) -> Result<Result<Value, RpcRefusal>, ActionError> {
-        let body = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": parameters});
+        let body = request_body(method, parameters);
         let mut request = self.http.post(&self.management).json(&body);
         if let Some((user, password)) = &self.credentials {
             request = request.basic_auth(user, Some(password));
@@ -108,6 +108,15 @@ impl SpdkTarget {
         let subsystems =
             self.call("nvmf_get_subsystems", json!({})).await?.map_err(ActionError::retryable)?;
         Ok(subsystems.as_array().cloned().unwrap_or_default())
+    }
+}
+
+fn request_body(method: &str, parameters: Value) -> Value {
+    let has_parameters = parameters.as_object().is_none_or(|fields| !fields.is_empty());
+    if has_parameters {
+        json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": parameters})
+    } else {
+        json!({"jsonrpc": "2.0", "id": 1, "method": method})
     }
 }
 
@@ -382,6 +391,12 @@ mod tests {
             Some(PathBuf::from("/dev/nvme0n1"))
         );
         assert_eq!(namespace_for(sysfs.path(), &volume_qualified_name("other")), None);
+    }
+
+    #[test]
+    fn methods_without_parameters_are_called_without_a_parameter_object() {
+        assert_eq!(request_body("nvmf_get_subsystems", json!({})).get("params"), None);
+        assert_eq!(request_body("nvmf_delete_subsystem", json!({"nqn": "x"}))["params"]["nqn"], "x");
     }
 
     #[test]
