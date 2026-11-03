@@ -2,6 +2,7 @@ pub mod built_in;
 pub mod ceph;
 pub mod images;
 pub mod local_disk;
+pub mod management;
 pub mod nfs;
 pub mod nvme_tcp;
 pub mod qcow2;

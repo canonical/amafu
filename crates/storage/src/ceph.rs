@@ -44,10 +44,7 @@ fn unreachable_dashboard(error: impl std::fmt::Display) -> ActionError {
 
 impl CephCluster {
     pub fn new(settings: &CephSettings<'_>) -> Result<Self, ActionError> {
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .map_err(|error| ActionError::fatal(format!("building the Ceph client: {error}")))?;
+        let http = crate::management::management_client(Duration::from_secs(30))?;
         Ok(Self {
             monitors: settings.monitors.to_vec(),
             pool: settings.pool.to_owned(),
@@ -276,6 +273,21 @@ impl VolumeAttacher for RbdAttacher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cluster_client_is_built_without_touching_the_network() {
+        let monitors = ["192.0.2.42:6789".parse().unwrap()];
+        let cluster = CephCluster::new(&CephSettings {
+            monitors: &monitors,
+            pool: "amafu",
+            user: "amafu",
+            key: "c2VjcmV0",
+            management: "http://192.0.2.42:8080",
+            management_user: "amafu",
+            management_password: "secret",
+        });
+        assert!(cluster.is_ok());
+    }
 
     #[test]
     fn a_map_request_names_monitors_credentials_and_image() {

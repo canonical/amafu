@@ -58,10 +58,7 @@ impl SpdkTarget {
         addresses: Vec<SocketAddrV4>,
         pool: &str,
     ) -> Result<Self, ActionError> {
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .map_err(|error| ActionError::fatal(format!("building the target client: {error}")))?;
+        let http = crate::management::management_client(Duration::from_secs(30))?;
         Ok(Self { management: management.to_owned(), credentials, addresses, pool: pool.to_owned(), http })
     }
 
@@ -348,6 +345,17 @@ impl VolumeAttacher for NvmeTcpAttacher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_target_client_is_built_without_touching_the_network() {
+        let target = SpdkTarget::new(
+            "http://192.0.2.41:9009/",
+            None,
+            vec!["192.0.2.41:4420".parse().unwrap()],
+            "amafu",
+        );
+        assert!(target.is_ok());
+    }
 
     #[test]
     fn connect_options_name_the_target_and_this_host() {
