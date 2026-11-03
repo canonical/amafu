@@ -40,7 +40,7 @@ mmd -i "${work}/boot.vfat" "::amafu" 2>/dev/null || true
 mcopy -o -i "${work}/boot.vfat" "${configuration}" "::amafu/node-configuration.yaml"
 dd if="${work}/boot.vfat" of="${work}/disk.raw" bs=1M seek="${first_partition_offset_mebibytes}" conv=notrunc status=none
 
-mkfs.ext4 -q -L amafu-data -E "offset=${data_offset}" "${work}/disk.raw" "${data_size_mebibytes}M"
+mkfs.ext4 -q -L amafu-data -E "offset=${data_offset},lazy_itable_init=0,lazy_journal_init=0" "${work}/disk.raw" "${data_size_mebibytes}M"
 
 mkdir -p "${output}"
 qemu-img convert -f raw -O qcow2 -c "${work}/disk.raw" "${output}/rootfs.img"
