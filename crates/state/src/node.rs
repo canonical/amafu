@@ -32,7 +32,7 @@ pub struct VoterSettings {
     pub heartbeat: Duration,
 }
 
-pub const DEFAULT_HEARTBEAT: Duration = Duration::from_millis(300);
+pub const DEFAULT_HEARTBEAT: Duration = Duration::from_millis(500);
 
 pub async fn start_single_voter(data_directory: &Path, bind: SocketAddr) -> Result<Quorium, StateError> {
     start_voter(
