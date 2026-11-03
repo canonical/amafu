@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use amafu_domain::{ObjectReference, ProjectName};
@@ -109,6 +110,7 @@ pub struct SubscribedStore {
     core: Arc<dyn CoreConnection>,
     cache: Arc<Mutex<LocalStateCache>>,
     watchers: Arc<Mutex<Watchers>>,
+    is_synchronized: Arc<AtomicBool>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -118,7 +120,17 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 impl SubscribedStore {
     #[must_use]
     pub fn new(core: Arc<dyn CoreConnection>, cache: LocalStateCache) -> Self {
-        Self { core, cache: Arc::new(Mutex::new(cache)), watchers: Arc::new(Mutex::new(Vec::new())) }
+        Self {
+            core,
+            cache: Arc::new(Mutex::new(cache)),
+            watchers: Arc::new(Mutex::new(Vec::new())),
+            is_synchronized: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    #[must_use]
+    pub fn has_synchronized(&self) -> bool {
+        self.is_synchronized.load(Ordering::Relaxed)
     }
 
     #[must_use]
@@ -137,6 +149,9 @@ impl SubscribedStore {
     }
 
     fn apply(&self, changes: Vec<SliceChange>) {
+        if changes.iter().any(|change| matches!(change, SliceChange::Snapshot { .. })) {
+            self.is_synchronized.store(true, Ordering::Relaxed);
+        }
         let mut events = Vec::new();
         {
             let mut cache = lock(&self.cache);
@@ -297,8 +312,10 @@ mod tests {
             futures::executor::block_on(store.read(&reference("web-1"), Consistency::Linearizable)).is_err()
         );
         assert_eq!(futures::executor::block_on(events.next()), Some(WatchEvent::Resynchronize));
+        assert!(store.has_synchronized());
         let reopened = SubscribedStore::new(core, LocalStateCache::on_disk(&path));
         assert_eq!(reopened.cached_object_count(), 1);
+        assert!(!reopened.has_synchronized());
     }
 
     #[test]
