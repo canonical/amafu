@@ -1,0 +1,22 @@
+[package]
+name = "amafu-scheduler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+amafu-domain.workspace = true
+
+[dev-dependencies]
+criterion = { version = "0.7", default-features = false }
+proptest.workspace = true
+uuid.workspace = true
+
+[[bench]]
+name = "placement"
+harness = false
+
+[lints]
+workspace = true
