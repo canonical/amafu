@@ -6,13 +6,13 @@ use amafu_api::diagnostics::{
     NodeNetworkFacts, SANDBOX_PATH, SandboxCheck,
 };
 use amafu_api::wire::ListResponse;
-use amafu_api::{ApiClient, HttpTransport, Transport};
+use amafu_api::{ApiClient, ClientIdentity, HttpTransport, NodeClient, Transport};
 use amafu_domain::access::Role;
 use amafu_domain::{NodeName, ProjectName};
 use amafu_interfaces::Clock;
 use amafu_scenario::{
-    Cluster, ClusterObservation, Fault, FaultHandle, Level, NfsExport, ObservedAttachment, ObservedInstance,
-    ObservedPort, ScenarioError,
+    CertificateAuthority, Cluster, ClusterObservation, Fault, FaultHandle, Level, NfsExport,
+    ObservedAttachment, ObservedInstance, ObservedPort, ScenarioError, TlsIdentity,
 };
 use futures::future::BoxFuture;
 use http::Method;
@@ -162,6 +162,9 @@ impl Cluster for VirtualLab {
             Fault::PowerCycle { node } => {
                 self.lxd.change_state(node.as_str(), "restart", true).await.map_err(lab_failure)?;
             }
+            Fault::Partition { node } => {
+                return Err(ScenarioError::Lab(format!("{node} cannot be partitioned without a lab switch")));
+            }
         }
         Ok(FaultHandle(0))
     }
@@ -184,6 +187,28 @@ impl Cluster for VirtualLab {
         let url = format!("{}{SANDBOX_PATH}", node.diagnostics_endpoint(&self.state.settings));
         let response = self.probes.post(url).send().await.map_err(lab_failure)?;
         Ok(Some(response.json().await.map_err(lab_failure)?))
+    }
+
+    fn certificate_authority(&self) -> &CertificateAuthority {
+        &self.state.authority
+    }
+
+    async fn node_connection(
+        &self,
+        identity: Option<&TlsIdentity>,
+    ) -> Result<Arc<NodeClient>, ScenarioError> {
+        let endpoint = self.core_node()?.api_endpoint(&self.state.settings);
+        let client_identity = identity.map(|identity| ClientIdentity {
+            certificate_pem: identity.certificate_pem.clone(),
+            private_key_pem: identity.private_key_pem.clone(),
+        });
+        let transport = HttpTransport::with_identity(
+            &endpoint,
+            Some(self.state.authority.certificate_pem.as_bytes()),
+            client_identity.as_ref(),
+        )
+        .map_err(lab_failure)?;
+        Ok(Arc::new(NodeClient::new(vec![Arc::new(transport)])))
     }
 
     fn nfs_export(&self) -> Option<NfsExport> {

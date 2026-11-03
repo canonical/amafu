@@ -1,12 +1,15 @@
 use std::fmt;
+use std::sync::Arc;
 
 use amafu_api::ApiClient;
+use amafu_api::NodeClient;
 use amafu_api::diagnostics::SandboxCheck;
 use amafu_domain::access::Role;
 use amafu_domain::{NodeName, ProjectName};
 use amafu_interfaces::Clock;
 use uuid::Uuid;
 
+use crate::certificates::{CertificateAuthority, TlsIdentity};
 use crate::error::ScenarioError;
 use crate::observation::ClusterObservation;
 
@@ -30,6 +33,7 @@ impl fmt::Display for Level {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fault {
     PowerCycle { node: NodeName },
+    Partition { node: NodeName },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -62,6 +66,11 @@ pub trait Cluster {
     async fn sandbox_checks(&self) -> Result<Option<Vec<SandboxCheck>>, ScenarioError>;
 
     fn nfs_export(&self) -> Option<NfsExport>;
+
+    fn certificate_authority(&self) -> &CertificateAuthority;
+
+    async fn node_connection(&self, identity: Option<&TlsIdentity>)
+    -> Result<Arc<NodeClient>, ScenarioError>;
 
     fn clock(&self) -> &dyn Clock;
 

@@ -18,7 +18,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::OffsetDateTime;
 
-use crate::credentials::{ClientTokens, ServerCredentials, client_tokens, server_credentials};
+use amafu_scenario::CertificateAuthority;
+
+use crate::credentials::{ClientTokens, ServerCredentials, client_tokens};
 use crate::lxd::{LxdClient, LxdCredentials};
 use crate::nfs::LabNfsServer;
 use crate::topology::{LabNode, LabSettings, LabTopology, NODE_API_PORT, NODE_DIAGNOSTICS_PORT, node_listen};
@@ -31,6 +33,7 @@ const IMAGE_ALIAS: &str = "amafu-node-under-test";
 pub struct LabState {
     pub settings: LabSettings,
     pub topology: LabTopology,
+    pub authority: CertificateAuthority,
     pub server: ServerCredentials,
     pub tokens: ClientTokens,
     pub image_fingerprint: String,
@@ -212,13 +215,19 @@ pub async fn up(
     let nfs = LabNfsServer::standard(&settings, topology.next_proxy_port(&settings));
     crate::nfs::create(&lxd, &settings, &nfs).await?;
     let (tokens, identities) = client_tokens(OffsetDateTime::now_utc())?;
+    let authority = CertificateAuthority::generate("Amafu lab certificate authority")?;
     let work = repository.join("target/rig/work");
     std::fs::create_dir_all(&work)?;
     let mut fingerprint = String::new();
     let mut server = None;
     for node in &topology.nodes {
         let addresses = [IpAddr::V4(settings.host_address), IpAddr::V4(node.address)];
-        let credentials = server_credentials(&node.name, &addresses)?;
+        let issued = authority.issue_server(&node.name, &addresses)?;
+        let credentials = ServerCredentials {
+            certificate_authority: authority.certificate_pem.clone(),
+            certificate: issued.certificate_pem,
+            private_key: issued.private_key_pem,
+        };
         let configuration = node_configuration(&settings, node, &credentials, identities.clone())?;
         let configuration_path = work.join(format!("{}-configuration.yaml", node.name));
         std::fs::write(&configuration_path, serde_yaml_ng::to_string(&configuration)?)?;
@@ -236,8 +245,15 @@ pub async fn up(
         server = Some(credentials);
     }
     let server = server.context("the lab has no node")?;
-    let state =
-        LabState { settings, topology, server, tokens, image_fingerprint: fingerprint, nfs: Some(nfs) };
+    let state = LabState {
+        settings,
+        topology,
+        authority,
+        server,
+        tokens,
+        image_fingerprint: fingerprint,
+        nfs: Some(nfs),
+    };
     save_state(repository, &state)?;
     let mut boots = Vec::new();
     for node in &state.topology.nodes {

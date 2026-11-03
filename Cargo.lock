@@ -308,6 +308,7 @@ dependencies = [
  "amafu-interfaces",
  "async-trait",
  "futures",
+ "rcgen",
  "serde",
  "serde_json",
  "thiserror",
@@ -327,6 +328,7 @@ dependencies = [
  "futures",
  "http",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -351,9 +353,11 @@ dependencies = [
  "amafu-network",
  "amafu-reconciler",
  "amafu-scenario",
+ "amafu-state",
  "async-trait",
  "axum",
  "futures",
+ "http",
  "rand 0.10.3",
  "rand_chacha",
  "serde_json",

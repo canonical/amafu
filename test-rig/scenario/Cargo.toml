@@ -12,6 +12,7 @@ amafu-domain.workspace = true
 amafu-interfaces.workspace = true
 async-trait.workspace = true
 futures.workspace = true
+rcgen.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

@@ -1,14 +1,9 @@
 use std::collections::BTreeMap;
-use std::net::IpAddr;
 
 use amafu_api::authentication::{TokenIdentity, generate_token};
 use amafu_api::identity::Principal;
 use amafu_domain::ProjectName;
 use amafu_domain::access::Role;
-use rcgen::{
-    BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer,
-    KeyPair, KeyUsagePurpose, SanType,
-};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -37,33 +32,6 @@ impl ClientTokens {
     pub fn token(&self, role: Role, project: &ProjectName) -> Option<String> {
         self.by_role_and_project.get(&Self::key(role, project)).cloned()
     }
-}
-
-pub fn server_credentials(node_name: &str, addresses: &[IpAddr]) -> anyhow::Result<ServerCredentials> {
-    let authority_key = KeyPair::generate()?;
-    let mut authority = CertificateParams::new(Vec::<String>::new())?;
-    authority.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-    authority.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
-    let mut authority_name = DistinguishedName::new();
-    authority_name.push(DnType::CommonName, "Amafu lab certificate authority");
-    authority.distinguished_name = authority_name;
-    let authority_certificate = authority.self_signed(&authority_key)?;
-
-    let server_key = KeyPair::generate()?;
-    let mut server = CertificateParams::new(vec![node_name.to_owned()])?;
-    server.subject_alt_names.extend(addresses.iter().copied().map(SanType::IpAddress));
-    server.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
-    let mut server_name = DistinguishedName::new();
-    server_name.push(DnType::CommonName, node_name);
-    server.distinguished_name = server_name;
-    let issuer = Issuer::from_params(&authority, &authority_key);
-    let server_certificate = server.signed_by(&server_key, &issuer)?;
-
-    Ok(ServerCredentials {
-        certificate_authority: authority_certificate.pem(),
-        certificate: server_certificate.pem(),
-        private_key: server_key.serialize_pem(),
-    })
 }
 
 pub fn client_tokens(now: OffsetDateTime) -> anyhow::Result<(ClientTokens, Vec<TokenIdentity>)> {
