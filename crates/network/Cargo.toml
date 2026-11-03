@@ -12,6 +12,7 @@ axum.workspace = true
 amafu-domain.workspace = true
 amafu-interfaces.workspace = true
 futures.workspace = true
+pnet_datalink.workspace = true
 rtnetlink.workspace = true
 socket2.workspace = true
 tun-rs.workspace = true

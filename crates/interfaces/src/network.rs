@@ -47,6 +47,11 @@ pub fn bridge_name(segment: &SegmentKey) -> String {
     format!("amb{:012x}", short_hash(&segment.0) & 0xffff_ffff_ffff)
 }
 
+#[must_use]
+pub fn tunnel_name(segment: &SegmentKey, segment_id: SegmentId) -> String {
+    format!("amx{:012x}", short_hash(&format!("{}#{segment_id}", segment.0)) & 0xffff_ffff_ffff)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Segment {
     pub key: SegmentKey,
@@ -179,5 +184,9 @@ mod tests {
         assert_eq!(key.tap_name(), key.tap_name());
         assert_ne!(key.tap_name(), PortKey { index: 1, ..key }.tap_name());
         assert!(bridge_name(&SegmentKey::of("project-a", "default")).len() <= 15);
+        let segment = SegmentKey::of("project-a", "default");
+        let first = SegmentId::new(1).unwrap();
+        assert!(tunnel_name(&segment, first).len() <= 15);
+        assert_ne!(tunnel_name(&segment, first), tunnel_name(&segment, SegmentId::new(2).unwrap()));
     }
 }
