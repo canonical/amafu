@@ -106,6 +106,13 @@ fn address_at(bytes: &[u8], offset: usize) -> Ipv4Addr {
     Ipv4Addr::new(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3])
 }
 
+#[must_use]
+pub fn is_domain_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('.')
+        && name.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'.')
+}
+
 fn option_address(value: &[u8]) -> Option<Ipv4Addr> {
     let octets: [u8; 4] = value.try_into().ok()?;
     Some(Ipv4Addr::from(octets))
@@ -158,7 +165,7 @@ impl DhcpMessage {
                 }
                 OPTION_DOMAIN_NAME => {
                     lease.domain_name =
-                        std::str::from_utf8(value).ok().filter(|name| name.is_ascii()).map(str::to_owned);
+                        std::str::from_utf8(value).ok().filter(|name| is_domain_name(name)).map(str::to_owned);
                 }
                 _ => {}
             }
@@ -311,6 +318,14 @@ pub mod tests {
                 rules: Vec::new(),
                 user_data: None,
             }],
+        }
+    }
+
+    #[test]
+    fn domain_names_that_could_inject_resolver_lines_are_ignored() {
+        assert!(is_domain_name("default.project-a.internal"));
+        for hostile in ["", "\0", "evil\nnameserver 6.6.6.6", ".", "a b"] {
+            assert!(!is_domain_name(hostile), "{hostile:?} must be refused");
         }
     }
 
