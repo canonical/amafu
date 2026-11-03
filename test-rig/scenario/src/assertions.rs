@@ -19,13 +19,27 @@ where
     let clock = cluster.clock();
     let deadline = clock.now() + timeout;
     loop {
-        if condition().await? {
-            return Ok(());
+        match condition().await {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(error) if is_transient(&error) => {}
+            Err(error) => return Err(error),
         }
         if clock.now() >= deadline {
             return Err(ScenarioError::Timeout(description.to_owned()));
         }
         clock.sleep(POLL_INTERVAL).await;
+    }
+}
+
+const UNAVAILABLE: u16 = 503;
+
+fn is_transient(error: &ScenarioError) -> bool {
+    match error {
+        ScenarioError::Client(client) => {
+            client.status() == Some(UNAVAILABLE) || matches!(client, amafu_api::ClientError::Transport(_))
+        }
+        _ => false,
     }
 }
 
