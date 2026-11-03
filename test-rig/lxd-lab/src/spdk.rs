@@ -74,7 +74,7 @@ write_files:
       After=network-online.target
       [Service]
       ExecStartPre=/usr/sbin/sysctl -w vm.nr_hugepages=600
-      ExecStart=/opt/spdk/build/bin/nvmf_tgt -m 0x1 -s 1024
+      ExecStart=/opt/spdk/build/bin/nvmf_tgt -m 0x1 -s 1024 --interrupt-mode
       ExecStartPost=/usr/local/bin/amafu-nvme-target-setup
       Restart=always
       [Install]
