@@ -17,7 +17,7 @@ const VOLUME_PREFIX: &str = "nqn.2026-11.io.amafu:volume:";
 const HOST_PREFIX: &str = "nqn.2026-11.io.amafu:node:";
 const ALREADY_EXISTS: i64 = -17;
 const NOT_FOUND: i64 = -19;
-const NAMESPACE_WAIT: Duration = Duration::from_secs(10);
+const NAMESPACE_WAIT: Duration = Duration::from_secs(2);
 const NAMESPACE_POLL: Duration = Duration::from_millis(100);
 const MEBIBYTE: u64 = 1024 * 1024;
 

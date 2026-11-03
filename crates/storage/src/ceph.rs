@@ -14,7 +14,7 @@ const RBD_DEVICES: &str = "/sys/bus/rbd/devices";
 const RBD_ADD: &str = "/sys/bus/rbd/add_single_major";
 const RBD_REMOVE: &str = "/sys/bus/rbd/remove_single_major";
 const DASHBOARD_ACCEPT: &str = "application/vnd.ceph.api.v1.0+json";
-const DEVICE_WAIT: Duration = Duration::from_secs(10);
+const DEVICE_WAIT: Duration = Duration::from_secs(2);
 const DEVICE_POLL: Duration = Duration::from_millis(100);
 
 pub struct CephCluster {
