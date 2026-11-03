@@ -3,7 +3,9 @@ use std::sync::Arc;
 use amafu_domain::kinds::network::{Network, NetworkPhase, NetworkStatus};
 use amafu_domain::kinds::security_group::SecurityGroup;
 use amafu_domain::kinds::vm::Vm;
-use amafu_domain::{Change, Object, ObjectReference};
+use std::collections::BTreeSet;
+
+use amafu_domain::{Change, Object, ObjectReference, SegmentId};
 use amafu_interfaces::objects::{apply, get, list, remove};
 use amafu_interfaces::{ActionError, Consistency, Store};
 use amafu_reconciler::{Controller, KeyMapping, WatchedKind};
@@ -32,6 +34,18 @@ pub enum NetworkAction {
     Remove,
 }
 
+fn segment_for(network: &Object<Network>, others: &[Object<Network>]) -> Option<SegmentId> {
+    if let Some(segment_id) = network.status.segment_id {
+        return Some(segment_id);
+    }
+    let taken: BTreeSet<SegmentId> = others
+        .iter()
+        .filter(|other| other.metadata.id != network.metadata.id)
+        .filter_map(|other| other.status.segment_id)
+        .collect();
+    SegmentId::all().find(|segment_id| !taken.contains(segment_id))
+}
+
 #[must_use]
 pub fn plan_network(observation: &NetworkObservation) -> Vec<NetworkAction> {
     let Some(network) = &observation.network else {
@@ -51,9 +65,15 @@ pub fn plan_network(observation: &NetworkObservation) -> Vec<NetworkAction> {
         Some(other) if !network.status.is_ready() => NetworkStatus {
             phase: NetworkPhase::Failed,
             gateway: None,
+            segment_id: None,
             message: Some(format!("{subnet} overlaps network {}", other.reference())),
         },
-        _ => NetworkStatus { phase: NetworkPhase::Ready, gateway: Some(subnet.gateway()), message: None },
+        _ => NetworkStatus {
+            phase: NetworkPhase::Ready,
+            gateway: Some(subnet.gateway()),
+            segment_id: segment_for(network, &observation.others),
+            message: None,
+        },
     };
     if network.status == status && network.is_status_current() {
         return Vec::new();
@@ -232,12 +252,31 @@ mod tests {
         assert_eq!(status.phase, NetworkPhase::Failed);
         let mut ready_existing = existing.clone();
         ready_existing.status.gateway = Some("10.0.0.1".parse().unwrap());
+        ready_existing.status.segment_id = Some(SegmentId::new(1).unwrap());
         let keeper = NetworkObservation {
             network: Some(ready_existing),
             others: vec![network("rival", "10.0.0.0/24", NetworkPhase::Ready)],
             is_in_use: false,
         };
         assert_eq!(plan_network(&keeper), Vec::new());
+    }
+
+    #[test]
+    fn each_ready_network_gets_the_lowest_free_segment_and_keeps_it() {
+        let mut taken = network("other", "10.2.0.0/24", NetworkPhase::Ready);
+        taken.status.segment_id = Some(SegmentId::new(1).unwrap());
+        let observation = NetworkObservation {
+            network: Some(network("default", "10.1.0.0/24", NetworkPhase::Pending)),
+            others: vec![taken.clone()],
+            is_in_use: false,
+        };
+        let NetworkAction::Report { status, .. } = only(plan_network(&observation)) else {
+            panic!("expected a report")
+        };
+        assert_eq!(status.segment_id, Some(SegmentId::new(2).unwrap()));
+        let mut kept = network("default", "10.1.0.0/24", NetworkPhase::Ready);
+        kept.status.segment_id = Some(SegmentId::new(7).unwrap());
+        assert_eq!(segment_for(&kept, &[taken]), Some(SegmentId::new(7).unwrap()));
     }
 
     #[test]
