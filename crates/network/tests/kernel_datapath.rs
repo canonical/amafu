@@ -79,7 +79,7 @@ async fn tunnels_and_floating_addresses_are_programmed_and_removed() {
             &state.segments[0].key,
             state.segments[0].segment_id.unwrap(),
         );
-        let details = run("ip", &["-details", "link", "show", &tunnel]).map_err(|error| format!("{error}: {}", run("ip", &["-o", "link"]).unwrap_or_default()))?;
+        let details = run("ip", &["-details", "link", "show", &tunnel])?;
         assert!(details.contains("vxlan id 4242"), "{details}");
         assert!(details.contains("proxy"), "{details}");
         let forwarding = run("bridge", &["fdb", "show", "dev", &tunnel])?;
