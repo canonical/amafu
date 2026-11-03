@@ -116,6 +116,7 @@ mod tests {
             workload: None,
             disks: Vec::new(),
             offered_addresses: Vec::new(),
+            console: String::new(),
         }
     }
 
