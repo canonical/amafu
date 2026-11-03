@@ -1,0 +1,39 @@
+[package]
+name = "amafu-network-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+amafu-domain = { path = "../../domain" }
+amafu-interfaces = { path = "../../interfaces" }
+amafu-network = { path = ".." }
+libfuzzer-sys = "0.4.13"
+uuid = "1.29.0"
+
+[[bin]]
+name = "dhcp_message"
+path = "fuzz_targets/dhcp_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dns_query"
+path = "fuzz_targets/dns_query.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "metadata_request"
+path = "fuzz_targets/metadata_request.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
