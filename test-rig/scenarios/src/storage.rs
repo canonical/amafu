@@ -57,7 +57,6 @@ async fn a_vm_boots_from_a_cloned_volume(cluster: &dyn Cluster) -> ScenarioResul
         source_image: Some(name("noble-minimal")?),
     };
     member.create::<Volume>(&name("noble-root")?, &volume).await?;
-    volume_in_phase(&member, cluster, "noble-root", VolumePhase::Available).await?;
     let specification = VmSpecification {
         memory_mebibytes: DISK_VM_MEMORY_MEBIBYTES,
         boot: BootSource::Disk,
@@ -77,6 +76,11 @@ async fn a_vm_boots_from_a_cloned_volume(cluster: &dyn Cluster) -> ScenarioResul
         String::from("the VM process was given the volume as a disk")
     })?;
     always_during(cluster, SETTLING, a_volume_is_attached_on_at_most_one_node).await?;
+    let node = instance(cluster, created.id()).await?.node;
+    let provisioned = member.get::<Volume>("noble-root").await?.status.provisioned;
+    ensure(provisioned.as_ref().and_then(|provisioned| provisioned.node.as_ref()) == Some(&node), || {
+        format!("the local volume was created on the node of its VM, {node}, got {provisioned:?}")
+    })?;
     delete_and_wait::<Vm>(&member, cluster, "from-disk").await?;
     volume_in_phase(&member, cluster, "noble-root", VolumePhase::Available).await?;
     delete_and_wait::<Volume>(&member, cluster, "noble-root").await?;

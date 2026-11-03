@@ -1,6 +1,7 @@
 pub mod address_allocation;
 pub mod compute;
 pub mod image;
+pub mod local_volume;
 pub mod network;
 pub mod node;
 pub mod node_network;
@@ -13,6 +14,7 @@ pub mod volume;
 
 pub use compute::{ComputeAction, ComputeController, ComputeKey, ComputeObservation, ComputeServices};
 pub use image::ImageController;
+pub use local_volume::LocalVolumeController;
 pub use network::{NetworkController, SecurityGroupController};
 pub use node::{NodeAction, NodeController, NodeIdentity, NodeObservation};
 pub use node_network::NodeNetworkController;

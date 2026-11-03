@@ -7,9 +7,9 @@ use std::time::Duration;
 use amafu_api::server::{serve, tls_configuration};
 use amafu_api::{ApiState, TokenAuthenticator, router};
 use amafu_controllers::{
-    ComputeController, ComputeServices, ImageController, NetworkController, NodeController, NodeIdentity,
-    NodeNetworkController, SchedulerController, SchedulingSettings, SecurityGroupController,
-    StorageBackendController, VolumeController,
+    ComputeController, ComputeServices, ImageController, LocalVolumeController, NetworkController,
+    NodeController, NodeIdentity, NodeNetworkController, SchedulerController, SchedulingSettings,
+    SecurityGroupController, StorageBackendController, VolumeController,
 };
 use amafu_domain::kinds::node::{CpuBaseline, NodeCapacity, NodeRole};
 use amafu_domain::{NodeName, ObjectId};
@@ -298,6 +298,13 @@ fn compute_roles(
         services.leases.is_some(),
     );
     controller_role(roles, "image", Arc::new(image), services, settings);
+    let local_volume = LocalVolumeController::new(
+        node.clone(),
+        Arc::clone(&services.store),
+        Arc::clone(&adapters.storage) as Arc<dyn Storage>,
+        Arc::clone(&adapters.images) as Arc<dyn ImageStore>,
+    );
+    controller_role(roles, "local-volume", Arc::new(local_volume), services, settings);
     let node_network = NodeNetworkController::new(
         node.clone(),
         Arc::clone(&services.store),

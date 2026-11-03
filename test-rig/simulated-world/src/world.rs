@@ -11,9 +11,9 @@ use amafu_api::diagnostics::SandboxCheck;
 use amafu_api::{ApiClient, ApiState, Principal, RouterTransport, TokenAuthenticator, router};
 use amafu_checkers::invariants::check_all;
 use amafu_controllers::{
-    ComputeController, ComputeServices, ImageController, NetworkController, NodeController, NodeIdentity,
-    NodeNetworkController, SchedulerController, SchedulingSettings, SecurityGroupController,
-    StorageBackendController, VolumeController,
+    ComputeController, ComputeServices, ImageController, LocalVolumeController, NetworkController,
+    NodeController, NodeIdentity, NodeNetworkController, SchedulerController, SchedulingSettings,
+    SecurityGroupController, StorageBackendController, VolumeController,
 };
 use amafu_domain::access::Role;
 use amafu_domain::kinds::node::{CpuBaseline, NodeCapacity, NodeRole};
@@ -322,7 +322,7 @@ impl SimulatedWorld {
         let bundles = BTreeSet::from([valid_name::<ObjectName>(TEST_BUNDLE)]);
         let services = NodeServices {
             hypervisor: Arc::new(FakeHypervisor::new(Arc::clone(&clock), BOOT_DURATION, bundles)),
-            storage: Arc::new(FakeStorage::new(Arc::clone(&shared.backends))),
+            storage: Arc::new(FakeStorage::new(name.clone(), Arc::clone(&shared.backends))),
             images: Arc::new(FakeImageStore::new()),
             datapath: Arc::new(FakeDatapath::new()),
             local_services: Arc::new(FakeLocalServices::new()),
@@ -354,12 +354,26 @@ impl SimulatedWorld {
         let (node_store, node_clock, node_name) = (Arc::clone(&store), Arc::clone(&clock), name.clone());
         let (image_store, image_cache, image_node) =
             (Arc::clone(&store), Arc::clone(&services.images) as Arc<dyn ImageStore>, name.clone());
+        let (volume_store, volume_storage, volume_images, volume_node) = (
+            Arc::clone(&store),
+            Arc::clone(&services.storage) as Arc<dyn Storage>,
+            Arc::clone(&services.images) as Arc<dyn ImageStore>,
+            name.clone(),
+        );
         let mut tasks = vec![
             self.role(format!("{name}/node"), heartbeat, move || {
                 NodeController::new(identity.clone(), Arc::clone(&node_store), Arc::clone(&node_clock))
             }),
             self.role(format!("{name}/compute"), fast, move || {
                 ComputeController::new(node_name.clone(), compute.clone())
+            }),
+            self.role(format!("{name}/local-volume"), fast, move || {
+                LocalVolumeController::new(
+                    volume_node.clone(),
+                    Arc::clone(&volume_store),
+                    Arc::clone(&volume_storage),
+                    Arc::clone(&volume_images),
+                )
             }),
             self.role(format!("{name}/image"), fast, move || {
                 ImageController::new(
