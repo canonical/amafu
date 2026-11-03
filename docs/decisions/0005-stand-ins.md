@@ -1,6 +1,6 @@
-# 0005: Stand-ins used in milestone 1, and what replaces them
+# 0005: Stand-ins, and what replaces them
 
-Status: accepted for milestone 1
+Status: accepted for milestones 1 and 2
 
 Milestone 1 builds every layer thinly. Where the plan's full design belongs to a later milestone, milestone 1 uses
 a simpler stand-in behind the same interface, so that replacing it does not ripple through the other crates.
@@ -13,8 +13,16 @@ a simpler stand-in behind the same interface, so that replacing it does not ripp
 | The underlay gets a static address from the node configuration, set over netlink | The image has no DHCP client and the kernel has no in-kernel autoconfiguration | The node configuration's `network` section with bonds and DHCP from MAAS (milestones 3 and 5) |
 | The test-only diagnostic channel is plain HTTP on a TCP port reached through an LXD proxy device, not a virtio serial port | LXD does not relay a guest's extra serial ports to API clients | Keep the transport behind the `Cluster` trait. The channel exists only in test builds (`--features diagnostics`); a release build ignores its configuration |
 | The lab console is read by attaching to LXD's serial console | LXD 6.10 has no console log for VMs | A console log in the rig's run reports |
-| Every role runs in one `amafu-node` process, and a failed role is restarted with backoff inside that process | One node, one binary; crash-only behaviour is exercised by the simulator, which crashes roles at random points | One process per role with its own seccomp filter (milestone 2), supervised by PID 1 |
+| Every role runs in one `amafu-node` process, and a failed role is restarted with backoff inside that process | One node, one binary; crash-only behaviour is exercised by the simulator, which crashes roles at random points. Milestone 2 sandboxed the VM processes, which run guest-facing code (decision 0007), and kept the roles together | One process per role with its own seccomp filter, supervised by PID 1 (milestone 3) |
 | A VM that cannot start because its specification is invalid (for example a missing image) is reported `failed` with the reason, and is retried only when its specification changes | The architecture says an invalid specification writes a condition to the status and waits for the specification to change | Conditions on the status, alongside the phase |
+
+Milestone 2 adds:
+
+| Stand-in | Why | Replaced by |
+|---|---|---|
+| The image controller runs on the core node, caches images there and reports `cached_on` as that node | The lab has one node | An image controller on every compute node, each adding itself to `cached_on`, with deletion waiting for every node (milestone 3) |
+| Networks, local services and `local-disk` volumes span one node | Overlay networking and volume migration need several nodes | VXLAN overlays between nodes and volume moves (milestone 3) |
+| The lab's NFS server is an Ubuntu VM in the lab project, exporting with `no_root_squash` | It is the smallest real NFS server | Any NFS server the operator provides |
 
 None of these stand-ins weakens a guarantee the plan says must not be simplified: generations on every object,
 audit of every request including denials, at most one running instance of each VM, and signed images. Each of
