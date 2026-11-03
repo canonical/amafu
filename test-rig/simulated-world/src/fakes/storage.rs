@@ -42,6 +42,12 @@ fn backend_key(specification: &StorageProviderSpecification, node: &NodeName) ->
     match specification {
         StorageProviderSpecification::LocalDisk => format!("local-disk@{node}"),
         StorageProviderSpecification::Nfs { server, export } => format!("nfs://{server}{export}"),
+        StorageProviderSpecification::NvmeTcp { management, pool, .. } => {
+            format!("nvme://{management}/{pool}")
+        }
+        StorageProviderSpecification::CephRbd { management, pool, .. } => {
+            format!("rbd://{management}/{pool}")
+        }
     }
 }
 
@@ -101,6 +107,17 @@ impl StorageProvider for FakeProvider {
                 export: export.clone(),
                 file: format!("{}.qcow2", volume.identifier),
             },
+            StorageProviderSpecification::NvmeTcp { addresses, .. } => AttachTarget::NvmeTcp {
+                qualified_name: format!("nqn.2026-11.io.amafu:volume:{}", volume.identifier),
+                addresses: addresses.clone(),
+            },
+            StorageProviderSpecification::CephRbd { monitors, pool, user, key, .. } => AttachTarget::Rbd {
+                monitors: monitors.clone(),
+                pool: pool.clone(),
+                image: volume.identifier.clone(),
+                user: user.clone(),
+                key: key.clone(),
+            },
         })
     }
 
@@ -141,6 +158,10 @@ impl VolumeAttacher for FakeAttacher {
             AttachTarget::NfsFile { server, file, .. } => {
                 PathBuf::from(format!("/run/amafu/nfs/{server}/{file}"))
             }
+            AttachTarget::NvmeTcp { qualified_name, .. } => {
+                PathBuf::from(format!("/dev/nvme-{qualified_name}"))
+            }
+            AttachTarget::Rbd { pool, image, .. } => PathBuf::from(format!("/dev/rbd-{pool}-{image}")),
         };
         lock(&self.attachments.attached).entry(target.clone()).or_insert(path.clone());
         Ok(path)
@@ -158,6 +179,30 @@ impl VolumeAttacher for FakeAttacher {
             .into_iter()
             .filter(|(target, _)| target.protocol() == self.protocol)
             .collect())
+    }
+}
+
+#[must_use]
+pub fn simulated_nvme_tcp() -> StorageProviderSpecification {
+    StorageProviderSpecification::NvmeTcp {
+        management: String::from("http://nvme.lab:9009"),
+        management_user: None,
+        management_password: None,
+        addresses: vec![std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(192, 0, 2, 41), 4420)],
+        pool: String::from("amafu"),
+    }
+}
+
+#[must_use]
+pub fn simulated_ceph_rbd() -> StorageProviderSpecification {
+    StorageProviderSpecification::CephRbd {
+        monitors: vec![std::net::SocketAddrV4::new(std::net::Ipv4Addr::new(192, 0, 2, 42), 6789)],
+        pool: String::from("amafu"),
+        user: String::from("amafu"),
+        key: String::from("c2ltdWxhdGVk"),
+        management: String::from("http://ceph.lab:8080"),
+        management_user: String::from("admin"),
+        management_password: String::from("simulated"),
     }
 }
 
@@ -214,11 +259,15 @@ mod tests {
         for specification in [
             StorageProviderSpecification::LocalDisk,
             StorageProviderSpecification::Nfs { server: String::from("filer"), export: String::from("/srv") },
+            simulated_nvme_tcp(),
+            simulated_ceph_rbd(),
         ] {
             let provider = storage.provider(&specification).unwrap();
             let protocol = match specification {
                 StorageProviderSpecification::LocalDisk => StorageProtocol::LocalFile,
                 StorageProviderSpecification::Nfs { .. } => StorageProtocol::Nfs,
+                StorageProviderSpecification::NvmeTcp { .. } => StorageProtocol::NvmeTcp,
+                StorageProviderSpecification::CephRbd { .. } => StorageProtocol::Rbd,
             };
             let attacher = storage.attacher(protocol).unwrap();
             assert_eq!(

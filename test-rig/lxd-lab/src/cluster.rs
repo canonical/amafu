@@ -11,6 +11,7 @@ use std::net::Ipv4Addr;
 
 use amafu_domain::access::Role;
 use amafu_domain::kinds::external_network::ExternalNetworkSpecification;
+use amafu_domain::kinds::storage_backend::StorageProviderSpecification;
 use amafu_domain::{NodeName, ProjectName};
 use amafu_interfaces::Clock;
 use amafu_scenario::{
@@ -198,6 +199,10 @@ impl Cluster for VirtualLab {
 
     fn external_network(&self) -> ExternalNetworkSpecification {
         self.state.topology.external_network.clone()
+    }
+
+    fn block_backends(&self) -> Vec<(String, StorageProviderSpecification)> {
+        self.state.block_backends.clone()
     }
 
     async fn probe_from_outside(

@@ -15,5 +15,5 @@ pub use identifiers::SeededIdentifiers;
 pub use images::FakeImageStore;
 pub use leases::{FakeLeases, NodeLeases};
 pub use partition::{NodeLink, PartitionedStore, PartitionedTransport};
-pub use storage::{FakeBackends, FakeStorage};
+pub use storage::{FakeBackends, FakeStorage, simulated_ceph_rbd, simulated_nvme_tcp};
 pub use store::MemoryStore;

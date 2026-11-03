@@ -23,6 +23,7 @@ use amafu_controllers::{
 use amafu_domain::access::Role;
 use amafu_domain::kinds::external_network::ExternalNetworkSpecification;
 use amafu_domain::kinds::node::{CpuBaseline, NodeCapacity, NodeRole};
+use amafu_domain::kinds::storage_backend::StorageProviderSpecification;
 use amafu_domain::{MacAddress, NodeName, ObjectId, ObjectName, ProjectName};
 use amafu_interfaces::{
     AuditLog, Clock, Datapath, Fence, GuestAgents, Hypervisor, Identifiers, ImageStore, Leases,
@@ -46,6 +47,7 @@ use crate::executor::{Executor, StepOutcome, TaskFuture, TaskId};
 use crate::fakes::{
     FakeBackends, FakeDatapath, FakeHypervisor, FakeImageStore, FakeLeases, FakeLocalServices, FakeStorage,
     MemoryAuditLog, MemoryStore, NodeLink, PartitionedStore, PartitionedTransport, SeededIdentifiers,
+    simulated_ceph_rbd, simulated_nvme_tcp,
 };
 
 const PROJECTS: [&str; 2] = ["project-a", "project-b"];
@@ -903,6 +905,13 @@ impl Cluster for SimulatedWorld {
             first_address: Ipv4Addr::new(198, 51, 100, 10),
             last_address: Ipv4Addr::new(198, 51, 100, 29),
         }
+    }
+
+    fn block_backends(&self) -> Vec<(String, StorageProviderSpecification)> {
+        vec![
+            (String::from("nvme-tcp"), simulated_nvme_tcp()),
+            (String::from("ceph-rbd"), simulated_ceph_rbd()),
+        ]
     }
 
     async fn probe_from_outside(

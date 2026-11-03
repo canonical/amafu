@@ -1,7 +1,7 @@
 use amafu_checkers::invariants::a_volume_is_attached_on_at_most_one_node;
 use amafu_domain::access::Role;
 use amafu_domain::kinds::image::Image;
-use amafu_domain::kinds::storage_backend::StorageProviderSpecification;
+use amafu_domain::kinds::storage_backend::{StorageBackend, StorageProviderSpecification};
 use amafu_domain::kinds::vm::{BootSource, Vm, VmSpecification};
 use amafu_domain::kinds::volume::{Volume, VolumePhase, VolumeSpecification};
 use amafu_scenario::cluster::client;
@@ -21,6 +21,13 @@ pub const VM_BOOTS_FROM_A_CLONED_VOLUME: ScenarioDefinition = ScenarioDefinition
     levels: &[Level::Simulated, Level::VirtualLab],
     node_count: 1,
     run: |cluster| a_vm_boots_from_a_cloned_volume(cluster).boxed_local(),
+};
+
+pub const BLOCK_VOLUMES_FOLLOW_THEIR_VM: ScenarioDefinition = ScenarioDefinition {
+    name: "NVMe/TCP and Ceph RBD volumes are attached on the node of their VM and follow it",
+    levels: &[Level::Simulated, Level::VirtualLab],
+    node_count: 4,
+    run: |cluster| block_volumes_follow_their_vm(cluster).boxed_local(),
 };
 
 pub const NFS_VOLUME_IS_ATTACHED: ScenarioDefinition = ScenarioDefinition {
@@ -113,4 +120,66 @@ async fn an_nfs_volume_is_attached(cluster: &dyn Cluster) -> ScenarioResult {
     delete_and_wait::<Vm>(&member, cluster, "nfs-user").await?;
     volume_in_phase(&member, cluster, "shared-data", VolumePhase::Available).await?;
     delete_and_wait::<Volume>(&member, cluster, "shared-data").await
+}
+
+async fn set_cordoned(
+    operator: &amafu_api::ApiClient,
+    node: &amafu_domain::NodeName,
+    is_cordoned: bool,
+) -> ScenarioResult {
+    let current = operator.get::<amafu_domain::kinds::node::Node>(node.as_str()).await?;
+    let specification = amafu_domain::kinds::node::NodeSpecification { is_cordoned, ..current.specification };
+    operator.update::<amafu_domain::kinds::node::Node>(node.as_str(), &specification, None).await?;
+    Ok(())
+}
+
+async fn attached_only_on(
+    cluster: &dyn Cluster,
+    node: &amafu_domain::NodeName,
+    marker: &str,
+) -> ScenarioResult {
+    eventually(cluster, START_TIMEOUT, &format!("the volume is attached on {node} only"), async || {
+        let observation = cluster.observe().await?;
+        let holders: Vec<&amafu_domain::NodeName> = observation
+            .attachments
+            .iter()
+            .filter(|attachment| attachment.volume.contains(marker))
+            .map(|attachment| &attachment.node)
+            .collect();
+        Ok(holders == vec![node])
+    })
+    .await
+}
+
+async fn block_volumes_follow_their_vm(cluster: &dyn Cluster) -> ScenarioResult {
+    crate::support::every_node_ready(cluster).await?;
+    let operator = client(cluster, Role::Operator).await;
+    let member = client(cluster, Role::Member).await;
+    for (backend, provider) in cluster.block_backends() {
+        shared_backend(&operator, cluster, &backend, provider).await?;
+        let volume_name = format!("{backend}-data");
+        let volume = VolumeSpecification { size_gibibytes: 1, backend: name(&backend)?, source_image: None };
+        let created = member.create::<Volume>(&name(&volume_name)?, &volume).await?;
+        volume_in_phase(&member, cluster, &volume_name, VolumePhase::Available).await?;
+        let marker = created.id().to_string();
+        let specification =
+            VmSpecification { volumes: vec![name(&volume_name)?], ..VmSpecification::small() };
+        let first = member.create::<Vm>(&name("block-user")?, &specification).await?;
+        started_within_budget(&member, cluster, "block-user", crate::support::VM_START_BUDGET).await?;
+        let first_node = instance(cluster, first.id()).await?.node;
+        attached_only_on(cluster, &first_node, &marker).await?;
+        set_cordoned(&operator, &first_node, true).await?;
+        delete_and_wait::<Vm>(&member, cluster, "block-user").await?;
+        let second = member.create::<Vm>(&name("block-user")?, &specification).await?;
+        started_within_budget(&member, cluster, "block-user", crate::support::VM_START_BUDGET).await?;
+        let second_node = instance(cluster, second.id()).await?.node;
+        ensure(second_node != first_node, || format!("the VM came back on the cordoned {first_node}"))?;
+        attached_only_on(cluster, &second_node, &marker).await?;
+        always_during(cluster, SETTLING, a_volume_is_attached_on_at_most_one_node).await?;
+        set_cordoned(&operator, &first_node, false).await?;
+        delete_and_wait::<Vm>(&member, cluster, "block-user").await?;
+        delete_and_wait::<Volume>(&member, cluster, &volume_name).await?;
+        delete_and_wait::<StorageBackend>(&operator, cluster, &backend).await?;
+    }
+    Ok(())
 }

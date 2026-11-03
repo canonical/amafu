@@ -23,6 +23,7 @@ pub fn all() -> Vec<ScenarioDefinition> {
         containers::CONTAINER_EXIT_IS_REPORTED,
         storage::VM_BOOTS_FROM_A_CLONED_VOLUME,
         storage::NFS_VOLUME_IS_ATTACHED,
+        storage::BLOCK_VOLUMES_FOLLOW_THEIR_VM,
         networking::ADDRESSES_ARE_DISTINCT,
         networking::SECURITY_GROUPS_DECIDE,
         sandbox::HOSTILE_GUEST_IS_CONFINED,

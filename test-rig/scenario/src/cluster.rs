@@ -8,6 +8,7 @@ use amafu_api::NodeClient;
 use amafu_api::diagnostics::SandboxCheck;
 use amafu_domain::access::Role;
 use amafu_domain::kinds::external_network::ExternalNetworkSpecification;
+use amafu_domain::kinds::storage_backend::StorageProviderSpecification;
 use amafu_domain::{NodeName, ProjectName};
 use amafu_interfaces::Clock;
 use uuid::Uuid;
@@ -73,6 +74,8 @@ pub trait Cluster {
     fn certificate_authority(&self) -> &CertificateAuthority;
 
     fn external_network(&self) -> ExternalNetworkSpecification;
+
+    fn block_backends(&self) -> Vec<(String, StorageProviderSpecification)>;
 
     async fn probe_from_outside(&self, address: Ipv4Addr, port: u16)
     -> Result<Option<String>, ScenarioError>;

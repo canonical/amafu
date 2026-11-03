@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use amafu_api::diagnostics::{BOOT_PATH, BootFacts};
 use amafu_domain::NodeName;
 use amafu_domain::kinds::node::NodeRole;
+use amafu_domain::kinds::storage_backend::StorageProviderSpecification;
 use amafu_network::{StaticAddress, UnderlayConfiguration};
 use amafu_node::configuration::{
     ApiSection, ComputeSection, DiagnosticsSection, Directories, NodeConfiguration, NodeSection,
@@ -39,6 +40,8 @@ pub struct LabState {
     pub image_fingerprint: String,
     #[serde(default)]
     pub nfs: Option<LabNfsServer>,
+    #[serde(default)]
+    pub block_backends: Vec<(String, StorageProviderSpecification)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -256,6 +259,7 @@ pub async fn up(
         tokens,
         image_fingerprint: fingerprint,
         nfs: Some(nfs),
+        block_backends: Vec::new(),
     };
     save_state(repository, &state)?;
     let mut boots = Vec::new();
