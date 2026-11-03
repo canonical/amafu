@@ -1,3 +1,4 @@
+use std::net::SocketAddrV4;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -20,6 +21,8 @@ pub struct VolumeRequest {
 pub enum StorageProtocol {
     LocalFile,
     Nfs,
+    NvmeTcp,
+    Rbd,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -27,6 +30,8 @@ pub enum StorageProtocol {
 pub enum AttachTarget {
     LocalFile { node: NodeName, path: PathBuf },
     NfsFile { server: String, export: String, file: String },
+    NvmeTcp { qualified_name: String, addresses: Vec<SocketAddrV4> },
+    Rbd { monitors: Vec<SocketAddrV4>, pool: String, image: String, user: String, key: String },
 }
 
 impl AttachTarget {
@@ -35,6 +40,8 @@ impl AttachTarget {
         match self {
             Self::LocalFile { .. } => StorageProtocol::LocalFile,
             Self::NfsFile { .. } => StorageProtocol::Nfs,
+            Self::NvmeTcp { .. } => StorageProtocol::NvmeTcp,
+            Self::Rbd { .. } => StorageProtocol::Rbd,
         }
     }
 }

@@ -1,3 +1,5 @@
+use std::net::SocketAddrV4;
+
 use serde::{Deserialize, Serialize};
 
 use crate::resource::{Resource, Scope};
@@ -19,7 +21,28 @@ impl Resource for StorageBackend {
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum StorageProviderSpecification {
     LocalDisk,
-    Nfs { server: String, export: String },
+    Nfs {
+        server: String,
+        export: String,
+    },
+    NvmeTcp {
+        management: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        management_user: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        management_password: Option<String>,
+        addresses: Vec<SocketAddrV4>,
+        pool: String,
+    },
+    CephRbd {
+        monitors: Vec<SocketAddrV4>,
+        pool: String,
+        user: String,
+        key: String,
+        management: String,
+        management_user: String,
+        management_password: String,
+    },
 }
 
 impl StorageProviderSpecification {
@@ -41,6 +64,24 @@ fn is_host(value: &str) -> bool {
         && value.chars().all(|character| character.is_ascii_alphanumeric() || ".-".contains(character))
 }
 
+fn is_management_url(value: &str) -> bool {
+    (value.starts_with("http://") || value.starts_with("https://"))
+        && value.len() <= 1024
+        && !value.chars().any(|character| character.is_control() || character.is_whitespace())
+}
+
+fn is_plain_word(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.chars().all(|character| character.is_ascii_alphanumeric() || "-_.".contains(character))
+}
+
+fn is_secret(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && !value.chars().any(|character| character.is_control() || character == ',')
+}
+
 fn is_export_path(value: &str) -> bool {
     value.starts_with('/')
         && value.len() <= 1024
@@ -51,13 +92,80 @@ fn is_export_path(value: &str) -> bool {
 impl Validate for StorageBackendSpecification {
     fn validate(&self) -> Result<(), ValidationError> {
         let mut error = ValidationError::new();
-        if let StorageProviderSpecification::Nfs { server, export } = &self.provider {
-            error.check(
-                is_host(server),
-                "specification.provider.server",
-                "must be a host name or IPv4 address",
-            );
-            error.check(is_export_path(export), "specification.provider.export", "must be an absolute path");
+        match &self.provider {
+            StorageProviderSpecification::LocalDisk => {}
+            StorageProviderSpecification::Nfs { server, export } => {
+                error.check(
+                    is_host(server),
+                    "specification.provider.server",
+                    "must be a host name or IPv4 address",
+                );
+                error.check(
+                    is_export_path(export),
+                    "specification.provider.export",
+                    "must be an absolute path",
+                );
+            }
+            StorageProviderSpecification::NvmeTcp {
+                management,
+                management_user,
+                management_password,
+                addresses,
+                pool,
+            } => {
+                error.check(
+                    is_management_url(management),
+                    "specification.provider.management",
+                    "must be an HTTP URL",
+                );
+                error.check(
+                    management_user.as_deref().is_none_or(is_plain_word)
+                        && management_password.as_deref().is_none_or(is_secret),
+                    "specification.provider.management_user",
+                    "the management credentials must be printable",
+                );
+                error.check(
+                    !addresses.is_empty(),
+                    "specification.provider.addresses",
+                    "must name at least one target address",
+                );
+                error.check(
+                    is_plain_word(pool),
+                    "specification.provider.pool",
+                    "must be a logical volume store name",
+                );
+            }
+            StorageProviderSpecification::CephRbd {
+                monitors,
+                pool,
+                user,
+                key,
+                management,
+                management_user,
+                management_password,
+            } => {
+                error.check(
+                    !monitors.is_empty(),
+                    "specification.provider.monitors",
+                    "must name at least one monitor",
+                );
+                error.check(is_plain_word(pool), "specification.provider.pool", "must be a pool name");
+                error.check(
+                    is_plain_word(user) && is_secret(key),
+                    "specification.provider.user",
+                    "must be a Ceph client and its key",
+                );
+                error.check(
+                    is_management_url(management),
+                    "specification.provider.management",
+                    "must be an HTTP URL",
+                );
+                error.check(
+                    is_plain_word(management_user) && is_secret(management_password),
+                    "specification.provider.management_user",
+                    "the management credentials must be printable",
+                );
+            }
         }
         error.into_result()
     }
@@ -103,6 +211,33 @@ mod tests {
                 export: export.to_owned(),
             },
         }
+    }
+
+    #[test]
+    fn block_backends_need_a_management_endpoint_and_targets() {
+        let nvme = |addresses: Vec<SocketAddrV4>| StorageBackendSpecification {
+            provider: StorageProviderSpecification::NvmeTcp {
+                management: String::from("http://10.216.0.41:9009"),
+                management_user: Some(String::from("amafu")),
+                management_password: Some(String::from("secret")),
+                addresses,
+                pool: String::from("amafu"),
+            },
+        };
+        assert_eq!(nvme(vec!["10.216.0.41:4420".parse().unwrap()]).validate(), Ok(()));
+        assert!(nvme(Vec::new()).validate().is_err());
+        let ceph = StorageBackendSpecification {
+            provider: StorageProviderSpecification::CephRbd {
+                monitors: vec!["10.216.0.42:6789".parse().unwrap()],
+                pool: String::from("amafu"),
+                user: String::from("amafu"),
+                key: String::from("AQBzZXJ2ZXItc2lkZS1rZXk="),
+                management: String::from("ftp://ceph"),
+                management_user: String::from("admin"),
+                management_password: String::from("secret"),
+            },
+        };
+        assert!(ceph.validate().is_err());
     }
 
     #[test]
