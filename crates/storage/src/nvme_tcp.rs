@@ -120,6 +120,10 @@ fn request_body(method: &str, parameters: &Value) -> Value {
     }
 }
 
+fn allows_host(subsystem: &Value, host: &str) -> bool {
+    subsystem["hosts"].as_array().into_iter().flatten().any(|entry| entry["nqn"].as_str() == Some(host))
+}
+
 fn refused_as_existing(refusal: &RpcRefusal, tolerated: &[i64]) -> bool {
     let message = refusal.message.to_ascii_lowercase();
     (tolerated.contains(&ALREADY_EXISTS) && message.contains("exist"))
@@ -199,12 +203,23 @@ impl StorageProvider for SpdkTarget {
         node: &NodeName,
     ) -> Result<AttachTarget, ActionError> {
         let qualified_name = volume_qualified_name(&volume.identifier);
-        self.call_tolerating(
-            "nvmf_subsystem_add_host",
-            json!({"nqn": qualified_name, "host": host_qualified_name(node)}),
-            &[ALREADY_EXISTS],
-        )
-        .await?;
+        let host = host_qualified_name(node);
+        let subsystem = self
+            .subsystems()
+            .await?
+            .into_iter()
+            .find(|subsystem| subsystem["nqn"].as_str() == Some(&qualified_name))
+            .ok_or_else(|| {
+                ActionError::retryable(format!("the target has no subsystem {qualified_name} yet"))
+            })?;
+        if !allows_host(&subsystem, &host) {
+            self.call_tolerating(
+                "nvmf_subsystem_add_host",
+                json!({"nqn": qualified_name, "host": host}),
+                &[ALREADY_EXISTS],
+            )
+            .await?;
+        }
         Ok(AttachTarget::NvmeTcp { qualified_name, addresses: self.addresses.clone() })
     }
 
@@ -397,6 +412,13 @@ mod tests {
     fn methods_without_parameters_are_called_without_a_parameter_object() {
         assert_eq!(request_body("nvmf_get_subsystems", &json!({})).get("params"), None);
         assert_eq!(request_body("nvmf_delete_subsystem", &json!({"nqn": "x"}))["params"]["nqn"], "x");
+    }
+
+    #[test]
+    fn a_host_already_allowed_is_recognized() {
+        let subsystem = json!({"nqn": "x", "hosts": [{"nqn": "nqn.2026-11.io.amafu:node:node-0"}]});
+        assert!(allows_host(&subsystem, "nqn.2026-11.io.amafu:node:node-0"));
+        assert!(!allows_host(&subsystem, "nqn.2026-11.io.amafu:node:node-1"));
     }
 
     #[test]
