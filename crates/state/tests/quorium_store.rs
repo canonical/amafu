@@ -3,8 +3,8 @@ use std::time::Duration;
 use amafu_domain::access::Role;
 use amafu_domain::{ObjectName, ObjectReference, ProjectName};
 use amafu_interfaces::contract::store::store_contract;
-use amafu_interfaces::{AuditEntry, AuditLog, AuditOutcome, Store, WatchEvent};
-use amafu_state::{QuoriumAuditLog, QuoriumStore, StateError, start_single_voter};
+use amafu_interfaces::{AuditEntry, AuditLog, AuditOutcome, Leases, Store, WatchEvent};
+use amafu_state::{QuoriumAuditLog, QuoriumLeases, QuoriumStore, StateError, start_single_voter};
 use futures::StreamExt;
 use quorium::Quorium;
 use serde_json::json;
@@ -81,6 +81,23 @@ async fn audit_entries_can_be_found_by_request() {
     assert_eq!(
         recent.iter().map(|entry| entry.request_id).collect::<Vec<_>>(),
         vec![request_ids[299], request_ids[298], request_ids[297]]
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lease_is_granted_with_a_fencing_token() {
+    let directory = tempfile::tempdir().unwrap();
+    let node = single_voter(&directory).await.unwrap();
+    let leases = QuoriumLeases::new(node.clone());
+    let held =
+        tokio::time::timeout(Duration::from_secs(10), leases.acquire("scheduler")).await.unwrap().unwrap();
+    assert_eq!(held.fence.name, "scheduler");
+    assert!(held.fence.token > 0);
+    let (_, lost) = held.into_parts();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), lost).await.is_err(),
+        "a held lease is not lost"
     );
     node.shutdown().await;
 }
