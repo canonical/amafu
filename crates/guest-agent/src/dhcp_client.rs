@@ -123,6 +123,7 @@ pub async fn configure(interface: Option<&str>) -> anyhow::Result<Configured> {
         interface: Some(interface.clone()),
         address: StaticAddress { address: acknowledgement.your_address, prefix_length },
         gateway: acknowledgement.lease.router,
+        mtu: None,
     })
     .await?;
     Ok(Configured { interface, address: acknowledgement.your_address, lease: acknowledgement.lease })

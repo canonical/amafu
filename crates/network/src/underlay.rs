@@ -61,6 +61,8 @@ pub struct UnderlayConfiguration {
     pub address: StaticAddress,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateway: Option<Ipv4Addr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtu: Option<u32>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -141,6 +143,7 @@ pub async fn bring_up(interface: Option<&str>) -> Result<String, UnderlayError> 
         mac: None,
         address: StaticAddress { address: Ipv4Addr::UNSPECIFIED, prefix_length: 0 },
         gateway: None,
+        mtu: None,
     });
     bring_up_underlay(configuration.as_ref()).await
 }
@@ -183,6 +186,9 @@ async fn apply(handle: &Handle, configuration: &UnderlayConfiguration) -> Result
     let interface = choose_configured(&all_links, configuration)?;
     let index = interface.header.index;
     let name = link_name(interface).unwrap_or_default().to_owned();
+    if let Some(mtu) = configuration.mtu {
+        handle.link().set(LinkUnspec::new_with_index(index).mtu(mtu).build()).execute().await?;
+    }
     bring_up_index(handle, index).await?;
     let address = configuration.address;
     ignore_existing(
