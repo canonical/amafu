@@ -108,7 +108,7 @@ amafu image create busybox --container docker.io/library/busybox@sha256:a7dbc319
 amafu container run box --image busybox --network private --env GREETING=hello --wait -- sh -c 'echo $GREETING; sleep 3600'
 
 amafu storage-backend create local --local-disk
-amafu image create noble --disk-url https://cloud-images.ubuntu.com/minimal/releases/noble/release/ubuntu-24.04-minimal-cloudimg-amd64.img \
+amafu image create noble --disk-url https://cloud-images.ubuntu.com/minimal/releases/noble/release-20261027/ubuntu-24.04-minimal-cloudimg-amd64.img \
     --sha256 3839f148c5a3b4a736e7dbb0af75594743fa5ebee2a202424ba1a32e5d3b5d2c
 amafu volume create noble-root --size 4 --backend local --from-image noble
 amafu vm create ubuntu --from-disk --volume noble-root --memory 1024 --network private --user-data cloud.yaml --wait
