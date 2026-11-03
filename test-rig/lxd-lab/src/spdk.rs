@@ -36,7 +36,7 @@ write_files:
       set -euxo pipefail
       export DEBIAN_FRONTEND=noninteractive PIP_BREAK_SYSTEM_PACKAGES=1
       apt-get update
-      apt-get install -y git
+      apt-get install -y git meson ninja-build python3-pyelftools
       git clone --depth 1 --branch {SPDK_VERSION} https://github.com/spdk/spdk /opt/spdk
       cd /opt/spdk
       git submodule update --init --depth 1
