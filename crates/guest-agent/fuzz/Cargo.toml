@@ -1,0 +1,22 @@
+[package]
+name = "amafu-guest-agent-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+amafu-guest-agent = { path = ".." }
+libfuzzer-sys = "0.4.13"
+
+[[bin]]
+name = "agent_messages"
+path = "fuzz_targets/agent_messages.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
