@@ -63,7 +63,7 @@ impl SpdkTarget {
     }
 
     async fn call(&self, method: &str, parameters: Value) -> Result<Result<Value, RpcRefusal>, ActionError> {
-        let body = request_body(method, parameters);
+        let body = request_body(method, &parameters);
         let mut request = self.http.post(&self.management).json(&body);
         if let Some((user, password)) = &self.credentials {
             request = request.basic_auth(user, Some(password));
@@ -111,7 +111,7 @@ impl SpdkTarget {
     }
 }
 
-fn request_body(method: &str, parameters: Value) -> Value {
+fn request_body(method: &str, parameters: &Value) -> Value {
     let has_parameters = parameters.as_object().is_none_or(|fields| !fields.is_empty());
     if has_parameters {
         json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": parameters})
@@ -395,8 +395,8 @@ mod tests {
 
     #[test]
     fn methods_without_parameters_are_called_without_a_parameter_object() {
-        assert_eq!(request_body("nvmf_get_subsystems", json!({})).get("params"), None);
-        assert_eq!(request_body("nvmf_delete_subsystem", json!({"nqn": "x"}))["params"]["nqn"], "x");
+        assert_eq!(request_body("nvmf_get_subsystems", &json!({})).get("params"), None);
+        assert_eq!(request_body("nvmf_delete_subsystem", &json!({"nqn": "x"}))["params"]["nqn"], "x");
     }
 
     #[test]
