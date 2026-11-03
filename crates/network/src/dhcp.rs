@@ -12,6 +12,7 @@ const ETHERNET: u8 = 1;
 const ETHERNET_ADDRESS_LENGTH: u8 = 6;
 const LEASE_SECONDS: u32 = 3600;
 const MTU: u16 = 1500;
+const OVERLAY_MTU: u16 = 1450;
 
 const OPTION_PAD: u8 = 0;
 const OPTION_SUBNET_MASK: u8 = 1;
@@ -264,7 +265,10 @@ pub fn answer(request: &DhcpMessage, segment: &SegmentKey, state: &NodeNetworkSt
         (OPTION_DNS_SERVERS, gateway.octets().to_vec()),
         (OPTION_DOMAIN_NAME, network.domain.as_bytes().to_vec()),
         (OPTION_HOSTNAME, port.hostname.as_bytes().to_vec()),
-        (OPTION_INTERFACE_MTU, MTU.to_be_bytes().to_vec()),
+        (
+            OPTION_INTERFACE_MTU,
+            if network.segment_id.is_some() { OVERLAY_MTU } else { MTU }.to_be_bytes().to_vec(),
+        ),
     ];
     let with_lease = |mut options: Vec<(u8, Vec<u8>)>| {
         options.push((OPTION_LEASE_TIME, LEASE_SECONDS.to_be_bytes().to_vec()));

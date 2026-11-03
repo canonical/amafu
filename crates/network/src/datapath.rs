@@ -12,8 +12,11 @@ use rtnetlink::packet_route::link::{LinkAttribute, LinkMessage};
 use rtnetlink::{Handle, LinkBridge, LinkUnspec, new_connection};
 use tokio::io::AsyncWriteExt;
 
+use crate::announcement::announce;
+use crate::floating::converge_floating_addresses;
 use crate::metadata::METADATA_ADDRESS;
 use crate::nftables::compile_ruleset;
+use crate::overlay::{TUNNEL_PREFIX, ensure_tunnels, wanted_tunnel_names};
 
 const BRIDGE_PREFIX: &str = "amb";
 const TAP_PREFIX: &str = "amt";
@@ -135,13 +138,13 @@ impl KernelDatapath {
         let mut wanted: Vec<String> =
             desired.segments.iter().map(|segment| bridge_name(&segment.key)).collect();
         wanted.extend(desired.ports.iter().map(|port| port.key.tap_name()));
+        wanted.extend(wanted_tunnel_names(desired));
         let existing = links(handle).await?;
-        let mut stale: Vec<(&String, &u32)> = existing
-            .iter()
-            .filter(|(name, _)| {
-                (name.starts_with(BRIDGE_PREFIX) || name.starts_with(TAP_PREFIX)) && !wanted.contains(name)
-            })
-            .collect();
+        let owned = |name: &str| {
+            [BRIDGE_PREFIX, TAP_PREFIX, TUNNEL_PREFIX].iter().any(|prefix| name.starts_with(prefix))
+        };
+        let mut stale: Vec<(&String, &u32)> =
+            existing.iter().filter(|(name, _)| owned(name) && !wanted.contains(name)).collect();
         stale.sort_by_key(|(name, _)| !name.starts_with(TAP_PREFIX));
         for (name, index) in stale {
             tracing::info!(link = %name, "removing a link that is no longer wanted");
@@ -151,7 +154,7 @@ impl KernelDatapath {
     }
 
     async fn apply_ruleset(&self, desired: &NodeNetworkState) -> Result<(), ActionError> {
-        let ruleset = compile_ruleset(desired, &self.underlay);
+        let ruleset = compile_ruleset(desired);
         let mut nft = tokio::process::Command::from(self.nft.command())
             .args(["--file", "-"])
             .stdin(Stdio::piped())
@@ -194,14 +197,27 @@ impl Datapath for KernelDatapath {
         let (connection, handle, _) = new_connection().map_err(netlink_failure)?;
         let connection_task = tokio::spawn(connection);
         let outcome = async {
-            self.ensure_bridges(&handle, desired).await?;
+            let mut existing = self.ensure_bridges(&handle, desired).await?;
+            ensure_tunnels(&handle, desired, &self.underlay, &mut existing, links).await?;
             self.ensure_taps(&handle, desired).await?;
+            let underlay_index = *existing.get(&self.underlay).ok_or_else(|| {
+                ActionError::retryable(format!("the underlay {} is missing", self.underlay))
+            })?;
+            let announced = converge_floating_addresses(&handle, underlay_index, desired).await?;
             self.apply_ruleset(desired).await?;
-            self.remove_unwanted(&handle, desired).await
+            self.remove_unwanted(&handle, desired).await?;
+            Ok::<_, ActionError>(announced)
         }
         .await;
         connection_task.abort();
-        outcome?;
+        let announced = outcome?;
+        if !announced.is_empty() {
+            let underlay = self.underlay.clone();
+            let announcement = tokio::task::spawn_blocking(move || announce(&underlay, &announced)).await;
+            if let Ok(Err(error)) = announcement {
+                tracing::warn!(%error, "floating addresses could not be announced");
+            }
+        }
         self.remember(desired);
         self.current().await
     }
