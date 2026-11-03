@@ -1,6 +1,6 @@
 # 0002: Store state on a single-voter Quorium node behind the Store trait
 
-Status: accepted for milestone 1, to be revisited in milestone 3
+Status: accepted for milestone 1; three voters and subscriptions replace the single voter in milestone 3 (0011)
 
 ## Context
 

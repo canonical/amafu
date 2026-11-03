@@ -10,16 +10,19 @@ identity is bound to one project.
 
 ## Decision
 
-| Role | Project-scoped kinds in its own project | in another project | Node | StorageBackend |
-|---|---|---|---|---|
-| admin | every verb | every verb | every verb | every verb |
-| operator | every verb | nothing | get, list, watch, update | every verb |
-| member | every verb | nothing | nothing | get, list, watch |
-| viewer | get, list, watch | nothing | nothing | get, list, watch |
+| Role | Project-scoped kinds in its own project | NetworkEndpoint in its own project | in another project | Node | StorageBackend, ExternalNetwork | CertificateRevocation |
+|---|---|---|---|---|---|---|
+| admin | every verb | every verb | every verb | every verb | every verb | every verb |
+| operator | every verb | get, list, watch | nothing | get, list, watch, update | every verb | nothing |
+| member | every verb | get, list, watch | nothing | nothing | get, list, watch | nothing |
+| viewer | get, list, watch | get, list, watch | nothing | nothing | get, list, watch | nothing |
 
-The project-scoped kinds are Vm, Image, Volume, Network and SecurityGroup. Cluster-wide kinds carry a policy:
-nodes are *managed by nodes* (they register themselves), storage backends are *shared infrastructure* that
-operators manage and tenants may see, so a member can name a backend when creating a volume.
+The project-scoped kinds users manage are Vm, Image, Volume, Network, SecurityGroup and FloatingIp. Network
+endpoints are project-scoped but *managed by nodes*: the hosting node publishes them and users may only read them.
+Cluster-wide kinds carry a policy: nodes are *managed by nodes* (they register themselves), storage backends and
+external networks are *shared infrastructure* that operators manage and tenants may see, so a member can name them,
+and certificate revocations are *admin only*. Nodes themselves are authorized by their share of the state, not by
+these roles (0011).
 
 - Listing a kind across every project (`?all-projects=true`) is reserved to admins.
 - Operators manage the infrastructure (cordoning nodes) and their own project's workloads. They cannot create or

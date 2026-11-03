@@ -1,6 +1,6 @@
 # 0005: Stand-ins, and what replaces them
 
-Status: accepted for milestones 1 and 2
+Status: accepted for milestones 1 to 3
 
 Milestone 1 builds every layer thinly. Where the plan's full design belongs to a later milestone, milestone 1 uses
 a simpler stand-in behind the same interface, so that replacing it does not ripple through the other crates.
@@ -23,6 +23,19 @@ Milestone 2 adds:
 | The image controller runs on the core node, caches images there and reports `cached_on` as that node | The lab has one node | An image controller on every compute node, each adding itself to `cached_on`, with deletion waiting for every node (milestone 3) |
 | Networks, local services and `local-disk` volumes span one node | Overlay networking and volume migration need several nodes | VXLAN overlays between nodes and volume moves (milestone 3) |
 | The lab's NFS server is an Ubuntu VM in the lab project, exporting with `no_root_squash` | It is the smallest real NFS server | Any NFS server the operator provides |
+
+Milestone 3 replaces the placement controller (0012), the single voter (0011), the image controller on the core
+node and single-node networks and local volumes (0013, 0014). It adds:
+
+| Stand-in | Why | Replaced by |
+|---|---|---|
+| Every role still runs in one `amafu-node` process | Agreed to defer: milestone 3 is large, and the split belongs with the failure work | One process per role, supervised by PID 1 (milestone 4) |
+| Nodes report heartbeats and a `node-health` singleton marks silent nodes not ready | Placement only needs to avoid lost nodes until restarts exist | Node leases renewed through the subscription, whose epoch is the node's fencing token (milestone 4) |
+| The rig issues node certificates and writes them into the node configuration | There is no installer or cluster authority yet | Certificates issued at install, bound to the TPM and rotated by the cluster (milestone 5) |
+| Storage backend credentials are stored in the backend's specification | There is no secret store yet | Secrets stored encrypted and handed out by reference |
+| Block volumes start empty | Cloning an image into a block device needs a qcow2 reader on the node | Image population for NVMe/TCP and RBD volumes |
+| One MicroCeph VM with one replica, no MAAS lab, no FRR router | The lab server has 24 GiB of memory | Three MicroCeph VMs, the MAAS lab with bonded underlays and BGP for floating IPs, on a larger lab |
+| The rig drives the lab switch and storage targets through LXD exec | Fewer moving parts than an agent | Keep, unless faults need to be faster than an exec call |
 
 None of these stand-ins weakens a guarantee the plan says must not be simplified: generations on every object,
 audit of every request including denials, at most one running instance of each VM, and signed images. Each of
