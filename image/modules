@@ -14,4 +14,6 @@ vxlan
 nvme-tcp
 cmac
 camellia_generic
+authenc
+krb5enc
 rbd
