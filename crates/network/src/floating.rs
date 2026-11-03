@@ -26,6 +26,27 @@ pub fn wanted_floating_addresses(desired: &NodeNetworkState) -> BTreeSet<Ipv4Add
     desired.floating_addresses.iter().map(|floating| floating.address).collect()
 }
 
+pub async fn served_floating_addresses(
+    handle: &Handle,
+    underlay_index: u32,
+    underlay_address: Option<Ipv4Addr>,
+) -> Result<Vec<Ipv4Addr>, ActionError> {
+    let assigned: Vec<AddressMessage> = handle
+        .address()
+        .get()
+        .set_link_index_filter(underlay_index)
+        .execute()
+        .try_collect()
+        .await
+        .map_err(netlink_failure)?;
+    Ok(assigned
+        .iter()
+        .filter(|message| message.header.prefix_len == HOST_PREFIX_LENGTH)
+        .filter_map(ipv4_of)
+        .filter(|address| Some(*address) != underlay_address)
+        .collect())
+}
+
 pub async fn converge_floating_addresses(
     handle: &Handle,
     underlay_index: u32,

@@ -13,10 +13,10 @@ use rtnetlink::{Handle, LinkBridge, LinkUnspec, new_connection};
 use tokio::io::AsyncWriteExt;
 
 use crate::announcement::announce;
-use crate::floating::converge_floating_addresses;
+use crate::floating::{converge_floating_addresses, served_floating_addresses};
 use crate::metadata::METADATA_ADDRESS;
 use crate::nftables::compile_ruleset;
-use crate::overlay::{TUNNEL_PREFIX, ensure_tunnels, wanted_tunnel_names};
+use crate::overlay::{TUNNEL_PREFIX, ensure_tunnels, programmed_remotes, wanted_tunnel_names};
 
 const BRIDGE_PREFIX: &str = "amb";
 const TAP_PREFIX: &str = "amt";
@@ -27,6 +27,22 @@ const FORWARDING: &str = "/proc/sys/net/ipv4/ip_forward";
 struct KnownNames {
     segments: BTreeMap<String, SegmentKey>,
     ports: BTreeMap<String, PortKey>,
+    tunnels: BTreeMap<String, SegmentKey>,
+    underlay_address: Option<std::net::Ipv4Addr>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InspectedRemote {
+    pub segment: SegmentKey,
+    pub address: std::net::Ipv4Addr,
+    pub mac: amafu_domain::MacAddress,
+    pub node_address: std::net::Ipv4Addr,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DatapathInspection {
+    pub remotes: Vec<InspectedRemote>,
+    pub floating_addresses: Vec<std::net::Ipv4Addr>,
 }
 
 pub struct KernelDatapath {
@@ -185,6 +201,49 @@ impl KernelDatapath {
         known.segments =
             desired.segments.iter().map(|segment| (bridge_name(&segment.key), segment.key.clone())).collect();
         known.ports = desired.ports.iter().map(|port| (port.key.tap_name(), port.key)).collect();
+        known.tunnels = desired
+            .segments
+            .iter()
+            .filter_map(|segment| {
+                let segment_id = segment.segment_id?;
+                Some((amafu_interfaces::network::tunnel_name(&segment.key, segment_id), segment.key.clone()))
+            })
+            .collect();
+        known.underlay_address = desired.underlay_address;
+    }
+
+    pub async fn inspect(&self) -> Result<DatapathInspection, ActionError> {
+        let (connection, handle, _) = new_connection().map_err(netlink_failure)?;
+        let connection_task = tokio::spawn(connection);
+        let outcome = async {
+            let existing = links(&handle).await?;
+            let remotes = programmed_remotes(&handle, &existing).await?;
+            let floating_addresses = match existing.get(&self.underlay) {
+                Some(index) => {
+                    let underlay_address =
+                        self.known.lock().unwrap_or_else(PoisonError::into_inner).underlay_address;
+                    served_floating_addresses(&handle, *index, underlay_address).await?
+                }
+                None => Vec::new(),
+            };
+            Ok::<_, ActionError>((remotes, floating_addresses))
+        }
+        .await;
+        connection_task.abort();
+        let (remotes, floating_addresses) = outcome?;
+        let known = self.known.lock().unwrap_or_else(PoisonError::into_inner);
+        let remotes = remotes
+            .into_iter()
+            .filter_map(|remote| {
+                Some(InspectedRemote {
+                    segment: known.tunnels.get(&remote.tunnel)?.clone(),
+                    address: remote.address,
+                    mac: remote.mac,
+                    node_address: remote.node_address,
+                })
+            })
+            .collect();
+        Ok(DatapathInspection { remotes, floating_addresses })
     }
 }
 

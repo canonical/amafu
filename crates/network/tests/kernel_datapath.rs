@@ -68,6 +68,7 @@ fn overlay_state() -> Result<NodeNetworkState, Box<dyn std::error::Error>> {
 #[ignore = "needs root, /dev/net/tun and the nft binary"]
 async fn tunnels_and_floating_addresses_are_programmed_and_removed() {
     let underlay = "testunder0";
+    let _ = run("ip", &["link", "del", underlay]);
     run("ip", &["link", "add", underlay, "type", "dummy"]).unwrap();
     run("ip", &["address", "add", "192.0.2.10/24", "dev", underlay]).unwrap();
     run("ip", &["link", "set", underlay, "up"]).unwrap();
@@ -90,6 +91,11 @@ async fn tunnels_and_floating_addresses_are_programmed_and_removed() {
         assert!(addresses.contains("198.51.100.7/32"), "{addresses}");
         let ruleset = run("/usr/sbin/nft", &["list", "table", "inet", "amafu"])?;
         assert!(ruleset.contains("dnat ip to 10.250.0.2"), "{ruleset}");
+        let inspection = datapath.inspect().await?;
+        assert_eq!(inspection.floating_addresses, vec!["198.51.100.7".parse::<std::net::Ipv4Addr>()?]);
+        assert_eq!(inspection.remotes.len(), 1);
+        assert_eq!(inspection.remotes[0].node_address, "192.0.2.11".parse::<std::net::Ipv4Addr>()?);
+        assert_eq!(inspection.remotes[0].segment, state.segments[0].key);
         let mut moved = state.clone();
         moved.remote_endpoints[0].node_address = "192.0.2.12".parse()?;
         moved.floating_addresses.clear();

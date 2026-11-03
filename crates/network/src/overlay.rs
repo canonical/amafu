@@ -111,6 +111,9 @@ fn link_layer_address(message: &NeighbourMessage) -> Option<MacAddress> {
 fn destination(message: &NeighbourMessage) -> Option<Ipv4Addr> {
     message.attributes.iter().find_map(|attribute| match attribute {
         NeighbourAttribute::Destination(NeighbourAddress::Inet(address)) => Some(*address),
+        NeighbourAttribute::Destination(NeighbourAddress::Other(bytes)) => {
+            <[u8; 4]>::try_from(bytes.as_slice()).ok().map(Ipv4Addr::from)
+        }
         _ => None,
     })
 }
@@ -182,6 +185,42 @@ async fn converge_tunnel_entries(handle: &Handle, index: u32, tunnel: &Tunnel) -
             .map_err(netlink_failure)?;
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProgrammedRemote {
+    pub tunnel: String,
+    pub address: Ipv4Addr,
+    pub mac: MacAddress,
+    pub node_address: Ipv4Addr,
+}
+
+pub async fn programmed_remotes(
+    handle: &Handle,
+    tunnels: &BTreeMap<String, u32>,
+) -> Result<Vec<ProgrammedRemote>, ActionError> {
+    let mut remotes = Vec::new();
+    for (tunnel, index) in tunnels.iter().filter(|(name, _)| name.starts_with(TUNNEL_PREFIX)) {
+        let destinations: BTreeMap<MacAddress, Ipv4Addr> = entries_of(handle, *index, AddressFamily::Bridge)
+            .await?
+            .iter()
+            .filter_map(|entry| Some((link_layer_address(entry)?, destination(entry)?)))
+            .collect();
+        for entry in entries_of(handle, *index, AddressFamily::Inet).await? {
+            let (Some(address), Some(mac)) = (destination(&entry), link_layer_address(&entry)) else {
+                continue;
+            };
+            if let Some(node_address) = destinations.get(&mac) {
+                remotes.push(ProgrammedRemote {
+                    tunnel: tunnel.clone(),
+                    address,
+                    mac,
+                    node_address: *node_address,
+                });
+            }
+        }
+    }
+    Ok(remotes)
 }
 
 #[cfg(test)]
