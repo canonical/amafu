@@ -63,7 +63,11 @@ impl StorageProvider for FakeProvider {
     async fn create_volume(&self, request: &VolumeRequest) -> Result<ProvisionedVolume, ActionError> {
         self.check().await?;
         lock(&self.backends.volumes).entry(self.key.clone()).or_default().insert(request.volume_id);
-        Ok(ProvisionedVolume { identifier: request.volume_id.to_string(), size_bytes: request.size_bytes })
+        Ok(ProvisionedVolume {
+            identifier: request.volume_id.to_string(),
+            size_bytes: request.size_bytes,
+            node: None,
+        })
     }
 
     async fn delete_volume(&self, volume: &ProvisionedVolume) -> Result<(), ActionError> {

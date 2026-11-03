@@ -38,7 +38,7 @@ pub fn create_volume_file(
         let backing = backing.as_ref().map(|(path, format)| Backing { path, format: *format });
         qcow2::create(&path, request.size_bytes, backing).map_err(io_failure("writing the volume"))?;
     }
-    Ok(ProvisionedVolume { identifier, size_bytes: request.size_bytes })
+    Ok(ProvisionedVolume { identifier, size_bytes: request.size_bytes, node: None })
 }
 
 pub fn delete_volume_file(directory: &Path, volume: &ProvisionedVolume) -> Result<(), ActionError> {
@@ -164,14 +164,15 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let provider =
             LocalDiskProvider::new(NodeName::new("node-0").unwrap(), directory.path().to_path_buf());
-        let volume = ProvisionedVolume { identifier: String::from("abc"), size_bytes: 1 };
+        let volume = ProvisionedVolume { identifier: String::from("abc"), size_bytes: 1, node: None };
         assert!(provider.export_to_node(&volume, &NodeName::new("node-1").unwrap()).await.is_err());
     }
 
     #[test]
     fn deleting_refuses_anything_but_an_identifier() {
         let directory = tempfile::tempdir().unwrap();
-        let sneaky = ProvisionedVolume { identifier: String::from("../../etc/passwd"), size_bytes: 1 };
+        let sneaky =
+            ProvisionedVolume { identifier: String::from("../../etc/passwd"), size_bytes: 1, node: None };
         assert!(matches!(delete_volume_file(directory.path(), &sneaky), Err(ActionError::Fatal(_))));
     }
 }

@@ -367,7 +367,11 @@ mod tests {
             },
             status: VolumeStatus {
                 phase: VolumePhase::Attached,
-                provisioned: Some(ProvisionedVolume { identifier: String::from("data"), size_bytes: 1 }),
+                provisioned: Some(ProvisionedVolume {
+                    identifier: String::from("data"),
+                    size_bytes: 1,
+                    node: None,
+                }),
                 attached_to: Some(name(vm_name)),
                 message: None,
             },

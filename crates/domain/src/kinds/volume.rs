@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::name::ObjectName;
+use crate::name::{NodeName, ObjectName};
 use crate::resource::{Resource, Scope};
 use crate::validation::{Validate, ValidationError};
 
@@ -57,6 +57,8 @@ impl Validate for VolumeSpecification {
 pub struct ProvisionedVolume {
     pub identifier: String,
     pub size_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node: Option<NodeName>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

@@ -282,7 +282,11 @@ mod tests {
     fn provisioned(mut volume: Object<Volume>) -> Object<Volume> {
         volume.status = VolumeStatus {
             phase: VolumePhase::Available,
-            provisioned: Some(ProvisionedVolume { identifier: String::from("data"), size_bytes: 1 }),
+            provisioned: Some(ProvisionedVolume {
+                identifier: String::from("data"),
+                size_bytes: 1,
+                node: None,
+            }),
             attached_to: None,
             message: None,
         };
