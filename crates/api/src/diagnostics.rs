@@ -12,6 +12,7 @@ pub const AUDIT_PATH: &str = "/diagnostics/audit";
 pub const NETWORK_PATH: &str = "/diagnostics/network";
 pub const ATTACHMENTS_PATH: &str = "/diagnostics/attachments";
 pub const SANDBOX_PATH: &str = "/diagnostics/sandbox";
+pub const KERNEL_LOG_PATH: &str = "/diagnostics/kernel-log";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeInstance {

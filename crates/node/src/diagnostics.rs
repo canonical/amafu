@@ -56,8 +56,8 @@ mod test_channel {
 
     use amafu_api::diagnostics::{
         ATTACHMENTS_PATH, AUDIT_PATH, BOOT_PATH, BootFacts, ContractOutcome, HYPERVISOR_CONTRACT_PATH,
-        INSTANCES_PATH, NETWORK_PATH, NodeAttachment, NodeInstance, NodeNetworkFacts, NodePort, SANDBOX_PATH,
-        SandboxCheck,
+        INSTANCES_PATH, KERNEL_LOG_PATH, NETWORK_PATH, NodeAttachment, NodeInstance, NodeNetworkFacts,
+        NodePort, SANDBOX_PATH, SandboxCheck,
     };
     use amafu_domain::{ObjectId, ObjectName};
     use amafu_hypervisor::{Attempt, CloudHypervisor, HybridVsockAgents, RuntimeDirectory, VmProcessPlan};
@@ -82,13 +82,25 @@ mod test_channel {
     const PROCESS_LOG_FILE: &str = "vm-process.log";
     const PLAN_FILE: &str = "plan.json";
     const TAIL_BYTES: usize = 2048;
+    const HEAD_BYTES: usize = 16 * 1024;
     const NODE_CONFIGURATION: &str = "/run/amafu/boot/amafu/node-configuration.yaml";
     const PROBE_MEMORY_MEBIBYTES: usize = 1024;
+    const KERNEL_LOG_DEVICE: &str = "/dev/kmsg";
+    const KERNEL_RECORD_BYTES: usize = 8192;
 
     fn tail(path: &Path) -> String {
         let contents = std::fs::read(path).unwrap_or_default();
         let start = contents.len().saturating_sub(TAIL_BYTES);
         String::from_utf8_lossy(&contents[start..]).into_owned()
+    }
+
+    fn head_and_tail(path: &Path) -> String {
+        let contents = std::fs::read(path).unwrap_or_default();
+        if contents.len() <= HEAD_BYTES + TAIL_BYTES {
+            return String::from_utf8_lossy(&contents).into_owned();
+        }
+        let head = String::from_utf8_lossy(&contents[..contents.len().min(HEAD_BYTES)]);
+        format!("{head}\n...\n{}", tail(path))
     }
 
     #[derive(Clone)]
@@ -100,7 +112,7 @@ mod test_channel {
         storage: Arc<BuiltInStorage>,
         audit: Arc<dyn AuditLog>,
         runtime: RuntimeDirectory,
-        nft: PathBuf,
+        nft: amafu_interfaces::ExternalTool,
         data: PathBuf,
     }
 
@@ -115,6 +127,7 @@ mod test_channel {
             .route(NETWORK_PATH, get(network))
             .route(ATTACHMENTS_PATH, get(attachments))
             .route(SANDBOX_PATH, post(sandbox))
+            .route(KERNEL_LOG_PATH, get(kernel_log))
             .route(HYPERVISOR_CONTRACT_PATH, post(contract))
             .route(&format!("{AUDIT_PATH}/{{request_id}}"), get(audit_entry))
             .with_state(ChannelState {
@@ -127,7 +140,7 @@ mod test_channel {
                 runtime: RuntimeDirectory::new(
                     configuration.directories.runtime.join(crate::roles::VM_DIRECTORY),
                 ),
-                nft: configuration.compute.nft.clone(),
+                nft: configuration.compute.nft_tool(),
                 data: configuration.directories.data.clone(),
             })
     }
@@ -163,7 +176,7 @@ mod test_channel {
             vm_id,
             state: instance_state,
             console_tail: tail(&directory.join(SERIAL_LOG_FILE)),
-            process_log_tail: tail(&directory.join(PROCESS_LOG_FILE)),
+            process_log_tail: head_and_tail(&directory.join(PROCESS_LOG_FILE)),
             disks: launch
                 .iter()
                 .flat_map(|launch| launch.disks.iter().map(|disk| disk.path.clone()))
@@ -201,7 +214,7 @@ mod test_channel {
                 tap: port.key.tap_name(),
             })
             .collect();
-        let ruleset = tokio::process::Command::new(&state.nft)
+        let ruleset = tokio::process::Command::from(state.nft.command())
             .args(["list", "ruleset"])
             .output()
             .await
@@ -255,6 +268,31 @@ mod test_channel {
             checks.push(check);
         }
         Json(checks)
+    }
+
+    fn read_kernel_log() -> String {
+        use std::io::Read;
+        use std::os::unix::fs::OpenOptionsExt;
+        let Ok(mut file) = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(rustix::fs::OFlags::NONBLOCK.bits().cast_signed())
+            .open(KERNEL_LOG_DEVICE)
+        else {
+            return String::new();
+        };
+        let mut log = String::new();
+        let mut record = vec![0_u8; KERNEL_RECORD_BYTES];
+        while let Ok(read) = file.read(&mut record) {
+            if read == 0 {
+                break;
+            }
+            log.push_str(&String::from_utf8_lossy(&record[..read]));
+        }
+        log
+    }
+
+    async fn kernel_log() -> String {
+        tokio::task::spawn_blocking(read_kernel_log).await.unwrap_or_default()
     }
 
     async fn boot() -> Json<BootFacts> {
