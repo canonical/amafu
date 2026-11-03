@@ -15,6 +15,12 @@ pub struct ProviderChoice {
     local_disk: bool,
     #[arg(long, value_name = "SERVER:EXPORT", help = "Keep volumes on an NFS export")]
     nfs: Option<String>,
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Read the provider from a YAML file, for NVMe/TCP targets and Ceph clusters"
+    )]
+    provider_file: Option<std::path::PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -36,12 +42,21 @@ impl Tabulated for StorageBackend {
         let provider = match &backend.specification.provider {
             StorageProviderSpecification::LocalDisk => String::from("local disk"),
             StorageProviderSpecification::Nfs { server, export } => format!("nfs {server}:{export}"),
+            StorageProviderSpecification::NvmeTcp { management, pool, .. } => {
+                format!("nvme-tcp {management} {pool}")
+            }
+            StorageProviderSpecification::CephRbd { management, pool, .. } => {
+                format!("ceph-rbd {management} {pool}")
+            }
         };
         vec![backend.metadata.name.to_string(), kebab_name(backend.status.phase), provider]
     }
 }
 
 fn provider(choice: ProviderChoice) -> anyhow::Result<StorageProviderSpecification> {
+    if let Some(path) = choice.provider_file {
+        return Ok(serde_yaml_ng::from_str(&std::fs::read_to_string(path)?)?);
+    }
     match choice.nfs {
         Some(location) => {
             let (server, export) = location
