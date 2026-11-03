@@ -16,7 +16,8 @@ use amafu_domain::{NodeName, ProjectName};
 use amafu_interfaces::Clock;
 use amafu_scenario::{
     CertificateAuthority, Cluster, ClusterObservation, Fault, FaultHandle, Level, NfsExport,
-    ObservedAttachment, ObservedInstance, ObservedPort, ScenarioError, TlsIdentity,
+    ObservedAttachment, ObservedFloatingAddress, ObservedInstance, ObservedPort, ObservedRemoteEndpoint,
+    ScenarioError, TlsIdentity,
 };
 use futures::future::BoxFuture;
 use http::Method;
@@ -130,6 +131,21 @@ impl VirtualLab {
             vm_id: port.vm_id,
             segment: port.segment,
             address: port.address,
+        }));
+        observation.remote_endpoints.extend(network.remote_endpoints.into_iter().map(|remote| {
+            ObservedRemoteEndpoint {
+                node: name.clone(),
+                segment: remote.segment,
+                address: remote.address,
+                node_address: remote.node_address,
+            }
+        }));
+        observation.floating_addresses.extend(network.floating_addresses.into_iter().map(|floating| {
+            ObservedFloatingAddress {
+                node: name.clone(),
+                address: floating.address,
+                private_address: floating.private_address,
+            }
         }));
         Ok(())
     }

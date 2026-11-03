@@ -56,8 +56,8 @@ mod test_channel {
 
     use amafu_api::diagnostics::{
         ATTACHMENTS_PATH, AUDIT_PATH, BOOT_PATH, BootFacts, ContractOutcome, HYPERVISOR_CONTRACT_PATH,
-        INSTANCES_PATH, KERNEL_LOG_PATH, NETWORK_PATH, NodeAttachment, NodeInstance, NodeNetworkFacts,
-        NodePort, SANDBOX_PATH, SandboxCheck,
+        INSTANCES_PATH, KERNEL_LOG_PATH, NETWORK_PATH, NodeAttachment, NodeFloatingAddress, NodeInstance,
+        NodeNetworkFacts, NodePort, NodeRemoteEndpoint, SANDBOX_PATH, SandboxCheck,
     };
     use amafu_domain::{ObjectId, ObjectName};
     use amafu_hypervisor::{Attempt, CloudHypervisor, HybridVsockAgents, RuntimeDirectory, VmProcessPlan};
@@ -220,12 +220,33 @@ mod test_channel {
             .await
             .map(|output| String::from_utf8_lossy(&output.stdout).into_owned())
             .unwrap_or_default();
-        Ok(Json(NodeNetworkFacts { ports, ruleset }))
+        let inspection = state.datapath.inspect().await.unwrap_or_default();
+        let remote_endpoints = inspection
+            .remotes
+            .into_iter()
+            .map(|remote| NodeRemoteEndpoint {
+                segment: remote.segment.0,
+                address: remote.address,
+                mac: remote.mac,
+                node_address: remote.node_address,
+            })
+            .collect();
+        let floating_addresses = inspection
+            .floating_addresses
+            .into_iter()
+            .filter_map(|address| {
+                let served = served.floating_addresses.iter().find(|floating| floating.address == address)?;
+                Some(NodeFloatingAddress { address, private_address: served.private_address })
+            })
+            .collect();
+        Ok(Json(NodeNetworkFacts { ports, ruleset, remote_endpoints, floating_addresses }))
     }
 
     async fn attachments(State(state): State<ChannelState>) -> Result<Json<Vec<NodeAttachment>>, StatusCode> {
         let mut attachments = Vec::new();
-        for protocol in [StorageProtocol::LocalFile, StorageProtocol::Nfs] {
+        for protocol in
+            [StorageProtocol::LocalFile, StorageProtocol::Nfs, StorageProtocol::NvmeTcp, StorageProtocol::Rbd]
+        {
             let attacher = state.storage.attacher(protocol).map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
             let current = attacher.attached().await.map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
             attachments.extend(

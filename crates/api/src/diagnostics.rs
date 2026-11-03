@@ -40,10 +40,28 @@ pub struct NodePort {
     pub tap: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeRemoteEndpoint {
+    pub segment: String,
+    pub address: Ipv4Addr,
+    pub mac: MacAddress,
+    pub node_address: Ipv4Addr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeFloatingAddress {
+    pub address: Ipv4Addr,
+    pub private_address: Ipv4Addr,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeNetworkFacts {
     pub ports: Vec<NodePort>,
     pub ruleset: String,
+    #[serde(default)]
+    pub remote_endpoints: Vec<NodeRemoteEndpoint>,
+    #[serde(default)]
+    pub floating_addresses: Vec<NodeFloatingAddress>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
