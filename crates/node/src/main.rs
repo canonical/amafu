@@ -47,7 +47,7 @@ fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
 }
 
 async fn run_as_process_one() -> anyhow::Result<()> {
-    let configuration = boot::early_boot().await?;
+    let (configuration, modules) = boot::early_boot().await?;
     tokio::spawn(async {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         loop {
@@ -62,7 +62,7 @@ async fn run_as_process_one() -> anyhow::Result<()> {
             }
         }
     });
-    roles::run(configuration).await
+    roles::run(configuration, Some(modules)).await
 }
 
 fn fail_as_process_one(error: &anyhow::Error) -> ExitCode {
@@ -84,7 +84,7 @@ fn main() -> ExitCode {
             amafu_hypervisor::run_vm_process(&directory).map_err(anyhow::Error::from)
         }
         Some(Command::Run { configuration }) => runtime().map_err(anyhow::Error::from).and_then(|runtime| {
-            runtime.block_on(async { roles::run(NodeConfiguration::load(&configuration)?).await })
+            runtime.block_on(async { roles::run(NodeConfiguration::load(&configuration)?, None).await })
         }),
         None if amafu_system::is_process_one() => match runtime() {
             Ok(runtime) => match runtime.block_on(run_as_process_one()) {

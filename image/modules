@@ -1,7 +1,6 @@
 kvm
 kvm-amd
 kvm-intel
-nls_iso8859-1
 bridge
 nf_tables
 nft_ct

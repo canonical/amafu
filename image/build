@@ -24,6 +24,7 @@ esac
 readonly output="${image_directory}/output/${variant}"
 readonly cache="${image_directory}/output/cache"
 readonly staging="${image_directory}/output/staging-${variant}"
+readonly boot_staging="${image_directory}/output/boot-staging-${variant}"
 binary="${2:-}"
 
 build_binaries() {
@@ -117,15 +118,16 @@ PYTHON
 stage_modules() {
     local list="$1"
     local root="$2"
+    local order="${3:-load-order}"
+    local target="${4:-${root}/usr/lib/amafu/modules}"
     local modules_root="${cache}/extracted/usr/lib/modules/${kernel_release}"
-    local target="${root}/usr/lib/amafu/modules"
     mkdir -p "${target}"
-    : > "${target}/load-order"
+    : > "${target}/${order}"
     while read -r module; do
         local name
         name="$(basename "${module}" .zst)"
         zstd --quiet --decompress --force "${modules_root}/${module}" -o "${target}/${name}"
-        echo "${name}" >> "${target}/load-order"
+        echo "${name}" >> "${target}/${order}"
     done < <(resolve_modules "${list}")
 }
 
@@ -152,17 +154,20 @@ build_container_initramfs() {
     ln -s usr/bin/amafu-guest-agent "${root}/init"
     stage_libraries "${guest_agent}" "${root}"
     stage_modules "${image_directory}/container-modules" "${root}"
-    mkdir -p "${staging}/usr/lib/amafu/container"
-    pack_initramfs "${root}" "${staging}/usr/lib/amafu/container/initramfs"
+    pack_initramfs "${root}" "${boot_staging}/container-initramfs"
     rm -rf "${root}"
 }
 
 stage_node_tools() {
+    local tools="${boot_staging}/tools"
+    mkdir -p "${tools}/lib"
     for tool in "${node_tools[@]}"; do
-        install -D -m 0755 "${tool}" "${staging}${tool}"
-        stage_libraries "${tool}" "${staging}"
+        install -m 0755 "${tool}" "${tools}/$(basename "${tool}")"
+        ldd "${tool}" | awk '/=>/ { print $3 }' | while read -r library; do
+            cp --dereference "${library}" "${tools}/lib/$(basename "${library}")"
+        done
     done
-    install -D -m 0644 "${cache}/CLOUDHV-${firmware_release}.fd" "${staging}/usr/lib/amafu/firmware/CLOUDHV.fd"
+    install -m 0644 "${cache}/CLOUDHV-${firmware_release}.fd" "${boot_staging}/CLOUDHV.fd"
 }
 
 build_test_guest() {
@@ -175,17 +180,19 @@ build_test_guest() {
     local target="${staging}/usr/lib/amafu/images/test-guest"
     mkdir -p "${target}"
     pack_initramfs "${guest}" "${target}/initramfs"
-    ln -s /run/amafu/boot/amafu/vmlinuz "${target}/kernel"
+    ln -s /run/amafu/boot/amafu/vmlinux "${target}/kernel"
     cp "${image_directory}/test-guest/command-line" "${target}/command-line"
 }
 
 stage_root() {
-    rm -rf "${staging}"
+    rm -rf "${staging}" "${boot_staging}"
+    mkdir -p "${boot_staging}"
     mkdir -p "${staging}"/{dev,proc,sys,run,tmp,etc,var/lib/amafu,usr/bin}
     install -m 0755 "${binary}" "${staging}/usr/bin/amafu-node"
     ln -s usr/bin/amafu-node "${staging}/init"
     stage_libraries "${binary}" "${staging}"
-    stage_modules "${image_directory}/modules" "${staging}"
+    stage_modules "${image_directory}/early-modules" "${staging}" early-load-order
+    stage_modules "${image_directory}/modules" "${staging}" load-order "${boot_staging}/modules"
     stage_node_tools
     build_container_initramfs
     if [[ "${variant}" == test ]]; then
@@ -193,11 +200,30 @@ stage_root() {
     fi
 }
 
+extract_guest_kernel() {
+    python3 -I - "${cache}/extracted/boot/vmlinuz-${kernel_release}" "$1" <<'PYTHON'
+import subprocess
+import sys
+from pathlib import Path
+
+compressed = Path(sys.argv[1]).read_bytes()
+start = compressed.find(b"\x28\xb5\x2f\xfd")
+if start < 0:
+    sys.exit("the kernel image holds no zstd payload")
+decompressed = subprocess.run(["zstd", "--decompress", "--stdout"], input=compressed[start:], capture_output=True, check=False).stdout
+if not decompressed.startswith(b"\x7fELF"):
+    sys.exit("the kernel payload is not an ELF image")
+Path(sys.argv[2]).write_bytes(decompressed)
+PYTHON
+}
+
 pack() {
     rm -rf "${output}"
     mkdir -p "${output}/esp/EFI/BOOT" "${output}/esp/EFI/ubuntu" "${output}/esp/amafu"
     pack_initramfs "${staging}" "${output}/esp/amafu/initramfs"
     cp "${cache}/extracted/boot/vmlinuz-${kernel_release}" "${output}/esp/amafu/vmlinuz"
+    extract_guest_kernel "${output}/esp/amafu/vmlinux"
+    cp -r "${boot_staging}"/. "${output}/esp/amafu/"
     cp "${cache}/extracted/usr/lib/shim/shimx64.efi.signed.latest" "${output}/esp/EFI/BOOT/BOOTX64.EFI"
     cp "${cache}/extracted/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed" "${output}/esp/EFI/BOOT/grubx64.efi"
     cp "${image_directory}/grub.cfg" "${output}/esp/EFI/ubuntu/grub.cfg"
@@ -212,5 +238,5 @@ download_firmware
 extract_packages
 stage_root
 pack
-rm -rf "${staging}"
+rm -rf "${staging}" "${boot_staging}"
 echo "built the ${variant} image in ${output}"

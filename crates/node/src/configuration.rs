@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use amafu_api::TokenIdentity;
 use amafu_domain::NodeName;
 use amafu_domain::kinds::node::NodeRole;
+use amafu_interfaces::ExternalTool;
 use amafu_network::UnderlayConfiguration;
 use serde::{Deserialize, Serialize};
 
@@ -36,17 +37,36 @@ pub struct ComputeSection {
     pub container_initramfs: PathBuf,
     pub nft: PathBuf,
     pub mkfs_erofs: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_libraries: Option<PathBuf>,
     pub resolvers: Vec<Ipv4Addr>,
+}
+
+impl ComputeSection {
+    fn tool(&self, program: &Path) -> ExternalTool {
+        ExternalTool { program: program.to_path_buf(), library_directory: self.tool_libraries.clone() }
+    }
+
+    #[must_use]
+    pub fn nft_tool(&self) -> ExternalTool {
+        self.tool(&self.nft)
+    }
+
+    #[must_use]
+    pub fn mkfs_erofs_tool(&self) -> ExternalTool {
+        self.tool(&self.mkfs_erofs)
+    }
 }
 
 impl Default for ComputeSection {
     fn default() -> Self {
         Self {
-            firmware: PathBuf::from("/usr/lib/amafu/firmware/CLOUDHV.fd"),
-            container_kernel: PathBuf::from("/run/amafu/boot/amafu/vmlinuz"),
-            container_initramfs: PathBuf::from("/usr/lib/amafu/container/initramfs"),
-            nft: PathBuf::from("/usr/sbin/nft"),
-            mkfs_erofs: PathBuf::from("/usr/bin/mkfs.erofs"),
+            firmware: PathBuf::from("/run/amafu/boot/amafu/CLOUDHV.fd"),
+            container_kernel: PathBuf::from("/run/amafu/boot/amafu/vmlinux"),
+            container_initramfs: PathBuf::from("/run/amafu/boot/amafu/container-initramfs"),
+            nft: PathBuf::from("/run/amafu/boot/amafu/tools/nft"),
+            mkfs_erofs: PathBuf::from("/run/amafu/boot/amafu/tools/mkfs.erofs"),
+            tool_libraries: Some(PathBuf::from("/run/amafu/boot/amafu/tools/lib")),
             resolvers: Vec::new(),
         }
     }

@@ -29,6 +29,7 @@ use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
+use crate::boot::ModuleLoading;
 use crate::clock::SystemClock;
 use amafu_node::configuration::NodeConfiguration;
 
@@ -157,8 +158,8 @@ fn compute_adapters(
     Ok(ComputeAdapters {
         hypervisor: Arc::clone(hypervisor),
         storage: Arc::new(BuiltInStorage::new(configuration.node.name.clone(), directories.volumes())),
-        images: Arc::new(CachedImages::new(directories.image_cache(), compute.mkfs_erofs.clone())?),
-        datapath: Arc::new(KernelDatapath::new(underlay, compute.nft.clone())),
+        images: Arc::new(CachedImages::new(directories.image_cache(), compute.mkfs_erofs_tool())?),
+        datapath: Arc::new(KernelDatapath::new(underlay, compute.nft_tool())),
         agents: Arc::new(HybridVsockAgents::new(runtime)),
         local_services: Arc::new(LocalServicesServer::start(
             compute.resolvers.clone(),
@@ -236,7 +237,7 @@ fn compute_roles(
     controller_role(roles, "node-network", Arc::new(node_network), services, settings);
 }
 
-pub async fn run(configuration: NodeConfiguration) -> anyhow::Result<()> {
+pub async fn run(configuration: NodeConfiguration, modules: Option<ModuleLoading>) -> anyhow::Result<()> {
     let directories = &configuration.directories;
     for directory in
         [&directories.data, &directories.runtime, &directories.image_cache(), &directories.volumes()]
@@ -274,6 +275,9 @@ pub async fn run(configuration: NodeConfiguration) -> anyhow::Result<()> {
         ..ReconcilerSettings::default()
     };
     controller_role(&mut roles, "node", node, &services, heartbeat);
+    if let Some(modules) = modules {
+        modules.await?;
+    }
     if configuration.has_role(NodeRole::Compute) {
         if let Err(error) = prepare_kvm_access() {
             tracing::warn!(%error, "VM processes cannot be given access to /dev/kvm");

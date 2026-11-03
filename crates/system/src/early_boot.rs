@@ -123,7 +123,8 @@ pub fn mount_data_partition(device: &Path, target: &Path) -> Result<(), EarlyBoo
 
 pub fn mount_boot_partition(device: &Path, target: &Path) -> Result<(), EarlyBootError> {
     create_directory(target)?;
-    mount(device, target, "vfat", RESTRICTED.union(MountFlags::RDONLY), None).map_err(mount_failure(target))
+    let flags = MountFlags::NOSUID.union(MountFlags::NODEV).union(MountFlags::RDONLY);
+    mount(device, target, "vfat", flags, Some(c"fmask=0022,dmask=0022")).map_err(mount_failure(target))
 }
 
 pub fn set_hostname(name: &str) -> Result<(), EarlyBootError> {

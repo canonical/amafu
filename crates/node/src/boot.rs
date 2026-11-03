@@ -9,7 +9,9 @@ use amafu_system::mount_essential_filesystems;
 use amafu_node::configuration::NodeConfiguration;
 
 const MODULES_DIRECTORY: &str = "/usr/lib/amafu/modules";
-const MODULE_LIST: &str = "/usr/lib/amafu/modules/load-order";
+const BOOT_MODULES_DIRECTORY: &str = "/run/amafu/boot/amafu/modules";
+const MODULE_LIST: &str = "/run/amafu/boot/amafu/modules/load-order";
+const EARLY_MODULE_LIST: &str = "/usr/lib/amafu/modules/early-load-order";
 const SYSFS_BLOCK: &str = "/sys/class/block";
 const BOOT_MOUNT: &str = "/run/amafu/boot";
 const CONFIGURATION_FILE: &str = "/run/amafu/boot/amafu/node-configuration.yaml";
@@ -39,12 +41,23 @@ fn write_name_resolution(resolvers: &[std::net::Ipv4Addr]) -> anyhow::Result<()>
     Ok(())
 }
 
-pub async fn early_boot() -> anyhow::Result<NodeConfiguration> {
+pub type ModuleLoading = tokio::task::JoinHandle<()>;
+
+fn load_modules_in_background() -> ModuleLoading {
+    tokio::task::spawn_blocking(|| {
+        match load_listed_modules(Path::new(BOOT_MODULES_DIRECTORY), Path::new(MODULE_LIST)) {
+            Ok(loaded) => tracing::info!(loaded, "kernel modules loaded"),
+            Err(error) => tracing::error!(%error, "kernel modules cannot be loaded"),
+        }
+    })
+}
+
+pub async fn early_boot() -> anyhow::Result<(NodeConfiguration, ModuleLoading)> {
     mount_essential_filesystems()?;
-    let loaded = load_listed_modules(Path::new(MODULES_DIRECTORY), Path::new(MODULE_LIST))?;
-    tracing::info!(loaded, "kernel modules loaded");
+    load_listed_modules(Path::new(MODULES_DIRECTORY), Path::new(EARLY_MODULE_LIST))?;
     let boot_partition = wait_for_partition(BOOT_PARTITION_NAME).await?;
     mount_boot_partition(&boot_partition, Path::new(BOOT_MOUNT))?;
+    let modules = load_modules_in_background();
     let configuration = NodeConfiguration::load(Path::new(CONFIGURATION_FILE))?;
     set_hostname(configuration.node.name.as_str())?;
     let data_partition = wait_for_partition(DATA_PARTITION_NAME).await?;
@@ -53,5 +66,5 @@ pub async fn early_boot() -> anyhow::Result<NodeConfiguration> {
         amafu_network::configure_underlay(underlay).await?;
     }
     write_name_resolution(&configuration.compute.resolvers)?;
-    Ok(configuration)
+    Ok((configuration, modules))
 }
