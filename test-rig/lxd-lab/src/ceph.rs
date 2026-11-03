@@ -35,7 +35,7 @@ write_files:
       microceph cluster bootstrap --public-network {network} --cluster-network {network} --microceph-ip {address}
       microceph disk add loop,4G,3
       ceph=microceph.ceph
-      $ceph config set osd osd_memory_target 805306368
+      $ceph config set osd osd_memory_target 939524096
       $ceph config set global mon_allow_pool_size_one true
       $ceph osd pool create {POOL} 32
       $ceph osd pool set {POOL} size 1 --yes-i-really-mean-it
