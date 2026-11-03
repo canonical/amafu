@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 use std::path::Path;
+use std::time::Duration;
 
 use quorium::{Discovery, Quorium, TlsConfig};
 
@@ -28,16 +29,24 @@ pub struct VoterSettings {
     pub advertise: SocketAddr,
     pub voters: Vec<SocketAddr>,
     pub tls: Option<StateTls>,
+    pub heartbeat: Duration,
 }
 
+pub const DEFAULT_HEARTBEAT: Duration = Duration::from_millis(300);
+
 pub async fn start_single_voter(data_directory: &Path, bind: SocketAddr) -> Result<Quorium, StateError> {
-    start_voter(data_directory, &VoterSettings { bind, advertise: bind, voters: Vec::new(), tls: None }).await
+    start_voter(
+        data_directory,
+        &VoterSettings { bind, advertise: bind, voters: Vec::new(), tls: None, heartbeat: DEFAULT_HEARTBEAT },
+    )
+    .await
 }
 
 pub async fn start_voter(data_directory: &Path, settings: &VoterSettings) -> Result<Quorium, StateError> {
     discard_zeroed_tail(data_directory)?;
     let mut builder =
         Quorium::builder().data_dir(data_directory).bind(settings.bind).advertise(settings.advertise);
+    builder = builder.heartbeat(settings.heartbeat);
     builder = if settings.voters.len() > 1 {
         builder.discovery(Discovery::Static(settings.voters.clone())).replicas(settings.voters.len())
     } else {

@@ -22,6 +22,7 @@ async fn three_voters_over_mutual_tls_replicate_every_write() {
                 certificate_pem: issued.cert_pem,
                 private_key_pem: issued.key_pem,
             }),
+            heartbeat: amafu_state::DEFAULT_HEARTBEAT,
         };
         let path = directory.path().to_path_buf();
         async move { start_voter(&path, &settings).await }

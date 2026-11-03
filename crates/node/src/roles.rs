@@ -28,8 +28,8 @@ use amafu_interfaces::{
 use amafu_network::{KernelDatapath, LocalServicesServer};
 use amafu_reconciler::{Controller, ReconcilerSettings, run_controller, run_singleton};
 use amafu_state::{
-    LocalStateCache, QuoriumAuditLog, QuoriumLeases, QuoriumStore, StateTls, SubscribedStore, VoterSettings,
-    start_voter,
+    DEFAULT_HEARTBEAT, LocalStateCache, QuoriumAuditLog, QuoriumLeases, QuoriumStore, StateTls,
+    SubscribedStore, VoterSettings, start_voter,
 };
 use amafu_storage::{BuiltInStorage, CachedImages};
 use tokio::net::TcpListener;
@@ -401,6 +401,7 @@ async fn core_member_services(configuration: &NodeConfiguration) -> anyhow::Resu
             certificate_pem: identity.certificate.clone(),
             private_key_pem: identity.private_key.clone(),
         }),
+        heartbeat: DEFAULT_HEARTBEAT,
     };
     let quorium = start_voter(&configuration.directories.data.join(STATE_DIRECTORY), &settings).await?;
     tracing::info!(voters = settings.voters.len(), "the state store is running");
