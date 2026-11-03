@@ -31,7 +31,7 @@ pub async fn run_singleton<C: Controller>(
         match future::select(pin!(run_controller(&controller, store, clock, settings)), lost).await {
             Either::Left((failure, _)) => return failure,
             Either::Right(((), _)) => {
-                tracing::warn!(controller = C::NAME, "lost the lease; waiting to hold it again")
+                tracing::warn!(controller = C::NAME, "lost the lease; waiting to hold it again");
             }
         }
     }

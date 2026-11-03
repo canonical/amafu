@@ -332,9 +332,11 @@ mod tests {
     use amafu_domain::kinds::image::{ImagePhase, ImageSource, ImageSpecification, ImageStatus};
     use amafu_domain::kinds::network::{NetworkPhase, NetworkSpecification, NetworkStatus};
     use amafu_domain::kinds::node::{NodeCapacity, NodePhase, NodeSpecification, NodeStatus};
-    use amafu_domain::kinds::storage_backend::{StorageBackendSpecification, StorageProviderSpecification};
+    use amafu_domain::kinds::storage_backend::{
+        StorageBackendSpecification, StorageBackendStatus, StorageProviderSpecification,
+    };
     use amafu_domain::kinds::vm::{NetworkInterfaceSpecification, VmSpecification};
-    use amafu_domain::kinds::volume::{ProvisionedVolume, VolumeSpecification};
+    use amafu_domain::kinds::volume::{ProvisionedVolume, VolumeSpecification, VolumeStatus};
 
     use super::*;
     use crate::testing::{metadata, name};
@@ -448,7 +450,7 @@ mod tests {
         let backend = Object {
             metadata: metadata("local", None),
             specification: StorageBackendSpecification { provider: StorageProviderSpecification::LocalDisk },
-            status: Default::default(),
+            status: StorageBackendStatus::default(),
         };
         let image = Object {
             metadata: metadata("noble", Some("project-a")),
@@ -473,7 +475,7 @@ mod tests {
                 backend: name("local"),
                 source_image: None,
             },
-            status: Default::default(),
+            status: VolumeStatus::default(),
         };
         pinned.status.provisioned = Some(ProvisionedVolume {
             identifier: String::from("data"),
