@@ -45,6 +45,17 @@ pub const FLOATING_IP_MOVES: ScenarioDefinition = ScenarioDefinition {
 const SERVER_PORT: u16 = 8080;
 const SETTLING: Duration = Duration::from_secs(5);
 
+fn open_web() -> SecurityGroupSpecification {
+    SecurityGroupSpecification {
+        rules: vec![SecurityGroupRule {
+            direction: Direction::Ingress,
+            protocol: Protocol::Tcp,
+            ports: Some(PortRange { first: SERVER_PORT, last: SERVER_PORT }),
+            remote: Remote::Any,
+        }],
+    }
+}
+
 fn server_script(label: &str) -> String {
     format!("mkdir -p /www && echo served by {label} > /www/index.html && httpd -f -p {SERVER_PORT} -h /www")
 }
@@ -111,8 +122,16 @@ async fn vms_on_different_nodes_reach_each_other(cluster: &dyn Cluster) -> Scena
     let member = client(cluster, Role::Member).await;
     ready_image(&member, cluster, "busybox-overlay", busybox()?).await?;
     ready_network(&member, cluster, "overlay", "10.90.0.0/24").await?;
-    container(&member, "overlay-server", "busybox-overlay", "overlay", &[], server_script("overlay-server"))
-        .await?;
+    member.create::<SecurityGroup>(&name("overlay-web")?, &open_web()).await?;
+    container(
+        &member,
+        "overlay-server",
+        "busybox-overlay",
+        "overlay",
+        &["overlay-web"],
+        server_script("overlay-server"),
+    )
+    .await?;
     let probe = container(
         &member,
         "overlay-client",
@@ -133,6 +152,7 @@ async fn vms_on_different_nodes_reach_each_other(cluster: &dyn Cluster) -> Scena
     for vm_name in ["overlay-client", "overlay-server"] {
         delete_and_wait::<Vm>(&member, cluster, vm_name).await?;
     }
+    delete_and_wait::<SecurityGroup>(&member, cluster, "overlay-web").await?;
     delete_and_wait::<Network>(&member, cluster, "overlay").await?;
     delete_and_wait::<Image>(&member, cluster, "busybox-overlay").await
 }
