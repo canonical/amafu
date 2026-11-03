@@ -10,6 +10,7 @@ pub mod network;
 pub mod objects;
 pub mod storage;
 pub mod store;
+pub mod tools;
 
 pub use audit::{AuditEntry, AuditLog, AuditOutcome};
 pub use clock::Clock;
@@ -26,3 +27,4 @@ pub use network::{
 pub use objects::ObjectStoreError;
 pub use storage::{AttachTarget, Storage, StorageProtocol, StorageProvider, VolumeAttacher, VolumeRequest};
 pub use store::{Consistency, Store, StoreError, StoredRecord, WatchEvent};
+pub use tools::ExternalTool;

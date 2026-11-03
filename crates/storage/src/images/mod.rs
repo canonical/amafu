@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use amafu_domain::kinds::image::ImageSource;
 use amafu_domain::{ObjectId, OciReference, Sha256Digest};
-use amafu_interfaces::{ActionError, CachedImage, ImageRequest, ImageStore};
+use amafu_interfaces::{ActionError, CachedImage, ExternalTool, ImageRequest, ImageStore};
 use futures::StreamExt;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
@@ -24,7 +24,7 @@ const PLAIN_LAYER_SUFFIX: &str = ".tar";
 
 pub struct CachedImages {
     root: PathBuf,
-    mkfs_erofs: PathBuf,
+    mkfs_erofs: ExternalTool,
     http: reqwest::Client,
 }
 
@@ -73,7 +73,7 @@ async fn download(
 }
 
 impl CachedImages {
-    pub fn new(root: PathBuf, mkfs_erofs: PathBuf) -> Result<Self, ActionError> {
+    pub fn new(root: PathBuf, mkfs_erofs: ExternalTool) -> Result<Self, ActionError> {
         Ok(Self { root, mkfs_erofs, http: https_client()? })
     }
 
@@ -136,7 +136,7 @@ impl CachedImages {
 
     async fn build_erofs(&self, directory: &Path) -> Result<PathBuf, ActionError> {
         let image = directory.join(ROOT_IMAGE);
-        let output = tokio::process::Command::new(&self.mkfs_erofs)
+        let output = tokio::process::Command::from(self.mkfs_erofs.command())
             .arg(&image)
             .arg(directory.join(ROOT_DIRECTORY))
             .output()

@@ -1,6 +1,6 @@
 use amafu_domain::ObjectId;
 use amafu_domain::kinds::image::ImageSource;
-use amafu_interfaces::{ImageRequest, ImageStore};
+use amafu_interfaces::{ExternalTool, ImageRequest, ImageStore};
 use amafu_storage::CachedImages;
 
 const BUSYBOX: &str =
@@ -10,7 +10,8 @@ const BUSYBOX: &str =
 #[ignore = "needs access to Docker Hub and mkfs.erofs"]
 async fn a_pinned_container_image_is_pulled_into_an_erofs_root() {
     let directory = tempfile::tempdir().unwrap();
-    let images = CachedImages::new(directory.path().to_path_buf(), "mkfs.erofs".into()).unwrap();
+    let images =
+        CachedImages::new(directory.path().to_path_buf(), ExternalTool::installed("mkfs.erofs")).unwrap();
     let request = ImageRequest {
         image_id: ObjectId::from_uuid(uuid::Uuid::from_u128(1)),
         source: ImageSource::Container { reference: BUSYBOX.parse().unwrap() },

@@ -1,6 +1,6 @@
 use amafu_domain::{MacAddress, ObjectId};
 use amafu_interfaces::contract::datapath::datapath_contract;
-use amafu_interfaces::{NodeNetworkState, Port, PortKey, Segment, SegmentKey};
+use amafu_interfaces::{ExternalTool, NodeNetworkState, Port, PortKey, Segment, SegmentKey};
 use amafu_network::KernelDatapath;
 
 fn desired() -> Result<NodeNetworkState, Box<dyn std::error::Error>> {
@@ -28,6 +28,6 @@ fn desired() -> Result<NodeNetworkState, Box<dyn std::error::Error>> {
 #[ignore = "needs root, /dev/net/tun and the nft binary"]
 async fn the_kernel_datapath_honours_the_datapath_contract() {
     let underlay = std::env::var("AMAFU_TEST_UNDERLAY").unwrap_or_else(|_| String::from("eth0"));
-    let datapath = KernelDatapath::new(underlay, "/usr/sbin/nft".into());
+    let datapath = KernelDatapath::new(underlay, ExternalTool::installed("/usr/sbin/nft"));
     assert_eq!(datapath_contract(&datapath, &desired().unwrap()).await, Ok(()));
 }

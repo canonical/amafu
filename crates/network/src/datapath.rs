@@ -1,11 +1,12 @@
 use std::collections::BTreeMap;
 use std::net::IpAddr;
-use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Mutex, PoisonError};
 
 use amafu_interfaces::network::bridge_name;
-use amafu_interfaces::{ActionError, Datapath, NodeNetworkState, PortKey, RealizedNetwork, SegmentKey};
+use amafu_interfaces::{
+    ActionError, Datapath, ExternalTool, NodeNetworkState, PortKey, RealizedNetwork, SegmentKey,
+};
 use futures::TryStreamExt;
 use rtnetlink::packet_route::link::{LinkAttribute, LinkMessage};
 use rtnetlink::{Handle, LinkBridge, LinkUnspec, new_connection};
@@ -27,7 +28,7 @@ struct KnownNames {
 
 pub struct KernelDatapath {
     underlay: String,
-    nft: PathBuf,
+    nft: ExternalTool,
     known: Mutex<KnownNames>,
 }
 
@@ -72,7 +73,7 @@ fn create_persistent_tap(name: &str) -> Result<(), ActionError> {
 
 impl KernelDatapath {
     #[must_use]
-    pub fn new(underlay: String, nft: PathBuf) -> Self {
+    pub fn new(underlay: String, nft: ExternalTool) -> Self {
         Self { underlay, nft, known: Mutex::new(KnownNames::default()) }
     }
 
@@ -151,7 +152,7 @@ impl KernelDatapath {
 
     async fn apply_ruleset(&self, desired: &NodeNetworkState) -> Result<(), ActionError> {
         let ruleset = compile_ruleset(desired, &self.underlay);
-        let mut nft = tokio::process::Command::new(&self.nft)
+        let mut nft = tokio::process::Command::from(self.nft.command())
             .args(["--file", "-"])
             .stdin(Stdio::piped())
             .stderr(Stdio::piped())
