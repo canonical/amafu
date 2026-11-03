@@ -18,6 +18,10 @@ pub struct NodeConfiguration {
     pub node: NodeSection,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<UnderlayConfiguration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub management: Option<UnderlayConfiguration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<IdentitySection>,
     pub api: ApiSection,
     #[serde(default)]
     pub state: StateSection,
@@ -92,13 +96,29 @@ pub struct ApiSection {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct IdentitySection {
+    pub certificate: String,
+    pub private_key: String,
+    pub certificate_authority: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StateSection {
     pub listen: SocketAddr,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub voters: Vec<SocketAddr>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub core_members: Vec<String>,
 }
 
 impl Default for StateSection {
     fn default() -> Self {
-        Self { listen: SocketAddr::from(([127, 0, 0, 1], 7400)) }
+        Self {
+            listen: SocketAddr::from(([127, 0, 0, 1], 7400)),
+            voters: Vec::new(),
+            core_members: Vec::new(),
+        }
     }
 }
 
@@ -151,6 +171,10 @@ pub enum ConfigurationError {
     UnsupportedVersion(u32),
     #[error("the node must have at least one role")]
     NoRole,
+    #[error("a node outside the core needs an identity and at least one core member to reach")]
+    NoWayToTheCore,
+    #[error("several voters need an identity to authenticate each other")]
+    VotersWithoutIdentity,
 }
 
 impl NodeConfiguration {
@@ -161,6 +185,13 @@ impl NodeConfiguration {
         }
         if configuration.node.roles.is_empty() {
             return Err(ConfigurationError::NoRole);
+        }
+        let is_core = configuration.has_role(NodeRole::Core);
+        if !is_core && (configuration.identity.is_none() || configuration.state.core_members.is_empty()) {
+            return Err(ConfigurationError::NoWayToTheCore);
+        }
+        if is_core && configuration.state.voters.len() > 1 && configuration.identity.is_none() {
+            return Err(ConfigurationError::VotersWithoutIdentity);
         }
         Ok(configuration)
     }
@@ -217,5 +248,19 @@ api:
             NodeConfiguration::parse(&MINIMAL.replace("[core, compute]", "[]")),
             Err(ConfigurationError::NoRole)
         ));
+    }
+
+    #[test]
+    fn a_node_outside_the_core_must_know_how_to_reach_it() {
+        let compute_only = MINIMAL.replace("[core, compute]", "[compute]");
+        assert!(matches!(NodeConfiguration::parse(&compute_only), Err(ConfigurationError::NoWayToTheCore)));
+        let reachable = format!(
+            "{compute_only}identity:\n  certificate: c\n  private_key: k\n  certificate_authority: a\nstate:\n  listen: 127.0.0.1:7400\n  core_members: [\"https://10.0.0.1:7443\"]\n"
+        );
+        assert!(NodeConfiguration::parse(&reachable).is_ok());
+        let voters = format!(
+            "{MINIMAL}state:\n  listen: 127.0.0.1:7400\n  voters: [10.0.0.1:7400, 10.0.0.2:7400, 10.0.0.3:7400]\n"
+        );
+        assert!(matches!(NodeConfiguration::parse(&voters), Err(ConfigurationError::VotersWithoutIdentity)));
     }
 }

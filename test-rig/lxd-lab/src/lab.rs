@@ -88,10 +88,13 @@ fn node_configuration(
             zone: None,
         },
         network: Some(UnderlayConfiguration {
+            mac: None,
             interface: None,
             address: StaticAddress { address: node.address, prefix_length: settings.prefix_length },
             gateway: Some(settings.gateway),
         }),
+        management: None,
+        identity: None,
         api: ApiSection {
             listen: node_listen(NODE_API_PORT),
             certificate: server.certificate.clone(),

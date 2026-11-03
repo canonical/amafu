@@ -250,6 +250,7 @@ dependencies = [
  "amafu-storage",
  "amafu-system",
  "anyhow",
+ "async-trait",
  "axum",
  "clap",
  "futures",

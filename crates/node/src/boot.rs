@@ -62,8 +62,8 @@ pub async fn early_boot() -> anyhow::Result<(NodeConfiguration, ModuleLoading)> 
     set_hostname(configuration.node.name.as_str())?;
     let data_partition = wait_for_partition(DATA_PARTITION_NAME).await?;
     mount_data_partition(&data_partition, &configuration.directories.data)?;
-    if let Some(underlay) = &configuration.network {
-        amafu_network::configure_underlay(underlay).await?;
+    for interface in [&configuration.management, &configuration.network].into_iter().flatten() {
+        amafu_network::configure_underlay(interface).await?;
     }
     write_name_resolution(&configuration.compute.resolvers)?;
     Ok((configuration, modules))

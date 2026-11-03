@@ -30,6 +30,7 @@ amafu-system.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 clap.workspace = true
+async-trait.workspace = true
 futures.workspace = true
 http.workspace = true
 rustix.workspace = true

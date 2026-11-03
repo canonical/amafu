@@ -16,8 +16,8 @@ use amafu_api::{
 use amafu_checkers::invariants::check_all;
 use amafu_controllers::{
     ComputeController, ComputeServices, ImageController, LocalVolumeController, NetworkController,
-    NodeController, NodeIdentity, NodeNetworkController, SchedulerController, SchedulingSettings,
-    SecurityGroupController, StorageBackendController, VolumeController,
+    NodeController, NodeHealthController, NodeIdentity, NodeNetworkController, SchedulerController,
+    SchedulingSettings, SecurityGroupController, StorageBackendController, VolumeController,
 };
 use amafu_domain::access::Role;
 use amafu_domain::kinds::node::{CpuBaseline, NodeCapacity, NodeRole};
@@ -57,6 +57,7 @@ const TEST_BUNDLE: &str = "test-guest";
 const CORE_MEMBER_COUNT: usize = 3;
 const SUBSCRIPTION_REFRESH: Duration = Duration::from_secs(5);
 const RESUBSCRIBE_DELAY: Duration = Duration::from_secs(1);
+const SILENCE_ALLOWED: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SimulationSettings {
@@ -495,7 +496,21 @@ impl SimulatedWorld {
         let (volume_store, volume_storage, volume_images) =
             (Arc::clone(store), Arc::clone(&storage), Arc::clone(&images));
         let (backend_store, backend_storage) = (Arc::clone(store), Arc::clone(&storage));
+        let (health_store, health_clock) =
+            (Arc::clone(store), Arc::new(shared.clock.clone()) as Arc<dyn Clock>);
         vec![
+            singleton_role(
+                format!("{name}/node-health"),
+                move |_| {
+                    NodeHealthController::new(
+                        Arc::clone(&health_store),
+                        Arc::clone(&health_clock),
+                        SILENCE_ALLOWED,
+                    )
+                },
+                &singletons,
+                settings,
+            ),
             singleton_role(
                 format!("{name}/scheduler"),
                 move |fence| {

@@ -5,11 +5,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use amafu_api::server::{serve, tls_configuration};
-use amafu_api::{ApiState, TokenAuthenticator, router};
+use amafu_api::{
+    ApiState, ClientIdentity, HttpTransport, NodeApiState, NodeAuthenticator, NodeClient, TokenAuthenticator,
+    Transport, node_router, router,
+};
 use amafu_controllers::{
     ComputeController, ComputeServices, ImageController, LocalVolumeController, NetworkController,
-    NodeController, NodeIdentity, NodeNetworkController, SchedulerController, SchedulingSettings,
-    SecurityGroupController, StorageBackendController, VolumeController,
+    NodeController, NodeHealthController, NodeIdentity, NodeNetworkController, SchedulerController,
+    SchedulingSettings, SecurityGroupController, StorageBackendController, VolumeController,
 };
 use amafu_domain::kinds::node::{CpuBaseline, NodeCapacity, NodeRole};
 use amafu_domain::{NodeName, ObjectId};
@@ -18,12 +21,15 @@ use amafu_hypervisor::{
     prepare_kvm_access,
 };
 use amafu_interfaces::{
-    AuditLog, Clock, Datapath, Fence, GuestAgents, Hypervisor, ImageStore, Leases, LocalServices,
-    RandomIdentifiers, Storage, Store,
+    AuditEntry, AuditLog, Clock, Datapath, Fence, GuestAgents, Hypervisor, ImageStore, Leases, LocalServices,
+    RandomIdentifiers, Storage, Store, StoreError,
 };
 use amafu_network::{KernelDatapath, LocalServicesServer};
 use amafu_reconciler::{Controller, ReconcilerSettings, run_controller, run_singleton};
-use amafu_state::{QuoriumAuditLog, QuoriumLeases, QuoriumStore, start_single_voter};
+use amafu_state::{
+    LocalStateCache, QuoriumAuditLog, QuoriumLeases, QuoriumStore, StateTls, SubscribedStore, VoterSettings,
+    start_voter,
+};
 use amafu_storage::{BuiltInStorage, CachedImages};
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
@@ -38,6 +44,11 @@ const MAXIMUM_RESTART_DELAY: Duration = Duration::from_secs(30);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
 const NODE_IDENTIFIER_FILE: &str = "node-id";
 const STATE_DIRECTORY: &str = "state";
+const STATE_CACHE_FILE: &str = "state-cache.json";
+const SUBSCRIPTION_REFRESH: Duration = Duration::from_secs(5);
+const RESUBSCRIBE_DELAY: Duration = Duration::from_secs(1);
+const SILENCE_ALLOWED: Duration = Duration::from_secs(30);
+const SYNCHRONIZATION_POLL: Duration = Duration::from_millis(100);
 pub const VM_DIRECTORY: &str = "vms";
 
 pub struct Services {
@@ -45,6 +56,23 @@ pub struct Services {
     pub audit: Arc<dyn AuditLog>,
     pub clock: Arc<dyn Clock>,
     pub leases: Option<Arc<dyn Leases>>,
+}
+
+struct AuditKeptByTheCore;
+
+#[async_trait::async_trait]
+impl AuditLog for AuditKeptByTheCore {
+    async fn record(&self, _entry: AuditEntry) -> Result<(), StoreError> {
+        Err(StoreError::Unavailable(String::from("only core members keep the audit log")))
+    }
+
+    async fn find(&self, _request_id: uuid::Uuid) -> Result<Option<AuditEntry>, StoreError> {
+        Ok(None)
+    }
+
+    async fn recent(&self, _limit: usize) -> Result<Vec<AuditEntry>, StoreError> {
+        Ok(Vec::new())
+    }
 }
 
 pub struct ComputeAdapters {
@@ -160,7 +188,19 @@ fn start_api(
         configuration.api.private_key.as_bytes(),
     )?;
     let listen = configuration.api.listen;
-    let application = router(state);
+    let mut application = router(state);
+    if let Some(identity) = &configuration.identity {
+        let authenticator =
+            NodeAuthenticator::new(identity.certificate_authority.as_bytes(), Arc::clone(&services.store))?;
+        application = application.merge(node_router(NodeApiState {
+            store: Arc::clone(&services.store),
+            authenticator: Arc::new(authenticator),
+            audit: Arc::clone(&services.audit),
+            clock: Arc::clone(&services.clock),
+            identifiers: Arc::new(RandomIdentifiers),
+            refresh_interval: SUBSCRIPTION_REFRESH,
+        }));
+    }
     roles.spawn(supervise("api", move || {
         let application = application.clone();
         let tls = Arc::clone(&tls);
@@ -262,6 +302,16 @@ fn core_roles(roles: &mut JoinSet<()>, services: &Services, adapters: &ComputeAd
         services,
         settings,
     );
+    let (health_store, health_clock) = (store(), Arc::clone(&services.clock));
+    singleton_role(
+        roles,
+        "node-health",
+        move |_| {
+            NodeHealthController::new(Arc::clone(&health_store), Arc::clone(&health_clock), SILENCE_ALLOWED)
+        },
+        services,
+        settings,
+    );
     let (backend_store, backend_storage) = (store(), Arc::clone(&adapters.storage) as Arc<dyn Storage>);
     singleton_role(
         roles,
@@ -314,6 +364,74 @@ fn compute_roles(
     controller_role(roles, "node-network", Arc::new(node_network), services, settings);
 }
 
+async fn core_member_services(configuration: &NodeConfiguration) -> anyhow::Result<Services> {
+    let settings = VoterSettings {
+        bind: configuration.state.listen,
+        advertise: configuration.state.listen,
+        voters: configuration.state.voters.clone(),
+        tls: configuration.identity.as_ref().map(|identity| StateTls {
+            certificate_authority_pem: identity.certificate_authority.clone(),
+            certificate_pem: identity.certificate.clone(),
+            private_key_pem: identity.private_key.clone(),
+        }),
+    };
+    let quorium = start_voter(&configuration.directories.data.join(STATE_DIRECTORY), &settings).await?;
+    tracing::info!(voters = settings.voters.len(), "the state store is running");
+    Ok(Services {
+        store: Arc::new(QuoriumStore::new(quorium.clone())),
+        audit: Arc::new(QuoriumAuditLog::new(quorium.clone())),
+        clock: Arc::new(SystemClock),
+        leases: Some(Arc::new(QuoriumLeases::new(quorium))),
+    })
+}
+
+fn subscribed_services(configuration: &NodeConfiguration) -> anyhow::Result<(Services, SubscribedStore)> {
+    let identity = configuration
+        .identity
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("a node outside the core needs an identity"))?;
+    let client_identity = ClientIdentity {
+        certificate_pem: identity.certificate.clone(),
+        private_key_pem: identity.private_key.clone(),
+    };
+    let mut core_members: Vec<Arc<dyn Transport>> = Vec::new();
+    for endpoint in &configuration.state.core_members {
+        core_members.push(Arc::new(HttpTransport::with_identity(
+            endpoint,
+            Some(identity.certificate_authority.as_bytes()),
+            Some(&client_identity),
+        )?));
+    }
+    let cache = LocalStateCache::on_disk(&configuration.directories.data.join(STATE_CACHE_FILE));
+    let store = SubscribedStore::new(Arc::new(NodeClient::new(core_members)), cache);
+    let services = Services {
+        store: Arc::new(store.clone()),
+        audit: Arc::new(AuditKeptByTheCore),
+        clock: Arc::new(SystemClock),
+        leases: None,
+    };
+    Ok((services, store))
+}
+
+fn follow_the_core(roles: &mut JoinSet<()>, store: SubscribedStore) {
+    let follower = store.clone();
+    roles.spawn(async move {
+        loop {
+            let ended = follower.follow().await;
+            tracing::warn!(%ended, "the subscription to the core ended; subscribing again");
+            tokio::time::sleep(RESUBSCRIBE_DELAY).await;
+        }
+    });
+    roles.spawn(async move {
+        while !store.has_synchronized() {
+            tokio::time::sleep(SYNCHRONIZATION_POLL).await;
+        }
+        tracing::info!(objects = store.cached_object_count(), "the node received its share of the state");
+        crate::diagnostics::record_serving();
+        futures::future::pending::<()>().await;
+    });
+}
+
 pub async fn run(configuration: NodeConfiguration, modules: Option<ModuleLoading>) -> anyhow::Result<()> {
     let directories = &configuration.directories;
     for directory in
@@ -321,27 +439,24 @@ pub async fn run(configuration: NodeConfiguration, modules: Option<ModuleLoading
     {
         std::fs::create_dir_all(directory)?;
     }
-    let quorium =
-        start_single_voter(&directories.data.join(STATE_DIRECTORY), configuration.state.listen).await?;
-    let hypervisor = Arc::new(cloud_hypervisor(&configuration)?);
-    let services = Services {
-        store: Arc::new(QuoriumStore::new(quorium.clone())),
-        audit: Arc::new(QuoriumAuditLog::new(quorium.clone())),
-        clock: Arc::new(SystemClock),
-        leases: Some(Arc::new(QuoriumLeases::new(quorium.clone()))),
-    };
-    let underlay = amafu_network::bring_up(
-        configuration.network.as_ref().and_then(|network| network.interface.as_deref()),
-    )
-    .await?;
-    let adapters = compute_adapters(&configuration, &hypervisor, underlay)?;
     let mut roles = JoinSet::new();
+    let is_core = configuration.has_role(NodeRole::Core);
+    let services = if is_core {
+        core_member_services(&configuration).await?
+    } else {
+        let (services, subscribed) = subscribed_services(&configuration)?;
+        follow_the_core(&mut roles, subscribed);
+        services
+    };
+    let hypervisor = Arc::new(cloud_hypervisor(&configuration)?);
+    let underlay = amafu_network::bring_up_underlay(configuration.network.as_ref()).await?;
+    let adapters = compute_adapters(&configuration, &hypervisor, underlay)?;
     let responsive = ReconcilerSettings {
         periodic_resynchronization: Duration::from_secs(2),
         ..ReconcilerSettings::default()
     };
     let node_name = configuration.node.name.clone();
-    if configuration.has_role(NodeRole::Core) {
+    if is_core {
         start_api(&mut roles, &configuration, &services)?;
         core_roles(&mut roles, &services, &adapters);
     }
