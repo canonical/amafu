@@ -119,6 +119,7 @@ pub async fn configure(interface: Option<&str>) -> anyhow::Result<Configured> {
     let acknowledgement = lease(&socket, mac).await?;
     let prefix_length = acknowledgement.lease.prefix_length().context("the lease has no subnet mask")?;
     configure_underlay(&UnderlayConfiguration {
+        mac: None,
         interface: Some(interface.clone()),
         address: StaticAddress { address: acknowledgement.your_address, prefix_length },
         gateway: acknowledgement.lease.router,

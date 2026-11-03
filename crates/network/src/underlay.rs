@@ -2,6 +2,7 @@ use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 use std::str::FromStr;
 
+use amafu_domain::MacAddress;
 use futures::TryStreamExt;
 use rtnetlink::packet_route::link::{LinkAttribute, LinkFlags, LinkMessage};
 use rtnetlink::{Handle, LinkUnspec, RouteMessageBuilder, new_connection};
@@ -55,6 +56,8 @@ impl<'de> Deserialize<'de> for StaticAddress {
 pub struct UnderlayConfiguration {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interface: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mac: Option<MacAddress>,
     pub address: StaticAddress,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateway: Option<Ipv4Addr>,
@@ -66,6 +69,8 @@ pub enum UnderlayError {
     Connection(std::io::Error),
     #[error("no network interface named {0} exists")]
     MissingInterface(String),
+    #[error("no network interface has the address {0}")]
+    MissingAddress(MacAddress),
     #[error("no network interface other than loopback exists")]
     NoInterface,
     #[error("netlink refused a request: {0}")]
@@ -94,6 +99,26 @@ async fn bring_up_index(handle: &Handle, index: u32) -> Result<(), UnderlayError
     Ok(handle.link().set(LinkUnspec::new_with_index(index).up().build()).execute().await?)
 }
 
+fn hardware_address(link: &LinkMessage) -> Option<MacAddress> {
+    link.attributes.iter().find_map(|attribute| match attribute {
+        LinkAttribute::Address(bytes) => <[u8; 6]>::try_from(bytes.as_slice()).ok().map(MacAddress::new),
+        _ => None,
+    })
+}
+
+fn choose_configured<'links>(
+    links: &'links [LinkMessage],
+    configuration: &UnderlayConfiguration,
+) -> Result<&'links LinkMessage, UnderlayError> {
+    match configuration.mac {
+        Some(mac) => links
+            .iter()
+            .find(|link| hardware_address(link) == Some(mac))
+            .ok_or(UnderlayError::MissingAddress(mac)),
+        None => choose_interface(links, configuration.interface.as_deref()),
+    }
+}
+
 fn choose_interface<'links>(
     links: &'links [LinkMessage],
     wanted: Option<&str>,
@@ -111,6 +136,18 @@ fn choose_interface<'links>(
 }
 
 pub async fn bring_up(interface: Option<&str>) -> Result<String, UnderlayError> {
+    let configuration = interface.map(|name| UnderlayConfiguration {
+        interface: Some(name.to_owned()),
+        mac: None,
+        address: StaticAddress { address: Ipv4Addr::UNSPECIFIED, prefix_length: 0 },
+        gateway: None,
+    });
+    bring_up_underlay(configuration.as_ref()).await
+}
+
+pub async fn bring_up_underlay(
+    configuration: Option<&UnderlayConfiguration>,
+) -> Result<String, UnderlayError> {
     let (connection, handle, _) = new_connection().map_err(UnderlayError::Connection)?;
     let connection_task = tokio::spawn(connection);
     let result = async {
@@ -118,7 +155,10 @@ pub async fn bring_up(interface: Option<&str>) -> Result<String, UnderlayError> 
         if let Some(loopback) = all_links.iter().find(|link| link_name(link) == Some(LOOPBACK)) {
             bring_up_index(&handle, loopback.header.index).await?;
         }
-        let chosen = choose_interface(&all_links, interface)?;
+        let chosen = match configuration {
+            Some(configuration) => choose_configured(&all_links, configuration)?,
+            None => choose_interface(&all_links, None)?,
+        };
         bring_up_index(&handle, chosen.header.index).await?;
         Ok(link_name(chosen).unwrap_or_default().to_owned())
     }
@@ -140,7 +180,7 @@ async fn apply(handle: &Handle, configuration: &UnderlayConfiguration) -> Result
     if let Some(loopback) = all_links.iter().find(|link| link_name(link) == Some(LOOPBACK)) {
         bring_up_index(handle, loopback.header.index).await?;
     }
-    let interface = choose_interface(&all_links, configuration.interface.as_deref())?;
+    let interface = choose_configured(&all_links, configuration)?;
     let index = interface.header.index;
     let name = link_name(interface).unwrap_or_default().to_owned();
     bring_up_index(handle, index).await?;
