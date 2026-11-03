@@ -6,7 +6,8 @@ use amafu_domain::kinds::storage_backend::{
     StorageBackend, StorageBackendSpecification, StorageProviderSpecification,
 };
 use amafu_domain::kinds::vm::{Vm, VmPhase};
-use amafu_domain::{Object, ObjectId, ObjectName, OciReference, Resource, Sha256Digest};
+use amafu_domain::{Object, ObjectId, ObjectName, OciReference, ProjectName, Resource, Sha256Digest};
+use amafu_scenario::cluster::DEFAULT_PROJECT;
 use amafu_scenario::{Cluster, Level, ObservedInstance, ScenarioError, ScenarioResult, ensure, eventually};
 
 pub const BUSYBOX: &str =
@@ -96,6 +97,19 @@ pub async fn every_node_ready(cluster: &dyn Cluster) -> ScenarioResult {
     eventually(cluster, START_TIMEOUT, "every node has registered and is ready", async || {
         let nodes = operator.list::<amafu_domain::kinds::node::Node>().await?;
         Ok(nodes.len() == expected && nodes.iter().all(|node| node.status.is_ready()))
+    })
+    .await
+}
+
+pub async fn every_core_member_answers(cluster: &dyn Cluster) -> ScenarioResult {
+    let project = ProjectName::new(DEFAULT_PROJECT)
+        .map_err(|error| ScenarioError::Expectation(error.to_string()))?;
+    let clients = cluster.core_member_clients(amafu_domain::access::Role::Member, &project).await;
+    eventually(cluster, START_TIMEOUT, "every core member answers", async || {
+        for client in &clients {
+            client.list::<Vm>().await?;
+        }
+        Ok(true)
     })
     .await
 }

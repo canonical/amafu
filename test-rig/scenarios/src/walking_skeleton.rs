@@ -12,6 +12,8 @@ use amafu_scenario::{
 };
 use futures::FutureExt;
 
+use crate::support::{delete_and_wait, every_core_member_answers, every_node_ready};
+
 const START_TIMEOUT: Duration = Duration::from_secs(60);
 const STOP_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -100,7 +102,10 @@ async fn a_vm_runs_again_after_its_node_is_power_cycled(cluster: &dyn Cluster) -
     cluster.heal(fault).await?;
 
     wait_until_running(cluster, created.id()).await?;
-    always_during(cluster, Duration::from_secs(5), at_most_one_running_instance_per_vm).await
+    every_core_member_answers(cluster).await?;
+    every_node_ready(cluster).await?;
+    always_during(cluster, Duration::from_secs(5), at_most_one_running_instance_per_vm).await?;
+    delete_and_wait::<Vm>(&member, cluster, name.as_str()).await
 }
 
 pub const MISSING_IMAGE_IS_REPORTED: ScenarioDefinition = ScenarioDefinition {
