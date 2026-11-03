@@ -19,6 +19,7 @@ use crate::name::{ObjectName, ProjectName};
 use crate::object::Object;
 use crate::object_id::ObjectId;
 use crate::resource::{Resource, Scope};
+use crate::validation::Validate;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum UntypedChange {
@@ -52,6 +53,7 @@ pub enum UntypedChangeError {
 
 type ApplyUntyped = fn(Option<&Value>, UntypedChange) -> Result<Value, UntypedChangeError>;
 type ConfirmUntypedRemoval = fn(Option<&Value>) -> Result<(), UntypedChangeError>;
+type CheckUntypedObject = fn(&Value) -> Result<(), UntypedChangeError>;
 
 #[derive(Debug, Clone, Copy)]
 pub struct KindDescriptor {
@@ -63,6 +65,7 @@ pub struct KindDescriptor {
     pub project_policy: ProjectPolicy,
     pub apply_change: ApplyUntyped,
     pub confirm_removal: ConfirmUntypedRemoval,
+    pub check_object: CheckUntypedObject,
 }
 
 impl KindDescriptor {
@@ -77,6 +80,7 @@ impl KindDescriptor {
             project_policy: R::PROJECT_POLICY,
             apply_change: apply_untyped::<R>,
             confirm_removal: confirm_untyped_removal::<R>,
+            check_object: check_untyped_object::<R>,
         }
     }
 
@@ -150,6 +154,20 @@ fn confirm_untyped_removal<R: Resource>(stored: Option<&Value>) -> Result<(), Un
     Ok(confirm_removal(current.as_ref())?)
 }
 
+fn check_untyped_object<R: Resource>(stored: &Value) -> Result<(), UntypedChangeError> {
+    let object: Object<R> = decode_body(stored.clone())?;
+    object
+        .specification
+        .validate()
+        .map_err(|error| UntypedChangeError::Change(ChangeError::Invalid(error)))?;
+    if object.metadata.observed_generation > object.metadata.generation {
+        return Err(UntypedChangeError::Malformed(String::from(
+            "the status claims a generation not yet reached",
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -200,5 +218,9 @@ mod tests {
             },
         );
         assert!(matches!(malformed, Err(UntypedChangeError::Malformed(_))));
+        assert_eq!((descriptor.check_object)(&created), Ok(()));
+        let mut oversized = created;
+        oversized["specification"]["cpu_count"] = json!(100_000);
+        assert!((descriptor.check_object)(&oversized).is_err());
     }
 }
