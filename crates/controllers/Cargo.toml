@@ -13,6 +13,7 @@ amafu-reconciler.workspace = true
 amafu-scheduler.workspace = true
 time.workspace = true
 tracing.workspace = true
+uuid.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
