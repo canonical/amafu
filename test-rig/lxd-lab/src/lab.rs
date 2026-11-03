@@ -335,9 +335,8 @@ pub async fn up(
     save_state(repository, &state)?;
     let waited = crate::switch::wait_until_ready(&lxd).await?;
     tracing::info!(seconds = waited.as_secs(), "the lab switch is ready");
-    for node in &state.topology.nodes {
-        lxd.change_state(node.name(), "start", false).await?;
-    }
+    let starts = state.topology.nodes.iter().map(|node| lxd.change_state(node.name(), "start", false));
+    futures::future::try_join_all(starts).await?;
     let mut boots = Vec::new();
     for node in &state.topology.nodes {
         boots.push(wait_until_serving(&state.settings, node).await?);

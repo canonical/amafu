@@ -11,8 +11,7 @@ use amafu_scenario::{Cluster, Level, ObservedInstance, ScenarioError, ScenarioRe
 
 pub const BUSYBOX: &str =
     "docker.io/library/busybox@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec";
-pub const DISK_IMAGE_URL: &str =
-    "https://cloud-images.ubuntu.com/minimal/releases/noble/release-20261027/ubuntu-24.04-minimal-cloudimg-amd64.img";
+pub const DISK_IMAGE_URL: &str = "https://cloud-images.ubuntu.com/minimal/releases/noble/release-20261027/ubuntu-24.04-minimal-cloudimg-amd64.img";
 pub const DISK_IMAGE_SHA256: &str = "3839f148c5a3b4a736e7dbb0af75594743fa5ebee2a202424ba1a32e5d3b5d2c";
 pub const VM_START_BUDGET: Duration = Duration::from_secs(5);
 pub const CONTAINER_START_BUDGET: Duration = Duration::from_secs(3);
