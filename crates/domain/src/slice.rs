@@ -149,9 +149,12 @@ impl NodeSlice {
 
     fn may_update(&self, kind: &str, current: &Value, updated: &Value) -> bool {
         if kind == "NetworkEndpoint" {
-            return self.owns_endpoint(current)
-                && self.owns_endpoint(updated)
-                && project_and_name(current) == project_and_name(updated);
+            let is_same = project_and_name(current) == project_and_name(updated);
+            let is_withdrawal = is_deleting(updated)
+                && names_node(current, "/specification/node", &self.node)
+                && names_node(updated, "/specification/node", &self.node);
+            return is_same
+                && (is_withdrawal || (self.owns_endpoint(current) && self.owns_endpoint(updated)));
         }
         if !changes_only_status(current, updated) {
             return false;
@@ -340,6 +343,22 @@ mod tests {
         assert!(!slice.may_write(&compute(), "NetworkEndpoint", None, Some(&endpoint("web-1", "node-2"))));
         assert!(!slice.may_write(&compute(), "NetworkEndpoint", None, Some(&endpoint("web-9", "node-1"))));
         assert!(slice.may_write(&compute(), "NetworkEndpoint", Some(&endpoint("gone", "node-1")), None));
+        let mut withdrawn = endpoint("gone", "node-1");
+        withdrawn["metadata"]["is_deleting"] = json!(true);
+        assert!(slice.may_write(
+            &compute(),
+            "NetworkEndpoint",
+            Some(&endpoint("gone", "node-1")),
+            Some(&withdrawn)
+        ));
+        let mut foreign_withdrawal = endpoint("web-2", "node-2");
+        foreign_withdrawal["metadata"]["is_deleting"] = json!(true);
+        assert!(!slice.may_write(
+            &compute(),
+            "NetworkEndpoint",
+            Some(&endpoint("web-2", "node-2")),
+            Some(&foreign_withdrawal)
+        ));
         assert!(!slice.may_write(&compute(), "NetworkEndpoint", Some(&endpoint("web-2", "node-2")), None));
     }
 

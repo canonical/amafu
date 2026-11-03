@@ -387,7 +387,10 @@ impl Controller for NodeNetworkController {
                 };
                 apply::<NetworkEndpoint>(store, &endpoint, change).await?;
             }
-            NodeNetworkAction::Withdraw { endpoint } => remove::<NetworkEndpoint>(store, &endpoint).await?,
+            NodeNetworkAction::Withdraw { endpoint } => {
+                apply::<NetworkEndpoint>(store, &endpoint, Change::Delete).await?;
+                remove::<NetworkEndpoint>(store, &endpoint).await?;
+            }
         }
         Ok(())
     }

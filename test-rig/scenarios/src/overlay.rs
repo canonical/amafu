@@ -10,6 +10,7 @@ use amafu_domain::kinds::floating_ip::{
 };
 use amafu_domain::kinds::image::Image;
 use amafu_domain::kinds::network::Network;
+use amafu_domain::kinds::network_endpoint::NetworkEndpoint;
 use amafu_domain::kinds::node::Node;
 use amafu_domain::kinds::security_group::{
     Direction, PortRange, Protocol, Remote, SecurityGroup, SecurityGroupRule, SecurityGroupSpecification,
@@ -152,6 +153,10 @@ async fn vms_on_different_nodes_reach_each_other(cluster: &dyn Cluster) -> Scena
     for vm_name in ["overlay-client", "overlay-server"] {
         delete_and_wait::<Vm>(&member, cluster, vm_name).await?;
     }
+    eventually(cluster, START_TIMEOUT, "the network endpoints of deleted VMs are withdrawn", async || {
+        Ok(member.list::<NetworkEndpoint>().await?.is_empty())
+    })
+    .await?;
     delete_and_wait::<SecurityGroup>(&member, cluster, "overlay-web").await?;
     delete_and_wait::<Network>(&member, cluster, "overlay").await?;
     delete_and_wait::<Image>(&member, cluster, "busybox-overlay").await
