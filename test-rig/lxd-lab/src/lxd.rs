@@ -168,7 +168,8 @@ impl LxdClient {
         let read_log = async |stream: &str| -> anyhow::Result<String> {
             match response.metadata["metadata"]["output"][stream].as_str() {
                 Some(path) => {
-                    Ok(self.http.get(format!("{}{path}", self.endpoint)).send().await?.text().await?)
+                    let path = path.split_once('?').map_or(path, |(path, _)| path);
+                    Ok(self.http.get(self.url(path)).send().await?.text().await?)
                 }
                 None => Ok(String::new()),
             }
