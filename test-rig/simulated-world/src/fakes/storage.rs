@@ -38,15 +38,16 @@ impl FakeBackends {
     }
 }
 
-fn backend_key(specification: &StorageProviderSpecification) -> String {
+fn backend_key(specification: &StorageProviderSpecification, node: &NodeName) -> String {
     match specification {
-        StorageProviderSpecification::LocalDisk => String::from("local-disk"),
+        StorageProviderSpecification::LocalDisk => format!("local-disk@{node}"),
         StorageProviderSpecification::Nfs { server, export } => format!("nfs://{server}{export}"),
     }
 }
 
 struct FakeProvider {
     key: String,
+    node: NodeName,
     specification: StorageProviderSpecification,
     backends: Arc<FakeBackends>,
 }
@@ -63,10 +64,11 @@ impl StorageProvider for FakeProvider {
     async fn create_volume(&self, request: &VolumeRequest) -> Result<ProvisionedVolume, ActionError> {
         self.check().await?;
         lock(&self.backends.volumes).entry(self.key.clone()).or_default().insert(request.volume_id);
+        let is_local = self.specification == StorageProviderSpecification::LocalDisk;
         Ok(ProvisionedVolume {
             identifier: request.volume_id.to_string(),
             size_bytes: request.size_bytes,
-            node: None,
+            node: is_local.then(|| self.node.clone()),
         })
     }
 
@@ -85,6 +87,10 @@ impl StorageProvider for FakeProvider {
         volume: &ProvisionedVolume,
         node: &NodeName,
     ) -> Result<AttachTarget, ActionError> {
+        let is_elsewhere = volume.node.as_ref().is_some_and(|holder| holder != node) || *node != self.node;
+        if self.specification == StorageProviderSpecification::LocalDisk && is_elsewhere {
+            return Err(ActionError::invalid(format!("a local disk volume cannot reach {node}")));
+        }
         Ok(match &self.specification {
             StorageProviderSpecification::LocalDisk => AttachTarget::LocalFile {
                 node: node.clone(),
@@ -156,14 +162,15 @@ impl VolumeAttacher for FakeAttacher {
 }
 
 pub struct FakeStorage {
+    node: NodeName,
     backends: Arc<FakeBackends>,
     attachments: Arc<FakeAttachments>,
 }
 
 impl FakeStorage {
     #[must_use]
-    pub fn new(backends: Arc<FakeBackends>) -> Self {
-        Self { backends, attachments: Arc::new(FakeAttachments::default()) }
+    pub fn new(node: NodeName, backends: Arc<FakeBackends>) -> Self {
+        Self { node, backends, attachments: Arc::new(FakeAttachments::default()) }
     }
 
     #[must_use]
@@ -182,7 +189,8 @@ impl Storage for FakeStorage {
         backend: &StorageProviderSpecification,
     ) -> Result<Arc<dyn StorageProvider>, ActionError> {
         Ok(Arc::new(FakeProvider {
-            key: backend_key(backend),
+            key: backend_key(backend, &self.node),
+            node: self.node.clone(),
             specification: backend.clone(),
             backends: Arc::clone(&self.backends),
         }))
@@ -201,8 +209,8 @@ mod tests {
 
     #[test]
     fn the_fake_storage_honours_the_storage_contract_for_every_protocol() {
-        let storage = FakeStorage::new(FakeBackends::new());
         let node = NodeName::new("node-0").unwrap();
+        let storage = FakeStorage::new(node.clone(), FakeBackends::new());
         for specification in [
             StorageProviderSpecification::LocalDisk,
             StorageProviderSpecification::Nfs { server: String::from("filer"), export: String::from("/srv") },

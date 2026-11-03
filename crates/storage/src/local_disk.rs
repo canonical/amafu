@@ -72,7 +72,8 @@ impl StorageProvider for LocalDiskProvider {
     }
 
     async fn create_volume(&self, request: &VolumeRequest) -> Result<ProvisionedVolume, ActionError> {
-        create_volume_file(&self.directory, request)
+        let provisioned = create_volume_file(&self.directory, request)?;
+        Ok(ProvisionedVolume { node: Some(self.node.clone()), ..provisioned })
     }
 
     async fn delete_volume(&self, volume: &ProvisionedVolume) -> Result<(), ActionError> {
@@ -84,10 +85,10 @@ impl StorageProvider for LocalDiskProvider {
         volume: &ProvisionedVolume,
         node: &NodeName,
     ) -> Result<AttachTarget, ActionError> {
-        if *node != self.node {
+        if *node != self.node || volume.node.as_ref().is_some_and(|holder| *holder != self.node) {
             return Err(ActionError::invalid(format!(
                 "a local disk volume lives on {} and cannot reach {node}",
-                self.node
+                volume.node.as_ref().unwrap_or(&self.node)
             )));
         }
         Ok(AttachTarget::LocalFile {
@@ -157,6 +158,22 @@ mod tests {
         let provider = LocalDiskProvider::new(node.clone(), directory.path().to_path_buf());
         let attacher = LocalFileAttacher::new(node.clone());
         assert_eq!(storage_contract(&provider, &attacher, &node).await, Ok(()));
+    }
+
+    #[tokio::test]
+    async fn a_created_volume_records_its_node() {
+        let directory = tempfile::tempdir().unwrap();
+        let node = NodeName::new("node-0").unwrap();
+        let provider = LocalDiskProvider::new(node.clone(), directory.path().to_path_buf());
+        let request = VolumeRequest {
+            volume_id: amafu_domain::ObjectId::from_uuid(uuid::Uuid::new_v4()),
+            size_bytes: 1 << 20,
+            source_image: None,
+        };
+        let created = provider.create_volume(&request).await.unwrap();
+        assert_eq!(created.node, Some(node));
+        let elsewhere = ProvisionedVolume { node: Some(NodeName::new("node-1").unwrap()), ..created };
+        assert!(provider.export_to_node(&elsewhere, &NodeName::new("node-0").unwrap()).await.is_err());
     }
 
     #[tokio::test]
