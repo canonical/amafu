@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::images::{ImageError, find_image};
 
-pub const CONTAINER_COMMAND_LINE: &str = "console=ttyS0 quiet panic=-1";
+pub const CONTAINER_COMMAND_LINE: &str = "console=ttyS0 quiet panic=-1 initcall_blacklist=i8042_init";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BootSources {

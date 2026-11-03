@@ -1,1 +1,1 @@
-console=ttyS0 panic=-1 quiet
+console=ttyS0 panic=-1 quiet initcall_blacklist=i8042_init
