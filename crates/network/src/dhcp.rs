@@ -164,8 +164,10 @@ impl DhcpMessage {
                         value.as_chunks::<4>().0.iter().map(|octets| Ipv4Addr::from(*octets)).collect();
                 }
                 OPTION_DOMAIN_NAME => {
-                    lease.domain_name =
-                        std::str::from_utf8(value).ok().filter(|name| is_domain_name(name)).map(str::to_owned);
+                    lease.domain_name = std::str::from_utf8(value)
+                        .ok()
+                        .filter(|name| is_domain_name(name))
+                        .map(str::to_owned);
                 }
                 _ => {}
             }
