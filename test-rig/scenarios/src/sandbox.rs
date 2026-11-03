@@ -21,7 +21,7 @@ const NODE_API_PORT: u16 = 7443;
 
 fn hostile_script(gateway: &str) -> String {
     format!(
-        "#!/bin/sh\nif nc -w 3 {gateway} {NODE_API_PORT} </dev/null; then echo HOSTILE-REACHED-NODE; fi\nif nc -w 3 10.215.2.50 {NODE_API_PORT} </dev/null; then echo HOSTILE-REACHED-UNDERLAY; fi\necho HOSTILE-DONE\n"
+        "#!/bin/sh\nif nc -w 3 {gateway} {NODE_API_PORT} </dev/null; then echo HOSTILE-REACHED-NODE; fi\nif nc -w 3 10.215.2.50 {NODE_API_PORT} </dev/null; then echo HOSTILE-REACHED-MANAGEMENT; fi\nif nc -w 3 10.216.0.10 {NODE_API_PORT} </dev/null; then echo HOSTILE-REACHED-UNDERLAY; fi\necho HOSTILE-DONE\n"
     )
 }
 

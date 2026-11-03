@@ -1,5 +1,6 @@
 use std::fmt::Write;
 
+use amafu_domain::Ipv4Network;
 use amafu_domain::kinds::security_group::{Direction, Protocol};
 use amafu_interfaces::network::{PortRule, RemoteAddresses, bridge_name};
 use amafu_interfaces::{NodeNetworkState, Port};
@@ -114,7 +115,7 @@ fn port_at(state: &NodeNetworkState, address: std::net::Ipv4Addr) -> Option<&Por
     state.ports.iter().find(|port| port.address == address)
 }
 
-fn inet_table(output: &mut String, state: &NodeNetworkState) {
+fn inet_table(output: &mut String, state: &NodeNetworkState, infrastructure: &[Ipv4Network]) {
     let _ = writeln!(output, "table inet {TABLE} {{");
     for port in &state.ports {
         port_chains(output, port);
@@ -150,6 +151,11 @@ fn inet_table(output: &mut String, state: &NodeNetworkState) {
         }
     }
     let _ = writeln!(output, "\t\toifname \"{BRIDGE_PREFIX}\" drop");
+    if !infrastructure.is_empty() {
+        let networks: Vec<String> = infrastructure.iter().map(ToString::to_string).collect();
+        let _ =
+            writeln!(output, "\t\tiifname \"{BRIDGE_PREFIX}\" ip daddr {{ {} }} drop", networks.join(", "));
+    }
     for port in &state.ports {
         let _ =
             writeln!(output, "\t\tip saddr {} jump {}", port.address, chain_name(Direction::Egress, port));
@@ -175,12 +181,12 @@ fn inet_table(output: &mut String, state: &NodeNetworkState) {
 }
 
 #[must_use]
-pub fn compile_ruleset(state: &NodeNetworkState) -> String {
+pub fn compile_ruleset(state: &NodeNetworkState, infrastructure: &[Ipv4Network]) -> String {
     let mut output = format!(
         "table bridge {TABLE}\ndelete table bridge {TABLE}\ntable inet {TABLE}\ndelete table inet {TABLE}\n"
     );
     bridge_table(&mut output, state);
-    inet_table(&mut output, state);
+    inet_table(&mut output, state, infrastructure);
     output
 }
 
@@ -201,14 +207,14 @@ mod tests {
 
     #[test]
     fn address_resolution_crosses_the_bridge_before_port_policies() {
-        let ruleset = compile_ruleset(&state());
+        let ruleset = compile_ruleset(&state(), &[]);
         let arp = ruleset.find("ether type arp accept").unwrap();
         assert!(arp < ruleset.find("jump to_").unwrap());
     }
 
     #[test]
     fn the_ruleset_replaces_both_tables_atomically() {
-        let ruleset = compile_ruleset(&state());
+        let ruleset = compile_ruleset(&state(), &[]);
         assert!(ruleset.starts_with(
             "table bridge amafu\ndelete table bridge amafu\ntable inet amafu\ndelete table inet amafu\n"
         ));
@@ -217,7 +223,7 @@ mod tests {
 
     #[test]
     fn every_port_is_bound_to_its_mac_and_address() {
-        let ruleset = compile_ruleset(&state());
+        let ruleset = compile_ruleset(&state(), &[]);
         let tap = PortKey { vm_id: ObjectId::from_uuid(uuid::Uuid::nil()), index: 0 }.tap_name();
         assert!(ruleset.contains(&format!("iifname \"{tap}\" ether saddr != 02:00:00:00:00:01 drop")));
         assert!(ruleset.contains(&format!("iifname \"{tap}\" arp saddr ip != 10.1.0.2 drop")));
@@ -233,7 +239,7 @@ mod tests {
                 networks: vec![Ipv4Network::host("10.1.0.3".parse().unwrap())],
             },
         }];
-        let ruleset = compile_ruleset(&with_rules(rules));
+        let ruleset = compile_ruleset(&with_rules(rules), &[]);
         assert!(
             ruleset.contains("meta l4proto tcp tcp dport 80-80 ip saddr { 10.1.0.3/32 } accept\n\t\tdrop")
         );
@@ -247,17 +253,26 @@ mod tests {
             ports: None,
             remote: RemoteAddresses::Networks { networks: Vec::new() },
         }];
-        assert!(!compile_ruleset(&with_rules(rules)).contains(" accept\n\t\tdrop\n\t}\n\tchain from"));
+        assert!(!compile_ruleset(&with_rules(rules), &[]).contains(" accept\n\t\tdrop\n\t}\n\tchain from"));
     }
 
     #[test]
     fn guests_reach_only_the_node_services_they_need() {
-        let ruleset = compile_ruleset(&state());
+        let ruleset = compile_ruleset(&state(), &[]);
         assert!(ruleset.contains("udp dport 67 accept"));
         assert!(ruleset.contains("ip daddr 10.1.0.1 meta l4proto { tcp, udp } th dport 53 accept"));
         assert!(ruleset.contains("ip daddr 169.254.169.254 tcp dport 80 accept"));
         assert!(ruleset.contains("iifname \"amb*\" drop\n\t}\n\tchain forward"));
         assert!(ruleset.contains("ip saddr 10.1.0.0/24 oifname != \"amb*\" masquerade"));
+    }
+
+    #[test]
+    fn guests_cannot_reach_the_networks_of_the_node() {
+        let infrastructure = ["10.215.2.0/24".parse().unwrap(), "10.216.0.0/24".parse().unwrap()];
+        let ruleset = compile_ruleset(&state(), &infrastructure);
+        let blocked =
+            ruleset.find("iifname \"amb*\" ip daddr { 10.215.2.0/24, 10.216.0.0/24 } drop").unwrap();
+        assert!(blocked < ruleset.find("oifname != \"amb*\" accept").unwrap());
     }
 
     #[test]
@@ -268,7 +283,7 @@ mod tests {
             private_address: "10.1.0.2".parse().unwrap(),
             segment: floating.segments[0].key.clone(),
         });
-        let ruleset = compile_ruleset(&floating);
+        let ruleset = compile_ruleset(&floating, &[]);
         assert!(ruleset.contains("ip daddr 198.51.100.7 dnat ip to 10.1.0.2"));
         let tap = PortKey { vm_id: ObjectId::from_uuid(uuid::Uuid::nil()), index: 0 }.tap_name();
         assert!(ruleset.contains(&format!("ip daddr 10.1.0.2 ct status dnat jump to_{tap}")));
@@ -325,7 +340,12 @@ mod nft_tests {
             .stderr(Stdio::piped())
             .spawn()
             .unwrap();
-        check.stdin.take().unwrap().write_all(compile_ruleset(&state).as_bytes()).unwrap();
+        check
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(compile_ruleset(&state, &["10.216.0.0/24".parse().unwrap()]).as_bytes())
+            .unwrap();
         let output = check.wait_with_output().unwrap();
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     }

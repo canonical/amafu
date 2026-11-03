@@ -3,6 +3,7 @@ use std::net::IpAddr;
 use std::process::Stdio;
 use std::sync::{Mutex, PoisonError};
 
+use amafu_domain::Ipv4Network;
 use amafu_interfaces::network::bridge_name;
 use amafu_interfaces::{
     ActionError, Datapath, ExternalTool, NodeNetworkState, PortKey, RealizedNetwork, SegmentKey,
@@ -90,6 +91,48 @@ fn create_persistent_tap(name: &str) -> Result<(), ActionError> {
     device.persist().map_err(failure)
 }
 
+fn containing_network(address: std::net::Ipv4Addr, prefix_length: u8) -> Option<Ipv4Network> {
+    let mask = u32::MAX.checked_shl(32 - u32::from(prefix_length.min(32))).unwrap_or(0);
+    Ipv4Network::new(std::net::Ipv4Addr::from(u32::from(address) & mask), prefix_length).ok()
+}
+
+async fn infrastructure_networks(
+    handle: &Handle,
+    existing: &BTreeMap<String, u32>,
+) -> Result<Vec<Ipv4Network>, ActionError> {
+    let owned = [BRIDGE_PREFIX, TAP_PREFIX, TUNNEL_PREFIX, "lo"];
+    let mut networks = Vec::new();
+    for (name, index) in
+        existing.iter().filter(|(name, _)| !owned.iter().any(|prefix| name.starts_with(prefix)))
+    {
+        let addresses: Vec<rtnetlink::packet_route::address::AddressMessage> = handle
+            .address()
+            .get()
+            .set_link_index_filter(*index)
+            .execute()
+            .try_collect()
+            .await
+            .map_err(netlink_failure)?;
+        for message in addresses.iter().filter(|message| message.header.prefix_len < 32) {
+            let address = message.attributes.iter().find_map(|attribute| match attribute {
+                rtnetlink::packet_route::address::AddressAttribute::Local(IpAddr::V4(address)) => {
+                    Some(*address)
+                }
+                _ => None,
+            });
+            if let Some(network) =
+                address.and_then(|address| containing_network(address, message.header.prefix_len))
+            {
+                tracing::debug!(interface = %name, %network, "keeping guests away from a node network");
+                networks.push(network);
+            }
+        }
+    }
+    networks.sort();
+    networks.dedup();
+    Ok(networks)
+}
+
 impl KernelDatapath {
     #[must_use]
     pub fn new(underlay: String, nft: ExternalTool) -> Self {
@@ -169,8 +212,12 @@ impl KernelDatapath {
         Ok(())
     }
 
-    async fn apply_ruleset(&self, desired: &NodeNetworkState) -> Result<(), ActionError> {
-        let ruleset = compile_ruleset(desired);
+    async fn apply_ruleset(
+        &self,
+        desired: &NodeNetworkState,
+        infrastructure: &[Ipv4Network],
+    ) -> Result<(), ActionError> {
+        let ruleset = compile_ruleset(desired, infrastructure);
         let mut nft = tokio::process::Command::from(self.nft.command())
             .args(["--file", "-"])
             .stdin(Stdio::piped())
@@ -263,7 +310,8 @@ impl Datapath for KernelDatapath {
                 ActionError::retryable(format!("the underlay {} is missing", self.underlay))
             })?;
             let announced = converge_floating_addresses(&handle, underlay_index, desired).await?;
-            self.apply_ruleset(desired).await?;
+            let infrastructure = infrastructure_networks(&handle, &existing).await?;
+            self.apply_ruleset(desired, &infrastructure).await?;
             self.remove_unwanted(&handle, desired).await?;
             Ok::<_, ActionError>(announced)
         }
@@ -302,5 +350,16 @@ impl Datapath for KernelDatapath {
                 .map(|(_, key)| *key)
                 .collect(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_interface_address_names_its_network() {
+        assert_eq!(containing_network("10.215.2.50".parse().unwrap(), 24), "10.215.2.0/24".parse().ok());
+        assert_eq!(containing_network("10.215.2.50".parse().unwrap(), 0), "0.0.0.0/0".parse().ok());
     }
 }
