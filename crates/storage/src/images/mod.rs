@@ -7,6 +7,7 @@ use std::sync::Arc;
 use amafu_domain::kinds::image::ImageSource;
 use amafu_domain::{ObjectId, OciReference, Sha256Digest};
 use amafu_interfaces::{ActionError, CachedImage, ExternalTool, ImageRequest, ImageStore};
+use amafu_system::files::write_durably;
 use futures::StreamExt;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
@@ -148,6 +149,12 @@ impl CachedImages {
                 String::from_utf8_lossy(&output.stderr)
             )));
         }
+        tokio::fs::File::open(&image)
+            .await
+            .map_err(retryable("opening the root image"))?
+            .sync_all()
+            .await
+            .map_err(retryable("flushing the root image"))?;
         tokio::fs::remove_dir_all(directory.join(ROOT_DIRECTORY))
             .await
             .map_err(retryable("removing the unpacked layers"))?;
@@ -176,7 +183,9 @@ impl CachedImages {
 
     async fn record(&self, image_id: &ObjectId) -> Result<Option<CachedImage>, ActionError> {
         match tokio::fs::read(self.directory(image_id).join(RECORD_FILE)).await {
-            Ok(bytes) => serde_json::from_slice(&bytes).map(Some).map_err(ActionError::fatal),
+            Ok(bytes) => Ok(serde_json::from_slice(&bytes)
+                .inspect_err(|error| tracing::warn!(%image_id, %error, "an unreadable image record is ignored"))
+                .ok()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(retryable("reading the image record")(error)),
         }
@@ -196,11 +205,11 @@ impl ImageStore for CachedImages {
             ImageSource::Container { reference } => self.fetch_container(&directory, reference).await?,
         };
         let record = directory.join(RECORD_FILE);
-        let temporary = record.with_extension("partial");
-        tokio::fs::write(&temporary, serde_json::to_vec(&cached).map_err(ActionError::fatal)?)
+        let contents = serde_json::to_vec(&cached).map_err(ActionError::fatal)?;
+        tokio::task::spawn_blocking(move || write_durably(&record, &contents))
             .await
-            .map_err(retryable("writing the image record"))?;
-        tokio::fs::rename(&temporary, &record).await.map_err(retryable("keeping the image record"))?;
+            .map_err(ActionError::fatal)?
+            .map_err(retryable("keeping the image record"))?;
         tracing::info!(image_id = %request.image_id, size_bytes = cached.size_bytes, "cached an image");
         Ok(cached)
     }
@@ -216,5 +225,21 @@ impl ImageStore for CachedImages {
             }
             _ => Ok(()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn an_image_whose_record_was_cut_short_counts_as_not_cached() {
+        let root = tempfile::tempdir().unwrap();
+        let images = CachedImages::new(root.path().to_path_buf(), ExternalTool::installed("mkfs.erofs")).unwrap();
+        let image_id = ObjectId::from_uuid(uuid::Uuid::new_v4());
+        std::fs::create_dir_all(images.directory(&image_id)).unwrap();
+        std::fs::write(images.directory(&image_id).join(RECORD_FILE), b"").unwrap();
+
+        assert_eq!(images.cached(&image_id).await.unwrap(), None);
     }
 }
