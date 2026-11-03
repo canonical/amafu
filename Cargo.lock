@@ -55,9 +55,11 @@ dependencies = [
  "hyper",
  "hyper-util",
  "proptest",
+ "rcgen",
  "reqwest",
  "rustls",
  "rustls-pemfile",
+ "rustls-webpki",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -70,6 +72,7 @@ dependencies = [
  "tower",
  "tracing",
  "uuid",
+ "x509-parser",
 ]
 
 [[package]]

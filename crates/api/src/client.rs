@@ -12,6 +12,7 @@ use serde::de::DeserializeOwned;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+use crate::node_identity::PeerCertificate;
 use crate::server::{crypto_provider, parse_certificates};
 use crate::wire::{
     CreateRequest, ErrorBody, ListResponse, NewObjectMetadata, REQUEST_ID_HEADER, UpdateRequest, WatchFrame,
@@ -54,22 +55,30 @@ pub trait Transport: Send + Sync {
 #[derive(Clone)]
 pub struct RouterTransport {
     router: axum::Router,
+    peer_certificate: PeerCertificate,
 }
 
 impl RouterTransport {
     #[must_use]
     pub fn new(router: axum::Router) -> Self {
-        Self { router }
+        Self { router, peer_certificate: PeerCertificate::default() }
+    }
+
+    #[must_use]
+    pub fn presenting(router: axum::Router, certificate: Vec<u8>) -> Self {
+        Self { router, peer_certificate: PeerCertificate(Some(certificate)) }
     }
 }
 
 #[async_trait::async_trait]
 impl Transport for RouterTransport {
     async fn send(&self, request: Request<Bytes>) -> Result<Response<ResponseBody>, ClientError> {
+        let mut request = request.map(Body::from);
+        request.extensions_mut().insert(self.peer_certificate.clone());
         let response = self
             .router
             .clone()
-            .oneshot(request.map(Body::from))
+            .oneshot(request)
             .await
             .map_err(|error| ClientError::Transport(error.to_string()))?;
         Ok(response.map(|body| {
@@ -86,8 +95,22 @@ pub struct HttpTransport {
     base_url: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClientIdentity {
+    pub certificate_pem: String,
+    pub private_key_pem: String,
+}
+
 impl HttpTransport {
     pub fn new(base_url: &str, certificate_authority_pem: Option<&[u8]>) -> Result<Self, ClientError> {
+        Self::with_identity(base_url, certificate_authority_pem, None)
+    }
+
+    pub fn with_identity(
+        base_url: &str,
+        certificate_authority_pem: Option<&[u8]>,
+        identity: Option<&ClientIdentity>,
+    ) -> Result<Self, ClientError> {
         let invalid = |error: &dyn std::fmt::Display| ClientError::Transport(error.to_string());
         let mut roots = rustls::RootCertStore::empty();
         if let Some(pem) = certificate_authority_pem {
@@ -95,11 +118,23 @@ impl HttpTransport {
                 roots.add(certificate).map_err(|error| invalid(&error))?;
             }
         }
-        let mut tls = rustls::ClientConfig::builder_with_provider(crypto_provider())
+        let builder = rustls::ClientConfig::builder_with_provider(crypto_provider())
             .with_safe_default_protocol_versions()
             .map_err(|error| invalid(&error))?
-            .with_root_certificates(roots)
-            .with_no_client_auth();
+            .with_root_certificates(roots);
+        let mut tls = match identity {
+            Some(identity) => {
+                let chain = parse_certificates(identity.certificate_pem.as_bytes())
+                    .map_err(|error| invalid(&error))?;
+                let key = rustls_pemfile::private_key(&mut identity.private_key_pem.as_bytes())
+                    .map_err(|error| invalid(&error))?
+                    .ok_or_else(|| {
+                        ClientError::Transport(String::from("the client identity holds no key"))
+                    })?;
+                builder.with_client_auth_cert(chain, key).map_err(|error| invalid(&error))?
+            }
+            None => builder.with_no_client_auth(),
+        };
         tls.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
         let client =
             reqwest::Client::builder().use_preconfigured_tls(tls).build().map_err(|error| invalid(&error))?;
@@ -163,16 +198,16 @@ fn describe(error: &dyn std::error::Error) -> String {
     description
 }
 
-async fn collect(body: ResponseBody) -> Result<Bytes, ClientError> {
+pub(crate) async fn collect(body: ResponseBody) -> Result<Bytes, ClientError> {
     let chunks: Vec<Bytes> = body.collect::<Vec<_>>().await.into_iter().collect::<Result<_, _>>()?;
     Ok(chunks.concat().into())
 }
 
-fn decode<T: DeserializeOwned>(body: &[u8]) -> Result<T, ClientError> {
+pub(crate) fn decode<T: DeserializeOwned>(body: &[u8]) -> Result<T, ClientError> {
     serde_json::from_slice(body).map_err(|error| ClientError::Decode(error.to_string()))
 }
 
-fn refusal(status: u16, body: &[u8]) -> ClientError {
+pub(crate) fn refusal(status: u16, body: &[u8]) -> ClientError {
     match serde_json::from_slice::<ErrorBody>(body) {
         Ok(body) => ClientError::Api { status, body },
         Err(_) => ClientError::UnexpectedStatus { status, body: String::from_utf8_lossy(body).into_owned() },
