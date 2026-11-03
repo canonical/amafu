@@ -9,6 +9,6 @@ pub mod subscribed;
 
 pub use audit::QuoriumAuditLog;
 pub use leases::QuoriumLeases;
-pub use node::{StateError, start_single_voter};
+pub use node::{STATE_SERVER_NAME, StateError, StateTls, VoterSettings, start_single_voter, start_voter};
 pub use store::QuoriumStore;
 pub use subscribed::{LocalStateCache, SubscribedStore};
