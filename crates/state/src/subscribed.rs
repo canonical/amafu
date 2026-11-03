@@ -1,10 +1,10 @@
 use std::collections::BTreeMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use amafu_domain::{ObjectReference, ProjectName};
+use amafu_system::files::write_durably;
 use amafu_interfaces::{
     Consistency, CoreConnection, Fence, SliceChange, SliceRecord, Store, StoreError, StoredRecord, WatchEvent,
 };
@@ -76,15 +76,7 @@ impl LocalStateCache {
             .map(|(reference, record)| SliceRecord { reference: reference.clone(), record: record.clone() })
             .collect();
         let contents = serde_json::to_vec(&entries).map_err(std::io::Error::other)?;
-        let partial = path.with_extension("partial");
-        let mut file = std::fs::File::create(&partial)?;
-        file.write_all(&contents)?;
-        file.sync_all()?;
-        std::fs::rename(&partial, path)?;
-        if let Some(directory) = path.parent() {
-            std::fs::File::open(directory)?.sync_all()?;
-        }
-        Ok(())
+        write_durably(path, &contents)
     }
 
     fn read(&self, reference: &ObjectReference) -> Option<StoredRecord> {
