@@ -5,7 +5,7 @@ use amafu_domain::kinds::image::{Image, ImagePhase, ImageStatus};
 use amafu_domain::kinds::vm::Vm;
 use amafu_domain::kinds::volume::Volume;
 use amafu_domain::{Change, NodeName, Object, ObjectReference};
-use amafu_interfaces::objects::{apply, get, list, remove};
+use amafu_interfaces::objects::{apply, get, list, remove, update_status};
 use amafu_interfaces::{ActionError, CachedImage, Consistency, ImageRequest, ImageStore, Store};
 use amafu_reconciler::{Controller, KeyMapping, WatchedKind};
 
@@ -13,12 +13,18 @@ pub struct ImageController {
     node: NodeName,
     store: Arc<dyn Store>,
     images: Arc<dyn ImageStore>,
+    sees_every_user: bool,
 }
 
 impl ImageController {
     #[must_use]
-    pub fn new(node: NodeName, store: Arc<dyn Store>, images: Arc<dyn ImageStore>) -> Self {
-        Self { node, store, images }
+    pub fn new(
+        node: NodeName,
+        store: Arc<dyn Store>,
+        images: Arc<dyn ImageStore>,
+        sees_every_user: bool,
+    ) -> Self {
+        Self { node, store, images, sees_every_user }
     }
 }
 
@@ -28,14 +34,32 @@ pub struct ImageObservation {
     pub image: Option<Object<Image>>,
     pub cached: Option<CachedImage>,
     pub is_in_use: bool,
+    pub sees_every_user: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImageAction {
     Fetch { request: ImageRequest, observed_generation: u64 },
-    Report { observed_generation: u64, status: ImageStatus },
+    ReportCached { size_bytes: u64 },
     DiscardCache,
+    ReportDiscarded,
     Remove,
+}
+
+fn plan_deletion(image: &Object<Image>, observation: &ImageObservation) -> Vec<ImageAction> {
+    if observation.is_in_use {
+        return Vec::new();
+    }
+    if observation.cached.is_some() {
+        return vec![ImageAction::DiscardCache];
+    }
+    if image.status.cached_on.contains(&observation.node) {
+        return vec![ImageAction::ReportDiscarded];
+    }
+    if image.status.cached_on.is_empty() && observation.sees_every_user {
+        return vec![ImageAction::Remove];
+    }
+    Vec::new()
 }
 
 #[must_use]
@@ -44,35 +68,38 @@ pub fn plan_image(observation: &ImageObservation) -> Vec<ImageAction> {
         return Vec::new();
     };
     if image.metadata.is_deleting {
-        return if observation.is_in_use {
-            Vec::new()
-        } else if observation.cached.is_some() {
-            vec![ImageAction::DiscardCache]
-        } else {
-            vec![ImageAction::Remove]
-        };
+        return plan_deletion(image, observation);
     }
-    let observed_generation = image.metadata.generation;
     match &observation.cached {
         None if image.status.phase == ImagePhase::Failed && image.is_status_current() => Vec::new(),
         None => vec![ImageAction::Fetch {
             request: ImageRequest { image_id: image.metadata.id, source: image.specification.source.clone() },
-            observed_generation,
+            observed_generation: image.metadata.generation,
         }],
         Some(cached) => {
-            let status = ImageStatus {
-                phase: ImagePhase::Ready,
-                size_bytes: cached.size_bytes,
-                cached_on: BTreeSet::from([observation.node.clone()]),
-                message: None,
-            };
-            if image.status == status && image.is_status_current() {
+            let is_reported = image.status.phase == ImagePhase::Ready
+                && image.status.size_bytes == cached.size_bytes
+                && image.status.cached_on.contains(&observation.node)
+                && image.is_status_current();
+            if is_reported {
                 Vec::new()
             } else {
-                vec![ImageAction::Report { observed_generation, status }]
+                vec![ImageAction::ReportCached { size_bytes: cached.size_bytes }]
             }
         }
     }
+}
+
+fn with_node_cached(image: &Object<Image>, node: &NodeName, size_bytes: u64) -> Option<ImageStatus> {
+    let mut cached_on = image.status.cached_on.clone();
+    cached_on.insert(node.clone());
+    let status = ImageStatus { phase: ImagePhase::Ready, size_bytes, cached_on, message: None };
+    (status != image.status || !image.is_status_current()).then_some(status)
+}
+
+fn without_node(image: &Object<Image>, node: &NodeName) -> Option<ImageStatus> {
+    let mut cached_on: BTreeSet<NodeName> = image.status.cached_on.clone();
+    cached_on.remove(node).then(|| ImageStatus { cached_on, ..image.status.clone() })
 }
 
 impl ImageController {
@@ -115,7 +142,13 @@ impl Controller for ImageController {
             Some(image) => self.is_in_use(image).await?,
             None => false,
         };
-        Ok(ImageObservation { node: self.node.clone(), image, cached, is_in_use })
+        Ok(ImageObservation {
+            node: self.node.clone(),
+            image,
+            cached,
+            is_in_use,
+            sees_every_user: self.sees_every_user,
+        })
     }
 
     fn plan(&self, observation: &ImageObservation) -> Vec<ImageAction> {
@@ -138,8 +171,13 @@ impl Controller for ImageController {
                 }
                 Err(error) => Err(error),
             },
-            ImageAction::Report { observed_generation, status } => {
-                apply::<Image>(store, key, Change::UpdateStatus { observed_generation, status }).await?;
+            ImageAction::ReportCached { size_bytes } => {
+                update_status::<Image>(store, key, |image| with_node_cached(image, &self.node, size_bytes))
+                    .await?;
+                Ok(())
+            }
+            ImageAction::ReportDiscarded => {
+                update_status::<Image>(store, key, |image| without_node(image, &self.node)).await?;
                 Ok(())
             }
             ImageAction::DiscardCache => {
@@ -187,14 +225,32 @@ mod tests {
             image: Some(image(ImagePhase::Pending)),
             cached: None,
             is_in_use: false,
+            sees_every_user: true,
         };
         assert!(matches!(plan_image(&fresh).as_slice(), [ImageAction::Fetch { .. }]));
         let fetched = ImageObservation { cached: Some(cached()), ..fresh };
-        let ImageAction::Report { status, .. } = only(plan_image(&fetched)) else {
-            panic!("expected a report")
+        assert_eq!(only(plan_image(&fetched)), ImageAction::ReportCached { size_bytes: 42 });
+    }
+
+    #[test]
+    fn each_node_adds_itself_to_the_nodes_caching_the_image() {
+        let mut elsewhere = image(ImagePhase::Ready);
+        elsewhere.status.cached_on.insert(NodeName::new("node-9").unwrap());
+        elsewhere.status.size_bytes = 42;
+        let status = with_node_cached(&elsewhere, &here(), 42).unwrap();
+        assert_eq!(status.cached_on.len(), 2);
+        let mut reported = elsewhere.clone();
+        reported.status = status;
+        assert_eq!(with_node_cached(&reported, &here(), 42), None);
+        assert_eq!(without_node(&reported, &here()).unwrap().cached_on, elsewhere.status.cached_on);
+        let observation = ImageObservation {
+            node: here(),
+            image: Some(reported),
+            cached: Some(cached()),
+            is_in_use: false,
+            sees_every_user: false,
         };
-        assert_eq!(status.size_bytes, 42);
-        assert!(status.cached_on.contains(&here()));
+        assert_eq!(plan_image(&observation), Vec::new());
     }
 
     #[test]
@@ -204,20 +260,32 @@ mod tests {
             image: Some(image(ImagePhase::Failed)),
             cached: None,
             is_in_use: false,
+            sees_every_user: true,
         };
         assert_eq!(plan_image(&failed), Vec::new());
     }
 
     #[test]
-    fn a_deleted_image_discards_its_cache_then_disappears() {
+    fn a_deleted_image_discards_every_cache_then_disappears() {
         let mut deleting = image(ImagePhase::Ready);
         deleting.metadata.is_deleting = true;
-        let in_use =
-            ImageObservation { node: here(), image: Some(deleting), cached: Some(cached()), is_in_use: true };
+        deleting.status.cached_on = BTreeSet::from([here()]);
+        let in_use = ImageObservation {
+            node: here(),
+            image: Some(deleting.clone()),
+            cached: Some(cached()),
+            is_in_use: true,
+            sees_every_user: true,
+        };
         assert_eq!(plan_image(&in_use), Vec::new());
         let with_cache = ImageObservation { is_in_use: false, ..in_use };
         assert_eq!(plan_image(&with_cache), vec![ImageAction::DiscardCache]);
         let without_cache = ImageObservation { cached: None, ..with_cache };
-        assert_eq!(plan_image(&without_cache), vec![ImageAction::Remove]);
+        assert_eq!(plan_image(&without_cache), vec![ImageAction::ReportDiscarded]);
+        deleting.status.cached_on.clear();
+        let forgotten = ImageObservation { image: Some(deleting), ..without_cache };
+        assert_eq!(plan_image(&forgotten), vec![ImageAction::Remove]);
+        let partial_view = ImageObservation { sees_every_user: false, ..forgotten };
+        assert_eq!(plan_image(&partial_view), Vec::new());
     }
 }

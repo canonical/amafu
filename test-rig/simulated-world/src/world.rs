@@ -352,12 +352,22 @@ impl SimulatedWorld {
         let (network_store, datapath, local_services) =
             (Arc::clone(&store), Arc::clone(&services.datapath), Arc::clone(&services.local_services));
         let (node_store, node_clock, node_name) = (Arc::clone(&store), Arc::clone(&clock), name.clone());
+        let (image_store, image_cache, image_node) =
+            (Arc::clone(&store), Arc::clone(&services.images) as Arc<dyn ImageStore>, name.clone());
         let mut tasks = vec![
             self.role(format!("{name}/node"), heartbeat, move || {
                 NodeController::new(identity.clone(), Arc::clone(&node_store), Arc::clone(&node_clock))
             }),
             self.role(format!("{name}/compute"), fast, move || {
                 ComputeController::new(node_name.clone(), compute.clone())
+            }),
+            self.role(format!("{name}/image"), fast, move || {
+                ImageController::new(
+                    image_node.clone(),
+                    Arc::clone(&image_store),
+                    Arc::clone(&image_cache),
+                    is_core,
+                )
             }),
         ];
         let node_name = name.clone();
@@ -398,7 +408,6 @@ impl SimulatedWorld {
             (Arc::clone(store), Arc::clone(store), Arc::clone(store));
         let (volume_store, volume_storage, volume_images) =
             (Arc::clone(store), Arc::clone(&storage), Arc::clone(&images));
-        let (image_store, image_cache, image_node) = (Arc::clone(store), Arc::clone(&images), name.clone());
         let (backend_store, backend_storage) = (Arc::clone(store), Arc::clone(&storage));
         vec![
             singleton_role(
@@ -432,18 +441,6 @@ impl SimulatedWorld {
                         Arc::clone(&volume_store),
                         Arc::clone(&volume_storage),
                         Arc::clone(&volume_images),
-                    )
-                },
-                &singletons,
-                settings,
-            ),
-            singleton_role(
-                format!("{name}/image"),
-                move |_| {
-                    ImageController::new(
-                        image_node.clone(),
-                        Arc::clone(&image_store),
-                        Arc::clone(&image_cache),
                     )
                 },
                 &singletons,

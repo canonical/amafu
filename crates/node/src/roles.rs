@@ -215,7 +215,7 @@ fn cloud_hypervisor(configuration: &NodeConfiguration) -> anyhow::Result<CloudHy
     }))
 }
 
-fn core_roles(roles: &mut JoinSet<()>, services: &Services, adapters: &ComputeAdapters, node: &NodeName) {
+fn core_roles(roles: &mut JoinSet<()>, services: &Services, adapters: &ComputeAdapters) {
     let store = || Arc::clone(&services.store);
     let settings = ReconcilerSettings::default();
     let scheduler_store = store();
@@ -262,15 +262,6 @@ fn core_roles(roles: &mut JoinSet<()>, services: &Services, adapters: &ComputeAd
         services,
         settings,
     );
-    let (image_store, image_cache, image_node) =
-        (store(), Arc::clone(&adapters.images) as Arc<dyn ImageStore>, node.clone());
-    singleton_role(
-        roles,
-        "image",
-        move |_| ImageController::new(image_node.clone(), Arc::clone(&image_store), Arc::clone(&image_cache)),
-        services,
-        settings,
-    );
     let (backend_store, backend_storage) = (store(), Arc::clone(&adapters.storage) as Arc<dyn Storage>);
     singleton_role(
         roles,
@@ -300,6 +291,13 @@ fn compute_roles(
         },
     );
     controller_role(roles, "compute", Arc::new(compute), services, settings);
+    let image = ImageController::new(
+        node.clone(),
+        Arc::clone(&services.store),
+        Arc::clone(&adapters.images) as Arc<dyn ImageStore>,
+        services.leases.is_some(),
+    );
+    controller_role(roles, "image", Arc::new(image), services, settings);
     let node_network = NodeNetworkController::new(
         node.clone(),
         Arc::clone(&services.store),
@@ -338,7 +336,7 @@ pub async fn run(configuration: NodeConfiguration, modules: Option<ModuleLoading
     let node_name = configuration.node.name.clone();
     if configuration.has_role(NodeRole::Core) {
         start_api(&mut roles, &configuration, &services)?;
-        core_roles(&mut roles, &services, &adapters, &node_name);
+        core_roles(&mut roles, &services, &adapters);
     }
     let identity = node_identity(&configuration)?;
     let node =
