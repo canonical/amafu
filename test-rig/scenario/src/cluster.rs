@@ -2,9 +2,12 @@ use std::fmt;
 use std::sync::Arc;
 
 use amafu_api::ApiClient;
+use std::net::Ipv4Addr;
+
 use amafu_api::NodeClient;
 use amafu_api::diagnostics::SandboxCheck;
 use amafu_domain::access::Role;
+use amafu_domain::kinds::external_network::ExternalNetworkSpecification;
 use amafu_domain::{NodeName, ProjectName};
 use amafu_interfaces::Clock;
 use uuid::Uuid;
@@ -68,6 +71,11 @@ pub trait Cluster {
     fn nfs_export(&self) -> Option<NfsExport>;
 
     fn certificate_authority(&self) -> &CertificateAuthority;
+
+    fn external_network(&self) -> ExternalNetworkSpecification;
+
+    async fn probe_from_outside(&self, address: Ipv4Addr, port: u16)
+    -> Result<Option<String>, ScenarioError>;
 
     async fn node_connection(&self, identity: Option<&TlsIdentity>)
     -> Result<Arc<NodeClient>, ScenarioError>;

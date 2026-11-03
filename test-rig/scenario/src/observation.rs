@@ -36,6 +36,29 @@ pub struct ObservedPort {
     pub address: Ipv4Addr,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObservedRemoteEndpoint {
+    pub node: NodeName,
+    pub segment: String,
+    pub address: Ipv4Addr,
+    pub node_address: Ipv4Addr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObservedFloatingAddress {
+    pub node: NodeName,
+    pub address: Ipv4Addr,
+    pub private_address: Ipv4Addr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObservedFencedWrite {
+    pub object: String,
+    pub fence: String,
+    pub token: u64,
+    pub is_accepted: bool,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ClusterObservation {
     pub instances: Vec<ObservedInstance>,
@@ -43,6 +66,12 @@ pub struct ClusterObservation {
     pub attachments: Vec<ObservedAttachment>,
     #[serde(default)]
     pub ports: Vec<ObservedPort>,
+    #[serde(default)]
+    pub remote_endpoints: Vec<ObservedRemoteEndpoint>,
+    #[serde(default)]
+    pub floating_addresses: Vec<ObservedFloatingAddress>,
+    #[serde(default)]
+    pub fenced_writes: Vec<ObservedFencedWrite>,
     pub stored_objects: Vec<Value>,
 }
 

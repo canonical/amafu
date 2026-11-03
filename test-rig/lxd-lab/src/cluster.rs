@@ -7,7 +7,10 @@ use amafu_api::diagnostics::{
 };
 use amafu_api::wire::ListResponse;
 use amafu_api::{ApiClient, ClientIdentity, HttpTransport, NodeClient, Transport};
+use std::net::Ipv4Addr;
+
 use amafu_domain::access::Role;
+use amafu_domain::kinds::external_network::ExternalNetworkSpecification;
 use amafu_domain::{NodeName, ProjectName};
 use amafu_interfaces::Clock;
 use amafu_scenario::{
@@ -191,6 +194,18 @@ impl Cluster for VirtualLab {
 
     fn certificate_authority(&self) -> &CertificateAuthority {
         &self.state.authority
+    }
+
+    fn external_network(&self) -> ExternalNetworkSpecification {
+        self.state.topology.external_network.clone()
+    }
+
+    async fn probe_from_outside(
+        &self,
+        address: Ipv4Addr,
+        port: u16,
+    ) -> Result<Option<String>, ScenarioError> {
+        crate::switch::probe_http(&self.lxd, address, port).await.map(Some).map_err(lab_failure)
     }
 
     async fn node_connection(

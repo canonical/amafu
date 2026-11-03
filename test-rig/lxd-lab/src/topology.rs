@@ -1,6 +1,8 @@
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
+use amafu_domain::Ipv4Network;
+use amafu_domain::kinds::external_network::ExternalNetworkSpecification;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +65,7 @@ pub const NODE_DIAGNOSTICS_PORT: u16 = 7444;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LabTopology {
     pub nodes: Vec<LabNode>,
+    pub external_network: ExternalNetworkSpecification,
 }
 
 impl LabTopology {
@@ -83,7 +86,16 @@ impl LabTopology {
                 }
             })
             .collect();
-        Self { nodes }
+        let external_network = ExternalNetworkSpecification {
+            subnet: Ipv4Network::new(
+                Ipv4Addr::new(octets[0], octets[1], octets[2], 0),
+                settings.prefix_length,
+            )
+            .unwrap_or_else(|_| unreachable!()),
+            first_address: Ipv4Addr::new(octets[0], octets[1], octets[2], 100),
+            last_address: Ipv4Addr::new(octets[0], octets[1], octets[2], 149),
+        };
+        Self { nodes, external_network }
     }
 
     #[must_use]

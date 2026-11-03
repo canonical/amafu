@@ -10,4 +10,7 @@ pub use certificates::{CertificateAuthority, TlsIdentity};
 pub use cluster::{Cluster, Fault, FaultHandle, Level, NfsExport};
 pub use definition::ScenarioDefinition;
 pub use error::{ScenarioError, ScenarioResult, Violation};
-pub use observation::{ClusterObservation, ObservedAttachment, ObservedInstance, ObservedPort};
+pub use observation::{
+    ClusterObservation, ObservedAttachment, ObservedFencedWrite, ObservedFloatingAddress, ObservedInstance,
+    ObservedPort, ObservedRemoteEndpoint,
+};

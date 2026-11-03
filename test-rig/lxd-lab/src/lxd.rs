@@ -35,6 +35,20 @@ impl LxdCredentials {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandOutput {
+    pub exit_code: i64,
+    pub standard_output: String,
+    pub standard_error: String,
+}
+
+impl CommandOutput {
+    #[must_use]
+    pub fn succeeded(&self) -> bool {
+        self.exit_code == 0
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct LxdResponse {
     #[serde(rename = "type")]
@@ -139,6 +153,31 @@ impl LxdClient {
         let body = json!({ "action": action, "force": is_forced, "timeout": 30 });
         self.request(Method::PUT, &format!("/1.0/instances/{instance}/state"), Some(body)).await?;
         Ok(())
+    }
+
+    pub async fn execute(&self, instance: &str, script: &str) -> anyhow::Result<CommandOutput> {
+        let body = json!({
+            "command": ["sh", "-c", script],
+            "record-output": true,
+            "wait-for-websocket": false,
+            "interactive": false,
+        });
+        let request = self.http.post(self.url(&format!("/1.0/instances/{instance}/exec"))).json(&body);
+        let response = self.send(request).await?;
+        let exit_code = response.metadata["metadata"]["return"].as_i64().unwrap_or(-1);
+        let read_log = async |stream: &str| -> anyhow::Result<String> {
+            match response.metadata["metadata"]["output"][stream].as_str() {
+                Some(path) => {
+                    Ok(self.http.get(format!("{}{path}", self.endpoint)).send().await?.text().await?)
+                }
+                None => Ok(String::new()),
+            }
+        };
+        Ok(CommandOutput {
+            exit_code,
+            standard_output: read_log("1").await?,
+            standard_error: read_log("2").await?,
+        })
     }
 
     pub async fn console_log(&self, instance: &str) -> anyhow::Result<String> {

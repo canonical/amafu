@@ -14,7 +14,42 @@ pub const ALL: &[(&str, Invariant)] = &[
     ),
     ("a volume is attached on at most one node", a_volume_is_attached_on_at_most_one_node),
     ("no address is used twice in one network", no_address_is_used_twice_in_one_network),
+    ("no write is accepted with a stale fencing token", no_write_is_accepted_with_a_stale_fencing_token),
 ];
+
+pub fn a_floating_address_is_served_by_at_most_one_node(
+    observation: &ClusterObservation,
+) -> Result<(), Violation> {
+    let mut serving: BTreeMap<Ipv4Addr, &NodeName> = BTreeMap::new();
+    for floating in &observation.floating_addresses {
+        if let Some(other) = serving.insert(floating.address, &floating.node)
+            && other != &floating.node
+        {
+            return Err(Violation::new("a floating address is served by two nodes")
+                .with("address", floating.address)
+                .with("nodes", [other, &floating.node]));
+        }
+    }
+    Ok(())
+}
+
+pub fn no_write_is_accepted_with_a_stale_fencing_token(
+    observation: &ClusterObservation,
+) -> Result<(), Violation> {
+    let mut highest: BTreeMap<(&str, &str), u64> = BTreeMap::new();
+    for write in observation.fenced_writes.iter().filter(|write| write.is_accepted) {
+        let accepted = highest.entry((write.object.as_str(), write.fence.as_str())).or_default();
+        if write.token < *accepted {
+            return Err(Violation::new("a write with a stale fencing token was accepted")
+                .with("object", &write.object)
+                .with("fence", &write.fence)
+                .with("token", write.token)
+                .with("newer token", *accepted));
+        }
+        *accepted = write.token;
+    }
+    Ok(())
+}
 
 pub fn a_volume_is_attached_on_at_most_one_node(observation: &ClusterObservation) -> Result<(), Violation> {
     let mut nodes_by_volume: BTreeMap<&str, BTreeSet<&NodeName>> = BTreeMap::new();
@@ -103,7 +138,7 @@ pub fn check_all(observation: &ClusterObservation) -> Result<(), Violation> {
 #[cfg(test)]
 mod tests {
     use amafu_interfaces::InstanceState;
-    use amafu_scenario::ObservedInstance;
+    use amafu_scenario::{ObservedFencedWrite, ObservedFloatingAddress, ObservedInstance};
     use serde_json::json;
 
     use super::*;
@@ -189,5 +224,38 @@ mod tests {
             ..ClusterObservation::default()
         };
         assert!(no_address_is_used_twice_in_one_network(&reused).is_err());
+    }
+
+    #[test]
+    fn a_floating_address_on_two_nodes_is_a_violation() {
+        let served = |node: &str| ObservedFloatingAddress {
+            node: NodeName::new(node).unwrap(),
+            address: Ipv4Addr::new(198, 51, 100, 7),
+            private_address: Ipv4Addr::new(10, 1, 0, 2),
+        };
+        let mut observation = ClusterObservation {
+            floating_addresses: vec![served("node-0")],
+            ..ClusterObservation::default()
+        };
+        assert!(a_floating_address_is_served_by_at_most_one_node(&observation).is_ok());
+        observation.floating_addresses.push(served("node-1"));
+        assert!(a_floating_address_is_served_by_at_most_one_node(&observation).is_err());
+    }
+
+    #[test]
+    fn an_accepted_write_with_an_older_token_is_a_violation() {
+        let write = |token, is_accepted| ObservedFencedWrite {
+            object: String::from("Vm/project-a/web-1"),
+            fence: String::from("scheduler"),
+            token,
+            is_accepted,
+        };
+        let mut observation = ClusterObservation {
+            fenced_writes: vec![write(5, true), write(4, false), write(6, true)],
+            ..ClusterObservation::default()
+        };
+        assert!(no_write_is_accepted_with_a_stale_fencing_token(&observation).is_ok());
+        observation.fenced_writes.push(write(5, true));
+        assert!(no_write_is_accepted_with_a_stale_fencing_token(&observation).is_err());
     }
 }
