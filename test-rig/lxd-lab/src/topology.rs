@@ -117,6 +117,7 @@ impl LabNode {
     }
 }
 
+pub const MANAGEMENT_MTU: u32 = 1400;
 pub const NODE_API_PORT: u16 = 7443;
 pub const NODE_DIAGNOSTICS_PORT: u16 = 7444;
 pub const NODE_STATE_PORT: u16 = 7400;

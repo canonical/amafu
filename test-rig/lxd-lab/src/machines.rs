@@ -5,6 +5,7 @@ use reqwest::Method;
 use serde_json::{Value, json};
 
 use crate::lxd::LxdClient;
+use crate::topology::MANAGEMENT_MTU;
 use crate::topology::{LabMachine, LabSettings};
 
 const IMAGE_SERVER: &str = "https://cloud-images.ubuntu.com/releases";
@@ -28,7 +29,7 @@ pub enum MachineSource {
 #[must_use]
 pub fn network_configuration(settings: &LabSettings, machine: &LabMachine) -> String {
     format!(
-        "version: 2\nethernets:\n  management:\n    match:\n      macaddress: \"{}\"\n    set-name: management\n    addresses: [{}/{}]\n    routes:\n      - to: default\n        via: {}\n    nameservers:\n      addresses: [{}]\n  underlay:\n    match:\n      macaddress: \"{}\"\n    set-name: underlay\n    addresses: [{}/{}]\n",
+        "version: 2\nethernets:\n  management:\n    match:\n      macaddress: \"{}\"\n    set-name: management\n    mtu: {MANAGEMENT_MTU}\n    addresses: [{}/{}]\n    routes:\n      - to: default\n        via: {}\n    nameservers:\n      addresses: [{}]\n  underlay:\n    match:\n      macaddress: \"{}\"\n    set-name: underlay\n    addresses: [{}/{}]\n",
         machine.management_mac,
         machine.management_address,
         settings.prefix_length,

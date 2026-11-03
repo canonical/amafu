@@ -10,6 +10,7 @@ use serde_json::{Map, Value, json};
 
 use crate::lxd::LxdClient;
 use crate::machines::wait_for_marker;
+use crate::topology::MANAGEMENT_MTU;
 use crate::topology::{LabMachine, LabSettings, LabTopology};
 
 pub const SWITCH_INSTANCE: &str = "lab-switch";
@@ -54,7 +55,7 @@ pub async fn delete_port_networks(lxd: &LxdClient) -> anyhow::Result<()> {
 fn network_configuration(settings: &LabSettings, topology: &LabTopology) -> String {
     let switch = &topology.switch;
     let mut configuration = format!(
-        "version: 2\nethernets:\n  management:\n    match:\n      macaddress: \"{}\"\n    set-name: management\n    addresses: [{}/{}]\n    routes:\n      - to: default\n        via: {}\n    nameservers:\n      addresses: [{}]\n",
+        "version: 2\nethernets:\n  management:\n    match:\n      macaddress: \"{}\"\n    set-name: management\n    mtu: {MANAGEMENT_MTU}\n    addresses: [{}/{}]\n    routes:\n      - to: default\n        via: {}\n    nameservers:\n      addresses: [{}]\n",
         switch.management_mac,
         switch.management_address,
         settings.prefix_length,

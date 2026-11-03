@@ -24,7 +24,9 @@ use amafu_scenario::{CertificateAuthority, TlsIdentity};
 use crate::credentials::{ClientTokens, ServerCredentials, client_tokens};
 use crate::lxd::{LxdClient, LxdCredentials};
 use crate::nfs::LabNfsServer;
-use crate::topology::{LabNode, LabSettings, LabTopology, NODE_API_PORT, NODE_DIAGNOSTICS_PORT, node_listen};
+use crate::topology::{
+    LabNode, LabSettings, LabTopology, MANAGEMENT_MTU, NODE_API_PORT, NODE_DIAGNOSTICS_PORT, node_listen,
+};
 
 const BOOT_TIMEOUT: Duration = Duration::from_secs(180);
 const BOOT_POLL: Duration = Duration::from_millis(250);
@@ -104,6 +106,7 @@ fn node_configuration(
                 prefix_length: settings.underlay.prefix_length(),
             },
             gateway: None,
+            mtu: None,
         }),
         management: Some(UnderlayConfiguration {
             interface: None,
@@ -113,6 +116,7 @@ fn node_configuration(
                 prefix_length: settings.prefix_length,
             },
             gateway: Some(settings.gateway),
+            mtu: Some(MANAGEMENT_MTU),
         }),
         identity: Some(IdentitySection {
             certificate: credentials.identity.certificate_pem.clone(),
