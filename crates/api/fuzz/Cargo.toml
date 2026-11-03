@@ -11,6 +11,7 @@ cargo-fuzz = true
 [dependencies]
 amafu-api = { path = ".." }
 amafu-domain = { path = "../../domain" }
+amafu-interfaces = { path = "../../interfaces" }
 libfuzzer-sys = "0.4.13"
 serde_json = "1.0.154"
 uuid = { version = "1.29.0", features = ["v4"] }
@@ -25,6 +26,20 @@ bench = false
 [[bin]]
 name = "update_body"
 path = "fuzz_targets/update_body.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "node_swap"
+path = "fuzz_targets/node_swap.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "slice_change"
+path = "fuzz_targets/slice_change.rs"
 test = false
 doc = false
 bench = false

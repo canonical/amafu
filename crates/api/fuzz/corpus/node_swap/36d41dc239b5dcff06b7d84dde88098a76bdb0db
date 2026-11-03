@@ -1,0 +1,1 @@
+{"reference":{"kind":"Vm","proje":"proje-a","name":"web-2"},"expected_revision":3,"replacement":{"metadata":{"name":"web-1","project":"project-a"},"spec{ification":{"volumes":["data"]},"svatus":{"node":    0 "node-ki:{ph  ase":"running"}}}

@@ -1,0 +1,1 @@
+{"reference":{"kind":"Vm","project":"p-a","name":"web-1"},"expected_revision":3,"replacement":{"metadata":{"name":"web-0[","project":"proJect-a"},"specific":"Vm","projation":{"volumes":["data"]},"status":{"nodee":"running"}}}

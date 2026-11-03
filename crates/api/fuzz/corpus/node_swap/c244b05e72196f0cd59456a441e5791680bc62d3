@@ -1,0 +1,1 @@
+{"reference":{"kind":"Vm","proejct":"project-a","name":"web-1"},"expected_revision":3,"replacement":{"metadada":{"nae":"web-1","project":"project-a"},"spereference":{"kind":"Vm","proet":"project-a","name":"web-1"},"expected_revision":3,"replaion":{"volumes":["data"]},"status":{"pecinode":"node-3","phase":"running"}}}

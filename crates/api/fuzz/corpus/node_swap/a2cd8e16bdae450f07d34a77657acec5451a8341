@@ -1,0 +1,1 @@
+{"reference":{"kind":"Vm","project":"project-a","name":"web-1"},"expected_revision":1,"replacement":{"metadata":{"name":"web-1","project":"node@@@@@@@@@@@@@@proejct@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@-3","phase":"running"}}}
