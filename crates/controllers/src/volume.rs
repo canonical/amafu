@@ -5,7 +5,7 @@ use amafu_domain::kinds::storage_backend::{StorageBackend, StorageProviderSpecif
 use amafu_domain::kinds::vm::Vm;
 use amafu_domain::kinds::volume::{ProvisionedVolume, Volume, VolumePhase, VolumeStatus};
 use amafu_domain::{Change, Object, ObjectName, ObjectReference};
-use amafu_interfaces::objects::{apply, get, list, remove};
+use amafu_interfaces::objects::{apply, get, list, remove, update_status};
 use amafu_interfaces::{ActionError, CachedImage, Consistency, ImageStore, Storage, Store, VolumeRequest};
 use amafu_reconciler::{Controller, KeyMapping, WatchedKind};
 
@@ -55,11 +55,22 @@ fn waiting(volume: &Object<Volume>, reason: String) -> Vec<VolumeAction> {
     )
 }
 
+const CREATED_BY_ITS_NODE: &str = "created on the node of the first VM that uses it";
+
 fn plan_deletion(volume: &Object<Volume>, observation: &VolumeObservation) -> Vec<VolumeAction> {
     if let Some(user) = observation.users.first() {
         return report(
             volume,
             VolumeStatus { message: Some(format!("in use by VM {user}")), ..volume.status.clone() },
+        );
+    }
+    if let Some(node) = volume.status.provisioned.as_ref().and_then(|provisioned| provisioned.node.as_ref()) {
+        return report(
+            volume,
+            VolumeStatus {
+                message: Some(format!("waiting for {node} to free its storage")),
+                ..volume.status.clone()
+            },
         );
     }
     match (&volume.status.provisioned, &observation.backend) {
@@ -84,6 +95,9 @@ fn plan_provisioning(volume: &Object<Volume>, observation: &VolumeObservation) -
     };
     if !backend.status.is_ready() {
         return waiting(volume, format!("storage backend {} is not ready", volume.specification.backend));
+    }
+    if backend.specification.provider == StorageProviderSpecification::LocalDisk {
+        return waiting(volume, CREATED_BY_ITS_NODE.to_owned());
     }
     let source_image = match &volume.specification.source_image {
         None => None,
@@ -230,7 +244,13 @@ impl Controller for VolumeController {
                 remove::<Volume>(store, key).await?;
             }
             VolumeAction::Report { observed_generation, status } => {
-                apply::<Volume>(store, key, Change::UpdateStatus { observed_generation, status }).await?;
+                update_status::<Volume>(store, key, |current| {
+                    let merged =
+                        VolumeStatus { provisioned: current.status.provisioned.clone(), ..status.clone() };
+                    let is_same_generation = current.metadata.generation == observed_generation;
+                    (is_same_generation && merged != current.status).then_some(merged)
+                })
+                .await?;
             }
             VolumeAction::Remove => remove::<Volume>(store, key).await?,
         }
@@ -252,9 +272,42 @@ mod tests {
     fn backend(phase: StorageBackendPhase) -> Object<StorageBackend> {
         Object {
             metadata: metadata("local", None),
-            specification: StorageBackendSpecification { provider: StorageProviderSpecification::LocalDisk },
+            specification: StorageBackendSpecification {
+                provider: StorageProviderSpecification::Nfs {
+                    server: String::from("filer"),
+                    export: String::from("/srv"),
+                },
+            },
             status: StorageBackendStatus { phase, message: None },
         }
+    }
+
+    fn local_backend() -> Object<StorageBackend> {
+        Object {
+            specification: StorageBackendSpecification { provider: StorageProviderSpecification::LocalDisk },
+            ..backend(StorageBackendPhase::Ready)
+        }
+    }
+
+    #[test]
+    fn a_local_volume_waits_for_its_node_to_create_and_free_it() {
+        let mut local = observation(volume(None));
+        local.backend = Some(local_backend());
+        assert!(matches!(
+            plan_volume(&local).as_slice(),
+            [VolumeAction::Report { status, .. }] if status.message.as_deref() == Some(CREATED_BY_ITS_NODE)
+        ));
+        let mut deleting = provisioned(volume(None));
+        deleting.metadata.is_deleting = true;
+        if let Some(provisioned) = &mut deleting.status.provisioned {
+            provisioned.node = Some(amafu_domain::NodeName::new("node-1").unwrap());
+        }
+        let mut held = observation(deleting);
+        held.backend = Some(local_backend());
+        assert!(matches!(
+            plan_volume(&held).as_slice(),
+            [VolumeAction::Report { status, .. }] if status.message.as_deref() == Some("waiting for node-1 to free its storage")
+        ));
     }
 
     fn volume(source_image: Option<&str>) -> Object<Volume> {
