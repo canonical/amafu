@@ -53,6 +53,8 @@ pub struct NfsExport {
 pub trait Cluster {
     async fn client_in_project(&self, role: Role, project: &ProjectName) -> ApiClient;
 
+    async fn core_member_clients(&self, role: Role, project: &ProjectName) -> Vec<ApiClient>;
+
     async fn anonymous_client(&self) -> ApiClient;
 
     async fn expired_client(&self) -> ApiClient;

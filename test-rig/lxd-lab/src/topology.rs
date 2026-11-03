@@ -45,6 +45,8 @@ pub struct LabNode {
     pub address: Ipv4Addr,
     pub api_port: u16,
     pub diagnostics_port: u16,
+    #[serde(default)]
+    pub is_core: bool,
 }
 
 impl LabNode {
@@ -83,6 +85,7 @@ impl LabTopology {
                     address: Ipv4Addr::new(octets[0], octets[1], octets[2], 50 + index),
                     api_port: settings.first_proxy_port + port_offset,
                     diagnostics_port: settings.first_proxy_port + port_offset + 1,
+                    is_core: index < 3,
                 }
             })
             .collect();

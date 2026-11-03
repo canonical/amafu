@@ -843,6 +843,15 @@ impl Cluster for SimulatedWorld {
             .in_project(project.clone())
     }
 
+    async fn core_member_clients(&self, role: Role, project: &ProjectName) -> Vec<ApiClient> {
+        let core_members = self.shared.nodes.borrow().values().filter(|node| node.is_core).count();
+        let mut clients = Vec::new();
+        for _ in 0..core_members.max(1) {
+            clients.push(self.client_in_project(role, project).await);
+        }
+        clients
+    }
+
     async fn anonymous_client(&self) -> ApiClient {
         ApiClient::new(Arc::new(RouterTransport::new(self.shared.router.clone())), None)
     }

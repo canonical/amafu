@@ -44,6 +44,7 @@ pub struct VirtualLab {
     state: LabState,
     lxd: LxdClient,
     transport: Arc<dyn Transport>,
+    core_transports: Vec<Arc<dyn Transport>>,
     diagnostics: reqwest::Client,
     probes: reqwest::Client,
     clock: WallClock,
@@ -60,9 +61,14 @@ impl VirtualLab {
         let probes = reqwest::Client::builder().timeout(Duration::from_secs(120)).build()?;
         let core = state.topology.nodes.first().ok_or_else(|| anyhow::anyhow!("the lab has no node"))?;
         let endpoint = core.api_endpoint(&state.settings);
-        let transport =
-            Arc::new(HttpTransport::new(&endpoint, Some(state.server.certificate_authority.as_bytes()))?);
-        Ok(Self { state, lxd, transport, diagnostics, probes, clock: WallClock })
+        let authority = state.server.certificate_authority.as_bytes();
+        let transport = Arc::new(HttpTransport::new(&endpoint, Some(authority))?);
+        let mut core_transports: Vec<Arc<dyn Transport>> = Vec::new();
+        for node in state.topology.nodes.iter().filter(|node| node.is_core) {
+            core_transports
+                .push(Arc::new(HttpTransport::new(&node.api_endpoint(&state.settings), Some(authority))?));
+        }
+        Ok(Self { state, lxd, transport, core_transports, diagnostics, probes, clock: WallClock })
     }
 
     fn core_node(&self) -> Result<&LabNode, ScenarioError> {
@@ -147,6 +153,14 @@ impl VirtualLab {
 impl Cluster for VirtualLab {
     async fn client_in_project(&self, role: Role, project: &ProjectName) -> ApiClient {
         self.client_with_token(self.state.tokens.token(role, project)).in_project(project.clone())
+    }
+
+    async fn core_member_clients(&self, role: Role, project: &ProjectName) -> Vec<ApiClient> {
+        let token = self.state.tokens.token(role, project);
+        self.core_transports
+            .iter()
+            .map(|transport| ApiClient::new(Arc::clone(transport), token.clone()).in_project(project.clone()))
+            .collect()
     }
 
     async fn anonymous_client(&self) -> ApiClient {

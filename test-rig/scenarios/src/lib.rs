@@ -6,6 +6,7 @@ pub mod rogue_nodes;
 pub mod sandbox;
 pub mod security;
 pub mod storage;
+pub mod store_history;
 pub mod support;
 pub mod walking_skeleton;
 
@@ -34,6 +35,7 @@ pub fn all() -> Vec<ScenarioDefinition> {
         rogue_nodes::NODES_WRITE_ONLY_THEIR_SHARE,
         overlay::OVERLAY_CONNECTS_NODES,
         overlay::FLOATING_IP_MOVES,
+        store_history::STORE_HISTORY_IS_LINEARIZABLE,
     ]
 }
 
