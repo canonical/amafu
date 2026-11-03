@@ -1,5 +1,6 @@
 mod connection;
 mod container;
+mod floating_ip;
 mod image;
 mod network;
 mod node;
@@ -40,6 +41,10 @@ enum Command {
     Volume(volume::VolumeCommand),
     #[command(subcommand, about = "Create and manage private networks")]
     Network(network::NetworkCommand),
+    #[command(subcommand, about = "Declare address ranges for floating IPs")]
+    ExternalNetwork(floating_ip::ExternalNetworkCommand),
+    #[command(subcommand, about = "Reach VMs from outside through addresses that can move")]
+    FloatingIp(floating_ip::FloatingIpCommand),
     #[command(subcommand, about = "Control traffic to and from VM interfaces")]
     SecurityGroup(security_group::SecurityGroupCommand),
     #[command(subcommand, about = "Declare where volumes are kept")]
@@ -56,6 +61,10 @@ async fn run(arguments: Arguments) -> anyhow::Result<()> {
         Command::Image(command) => image::run(&client, command, arguments.output).await,
         Command::Volume(command) => volume::run(&client, command, arguments.output).await,
         Command::Network(command) => network::run(&client, command, arguments.output).await,
+        Command::ExternalNetwork(command) => {
+            floating_ip::run_external(&client, command, arguments.output).await
+        }
+        Command::FloatingIp(command) => floating_ip::run(&client, command, arguments.output).await,
         Command::SecurityGroup(command) => security_group::run(&client, command, arguments.output).await,
         Command::StorageBackend(command) => storage_backend::run(&client, command, arguments.output).await,
         Command::Node(command) => node::run(&client, command, arguments.output).await,

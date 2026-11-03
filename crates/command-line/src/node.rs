@@ -21,7 +21,9 @@ fn print_nodes(nodes: &[Object<Node>], format: OutputFormat) -> anyhow::Result<(
     if format != OutputFormat::Table {
         return print_structured(&nodes, format);
     }
-    let mut table = Table::new(vec!["NAME", "PHASE", "ROLES", "CORDONED", "CPUS", "MEMORY", "VERSION"]);
+    let mut table = Table::new(vec![
+        "NAME", "PHASE", "ROLES", "ZONE", "UNDERLAY", "CORDONED", "CPUS", "MEMORY", "VERSION",
+    ]);
     for node in nodes {
         let roles: Vec<String> = node
             .specification
@@ -35,6 +37,8 @@ fn print_nodes(nodes: &[Object<Node>], format: OutputFormat) -> anyhow::Result<(
             node.metadata.name.to_string(),
             phase.unwrap_or_default(),
             roles.join(","),
+            node.specification.zone.as_ref().map_or_else(|| String::from("-"), ToString::to_string),
+            node.status.underlay_address.map_or_else(|| String::from("-"), |address| address.to_string()),
             if node.specification.is_cordoned { String::from("yes") } else { String::from("no") },
             node.status.capacity.cpu_count.to_string(),
             format!("{} MiB", node.status.capacity.memory_mebibytes),
