@@ -127,6 +127,44 @@ impl<'de> Deserialize<'de> for Ipv4Network {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MacAddress([u8; 6]);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[serde(transparent)]
+pub struct SegmentId(u32);
+
+impl SegmentId {
+    pub const MINIMUM: u32 = 1;
+    pub const MAXIMUM: u32 = (1 << 24) - 1;
+
+    pub fn new(value: u32) -> Result<Self, InvalidAddress> {
+        if (Self::MINIMUM..=Self::MAXIMUM).contains(&value) {
+            Ok(Self(value))
+        } else {
+            Err(invalid(&value.to_string(), "a segment must be between 1 and 16777215"))
+        }
+    }
+
+    #[must_use]
+    pub fn value(self) -> u32 {
+        self.0
+    }
+
+    pub fn all() -> impl Iterator<Item = Self> {
+        (Self::MINIMUM..=Self::MAXIMUM).map(Self)
+    }
+}
+
+impl fmt::Display for SegmentId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl<'de> Deserialize<'de> for SegmentId {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::new(u32::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
+
 impl MacAddress {
     #[must_use]
     pub const fn new(octets: [u8; 6]) -> Self {

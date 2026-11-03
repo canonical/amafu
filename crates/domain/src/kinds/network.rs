@@ -2,7 +2,7 @@ use std::net::Ipv4Addr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::addressing::Ipv4Network;
+use crate::addressing::{Ipv4Network, SegmentId};
 use crate::resource::{Resource, Scope};
 use crate::validation::{Validate, ValidationError};
 
@@ -66,6 +66,8 @@ pub struct NetworkStatus {
     pub phase: NetworkPhase,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gateway: Option<Ipv4Addr>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segment_id: Option<SegmentId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }
