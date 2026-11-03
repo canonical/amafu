@@ -124,6 +124,22 @@ impl Drop for Release {
     }
 }
 
+struct PendingGrant {
+    table: Arc<FakeLeases>,
+    name: String,
+    granted: Option<oneshot::Receiver<Grant>>,
+}
+
+impl Drop for PendingGrant {
+    fn drop(&mut self) {
+        if let Some(mut granted) = self.granted.take()
+            && let Ok(Some((token, _))) = granted.try_recv()
+        {
+            lock(&self.table.table).release(&self.name, token);
+        }
+    }
+}
+
 pub struct NodeLeases {
     table: Arc<FakeLeases>,
     holder: NodeName,
@@ -142,8 +158,13 @@ impl Leases for NodeLeases {
                 .push_back(Waiter { holder: self.holder.clone(), grant });
             table.grant_next(name);
         }
+        let mut pending =
+            PendingGrant { table: Arc::clone(&self.table), name: name.to_owned(), granted: Some(granted) };
+        let receiver =
+            pending.granted.as_mut().ok_or_else(|| StoreError::Unavailable(String::from("no grant")))?;
         let (token, lost) =
-            granted.await.map_err(|_| StoreError::Unavailable(String::from("the lease table stopped")))?;
+            receiver.await.map_err(|_| StoreError::Unavailable(String::from("the lease table stopped")))?;
+        pending.granted = None;
         let release = Release { table: Arc::clone(&self.table), name: name.to_owned(), token };
         let lost = async move {
             let _release = release;
@@ -175,6 +196,19 @@ mod tests {
         let second = block_on(waiting).unwrap();
         assert!(second.fence.token > 1);
         assert_eq!(leases.grants().len(), 2);
+    }
+
+    #[test]
+    fn a_grant_that_is_never_taken_is_released() {
+        let leases = FakeLeases::new();
+        let first = block_on(leases.for_node(node("node-0")).acquire("scheduler")).unwrap();
+        let abandoning = leases.for_node(node("node-1"));
+        let mut waiting = Box::pin(abandoning.acquire("scheduler"));
+        assert!(waiting.as_mut().now_or_never().is_none());
+        drop(first);
+        drop(waiting);
+        let third = block_on(leases.for_node(node("node-2")).acquire("scheduler")).unwrap();
+        assert_eq!(third.fence.token, 3);
     }
 
     #[test]
