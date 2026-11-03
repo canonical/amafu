@@ -10,3 +10,6 @@ nft_chain_nat
 nft_meta_bridge
 nf_conntrack_bridge
 nfsv4
+vxlan
+nvme-tcp
+rbd
