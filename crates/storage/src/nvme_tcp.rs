@@ -9,6 +9,7 @@ use amafu_interfaces::{
     ActionError, AttachTarget, StorageProtocol, StorageProvider, VolumeAttacher, VolumeRequest,
 };
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 const FABRICS_DEVICE: &str = "/dev/nvme-fabrics";
 const CONTROLLERS: &str = "/sys/class/nvme";
@@ -276,11 +277,25 @@ fn controllers_for(controllers: &Path, qualified_name: &str) -> Vec<PathBuf> {
         .collect()
 }
 
+fn host_identifier(host: &str) -> String {
+    let digest = Sha256::digest(host.as_bytes());
+    let hexadecimal = hex::encode(&digest[..16]);
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hexadecimal[0..8],
+        &hexadecimal[8..12],
+        &hexadecimal[12..16],
+        &hexadecimal[16..20],
+        &hexadecimal[20..32]
+    )
+}
+
 fn connect_options(qualified_name: &str, address: SocketAddrV4, host: &str) -> String {
     format!(
-        "transport=tcp,traddr={},trsvcid={},nqn={qualified_name},hostnqn={host}",
+        "transport=tcp,traddr={},trsvcid={},nqn={qualified_name},hostnqn={host},hostid={}",
         address.ip(),
-        address.port()
+        address.port(),
+        host_identifier(host)
     )
 }
 
@@ -390,8 +405,13 @@ mod tests {
         );
         assert_eq!(
             options,
-            "transport=tcp,traddr=10.216.0.41,trsvcid=4420,nqn=nqn.2026-11.io.amafu:volume:abc,hostnqn=nqn.2026-11.io.amafu:node:node-3"
+            format!(
+                "transport=tcp,traddr=10.216.0.41,trsvcid=4420,nqn=nqn.2026-11.io.amafu:volume:abc,hostnqn=nqn.2026-11.io.amafu:node:node-3,hostid={}",
+                host_identifier("nqn.2026-11.io.amafu:node:node-3")
+            )
         );
+        assert_eq!(host_identifier("a").len(), 36);
+        assert_ne!(host_identifier("a"), host_identifier("b"));
     }
 
     #[test]
