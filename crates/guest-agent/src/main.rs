@@ -19,6 +19,8 @@ const REAP_INTERVAL: Duration = Duration::from_millis(200);
 
 async fn run() -> anyhow::Result<()> {
     amafu_system::mount_essential_filesystems()?;
+    let uptime = amafu_system::host::uptime_seconds(Path::new("/proc"));
+    tracing::info!(?uptime, "the guest agent is starting");
     amafu_system::modules::load_listed_modules(Path::new(MODULES_DIRECTORY), Path::new(MODULE_LIST))?;
     root::prepare(Path::new(ROOT_DEVICE))?;
     match dhcp_client::configure(None).await {
@@ -41,6 +43,7 @@ async fn run() -> anyhow::Result<()> {
             reaper.lock().unwrap_or_else(PoisonError::into_inner).reap();
         }
     });
+    tracing::info!(uptime = ?amafu_system::host::uptime_seconds(Path::new("/proc")), "the guest is ready");
     server::serve(workload).await
 }
 
