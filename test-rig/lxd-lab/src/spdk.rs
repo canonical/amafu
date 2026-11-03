@@ -6,13 +6,17 @@ use reqwest::Method;
 use serde_json::json;
 
 use crate::lxd::LxdClient;
-use crate::machines::{MachineSize, MachineSource, create as create_machine, definition, wait_for_marker};
+use crate::machines::{
+    MachineSize, MachineSource, create as create_machine, definition, wait_for_marker, wait_for_outcome,
+};
 use crate::topology::{LabSettings, LabTopology};
 
 pub const SPDK_VERSION: &str = "v24.09";
 pub const IMAGE_ALIAS: &str = "amafu-spdk-target-v24-09";
 const BUILD_INSTANCE: &str = "nvme-target-build";
 const BUILT_MARKER: &str = "/var/lib/amafu-spdk-built";
+const FAILED_MARKER: &str = "/var/lib/amafu-spdk-failed";
+const BUILD_LOG: &str = "/var/log/amafu-build-spdk.log";
 const READY_MARKER: &str = "/run/amafu-nvme-target-ready";
 const BUILD_TIMEOUT: Duration = Duration::from_secs(3600);
 const READY_TIMEOUT: Duration = Duration::from_secs(600);
@@ -42,7 +46,7 @@ write_files:
       apt-get clean
       touch {BUILT_MARKER}
 runcmd:
-  - [sh, -c, "/usr/local/bin/amafu-build-spdk > /var/log/amafu-build-spdk.log 2>&1"]
+  - [sh, -c, "/usr/local/bin/amafu-build-spdk > {BUILD_LOG} 2>&1 || touch {FAILED_MARKER}"]
 "#
     )
 }
@@ -102,7 +106,7 @@ async fn build_image(lxd: &LxdClient, settings: &LabSettings, topology: &LabTopo
     tracing::info!("building the SPDK target image once; this takes a while");
     create_machine(lxd, definition(settings, &machine, &size, &MachineSource::Ubuntu, &build_user_data()))
         .await?;
-    wait_for_marker(lxd, BUILD_INSTANCE, BUILT_MARKER, BUILD_TIMEOUT).await?;
+    wait_for_outcome(lxd, BUILD_INSTANCE, BUILT_MARKER, FAILED_MARKER, BUILD_LOG, BUILD_TIMEOUT).await?;
     lxd.execute(BUILD_INSTANCE, "cloud-init clean --logs").await?;
     lxd.change_state(BUILD_INSTANCE, "stop", true).await?;
     let publication = json!({

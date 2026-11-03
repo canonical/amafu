@@ -108,6 +108,35 @@ pub async fn wait_for_marker(
     }
 }
 
+pub async fn wait_for_outcome(
+    lxd: &LxdClient,
+    instance: &str,
+    success: &str,
+    failure: &str,
+    log: &str,
+    timeout: Duration,
+) -> anyhow::Result<Duration> {
+    let started = Instant::now();
+    loop {
+        let script = format!(
+            "if test -e {success}; then echo succeeded; elif test -e {failure}; then tail -20 {log}; exit 3; fi"
+        );
+        match lxd.execute(instance, &script).await {
+            Ok(output) if output.succeeded() && output.standard_output.contains("succeeded") => {
+                return Ok(started.elapsed());
+            }
+            Ok(output) if output.exit_code == 3 => {
+                bail!("setting up {instance} failed:\n{}", output.standard_output);
+            }
+            Ok(_) | Err(_) => {}
+        }
+        if started.elapsed() >= timeout {
+            bail!("{instance} did not finish setting up within {} seconds", timeout.as_secs());
+        }
+        tokio::time::sleep(READY_POLL).await;
+    }
+}
+
 pub async fn read_file(lxd: &LxdClient, instance: &str, path: &str) -> anyhow::Result<String> {
     let output = lxd.execute(instance, &format!("cat {path}")).await?;
     if !output.succeeded() {

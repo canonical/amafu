@@ -5,11 +5,13 @@ use amafu_domain::kinds::storage_backend::StorageProviderSpecification;
 
 use crate::lxd::LxdClient;
 use crate::machines::{
-    MachineSize, MachineSource, create as create_machine, definition, read_file, wait_for_marker,
+    MachineSize, MachineSource, create as create_machine, definition, read_file, wait_for_outcome,
 };
 use crate::topology::{LabSettings, LabTopology};
 
 const READY_MARKER: &str = "/var/lib/amafu-ceph-ready";
+const FAILED_MARKER: &str = "/var/lib/amafu-ceph-failed";
+const SETUP_LOG: &str = "/var/log/amafu-ceph-setup.log";
 const KEY_FILE: &str = "/root/amafu-client.key";
 const READY_TIMEOUT: Duration = Duration::from_secs(1800);
 const MONITOR_PORT: u16 = 6789;
@@ -50,7 +52,7 @@ write_files:
       $ceph mgr module enable dashboard
       touch {READY_MARKER}
 runcmd:
-  - [sh, -c, "/usr/local/bin/amafu-ceph-setup > /var/log/amafu-ceph-setup.log 2>&1"]
+  - [sh, -c, "/usr/local/bin/amafu-ceph-setup > {SETUP_LOG} 2>&1 || touch {FAILED_MARKER}"]
 "#,
         network = settings.underlay,
     )
@@ -74,7 +76,7 @@ pub async fn wait_until_serving(
     password: &str,
 ) -> anyhow::Result<StorageProviderSpecification> {
     let machine = &topology.ceph;
-    wait_for_marker(lxd, &machine.name, READY_MARKER, READY_TIMEOUT).await?;
+    wait_for_outcome(lxd, &machine.name, READY_MARKER, FAILED_MARKER, SETUP_LOG, READY_TIMEOUT).await?;
     let key = read_file(lxd, &machine.name, KEY_FILE).await?.trim().to_owned();
     Ok(StorageProviderSpecification::CephRbd {
         monitors: vec![SocketAddrV4::new(machine.underlay_address, MONITOR_PORT)],
