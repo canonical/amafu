@@ -1,10 +1,10 @@
 # Amafu ☁️
 
-**Just a kernel and one binary. Your servers become one cloud, and any VM or container runs on any node.**
+**A cloud with minimal footprint, just a kernel and one binary.**
 
 *Amafu* is Zulu for "clouds".
 
-> **Status: design phase.** Nothing here runs yet. Read the design doc and open an issue to discuss it.
+> **Status: in early development.** Nothing here runs yet. Read the design doc and open an issue to discuss it.
 
 ## Design goals
 
