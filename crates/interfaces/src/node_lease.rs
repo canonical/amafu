@@ -7,7 +7,9 @@ use amafu_domain::{Change, NodeName, Object, ObjectId, ObjectName, ObjectReferen
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::objects::ObjectStoreError;
+use amafu_domain::kinds::node::{Node, NodePhase, NodeStatus};
+
+use crate::objects::{ObjectStoreError, update_status_fenced};
 use crate::store::{Consistency, Fence, Store, StoreError};
 
 const CONTENDED_ATTEMPTS: usize = 5;
@@ -48,6 +50,8 @@ pub trait NodeLeaseAuthority: Send + Sync {
     async fn acquire(&self, terms: LeaseTerms) -> Result<NodeLeaseGrant, NodeLeaseError>;
 
     async fn renew(&self, epoch: u64) -> Result<NodeLeaseGrant, NodeLeaseError>;
+
+    async fn surrender(&self, epoch: u64) -> Result<(), NodeLeaseError>;
 }
 
 #[must_use]
@@ -144,6 +148,33 @@ pub async fn renew_node_lease(
     Ok(NodeLeaseGrant { epoch: lease.epoch, terms: lease.terms })
 }
 
+pub async fn surrender_node_lease(
+    store: &dyn Store,
+    node: &NodeName,
+    epoch: u64,
+) -> Result<NodeLeaseGrant, NodeLeaseError> {
+    let surrendered = change_node_lease(store, node, None, |existing| {
+        let lease = existing.ok_or(LeaseRefusal::Lost)?;
+        if lease.is_lost && lease.is_released && lease.epoch == epoch + 1 {
+            return Ok(lease.clone());
+        }
+        lease.surrendered(epoch)
+    })
+    .await?;
+    let reference = ObjectReference::of::<Node>(None, ObjectName::from(node));
+    update_status_fenced::<Node>(store, &reference, &node_fence(node, surrendered.epoch), |current| {
+        (current.status.phase != NodePhase::NotReady)
+            .then(|| NodeStatus { phase: NodePhase::NotReady, ..current.status.clone() })
+    })
+    .await
+    .map(|_| ())
+    .or_else(|error| match error {
+        ObjectStoreError::Change(amafu_domain::ChangeError::NotFound) => Ok(()),
+        other => Err(NodeLeaseError::from(other)),
+    })?;
+    Ok(NodeLeaseGrant { epoch: surrendered.epoch, terms: surrendered.terms })
+}
+
 pub async fn admit_node_write(store: &dyn Store, node: &NodeName, epoch: u64) -> Result<(), NodeLeaseError> {
     let Some((_, lease)) = read_node_lease(store, node).await? else {
         return Err(NodeLeaseError::Refused(LeaseRefusal::Lost));
@@ -160,6 +191,7 @@ pub struct HeldNodeLease {
 #[derive(Debug, Clone, Default)]
 pub struct NodeLeaseState {
     held: std::sync::Arc<std::sync::Mutex<Option<HeldNodeLease>>>,
+    is_surrendered: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl NodeLeaseState {
@@ -174,6 +206,17 @@ impl NodeLeaseState {
 
     pub fn drop_lease(&self) {
         *self.lock() = None;
+    }
+
+    #[must_use]
+    pub fn surrender(&self) -> Option<HeldNodeLease> {
+        self.is_surrendered.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.lock().take()
+    }
+
+    #[must_use]
+    pub fn is_surrendered(&self) -> bool {
+        self.is_surrendered.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     #[must_use]

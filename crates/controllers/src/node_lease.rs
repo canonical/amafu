@@ -31,6 +31,10 @@ impl LeaseKeeper<'_> {
             let epoch = self.acquire().await;
             let lost = self.renew_until_refused(epoch).await;
             self.state.drop_lease();
+            if self.state.is_surrendered() {
+                tracing::info!(epoch, "the node surrendered its lease to reboot");
+                std::future::pending::<()>().await;
+            }
             tracing::error!(epoch, %lost, "the node lost its lease");
         }
     }
@@ -60,6 +64,9 @@ impl LeaseKeeper<'_> {
     async fn renew_until_refused(&self, epoch: u64) -> NodeLeaseError {
         loop {
             self.clock.sleep(self.settings.renewal_interval).await;
+            if self.state.is_surrendered() {
+                return NodeLeaseError::Refused(amafu_domain::kinds::node_lease::LeaseRefusal::Lost);
+            }
             let sent_at = self.clock.now();
             match self.authority.renew(epoch).await {
                 Ok(grant) => self

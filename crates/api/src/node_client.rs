@@ -18,9 +18,9 @@ use uuid::Uuid;
 
 use crate::client::{ClientError, ResponseBody, Transport, collect, decode, refusal};
 use crate::node_wire::{
-    NODE_LEASE_ACQUIRE_PATH, NODE_LEASE_RENEW_PATH, NODE_LIST_PATH, NODE_READ_PATH, NODE_SUBSCRIPTION_PATH,
-    NODE_SWAP_PATH, NodeLeaseAcquireRequest, NodeLeaseRenewRequest, NodeListRequest, NodeListResponse,
-    NodeReadRequest, NodeReadResponse, NodeSwapRequest, NodeSwapResponse,
+    NODE_LEASE_ACQUIRE_PATH, NODE_LEASE_RENEW_PATH, NODE_LEASE_SURRENDER_PATH, NODE_LIST_PATH,
+    NODE_READ_PATH, NODE_SUBSCRIPTION_PATH, NODE_SWAP_PATH, NodeLeaseAcquireRequest, NodeLeaseRenewRequest,
+    NodeListRequest, NodeListResponse, NodeReadRequest, NodeReadResponse, NodeSwapRequest, NodeSwapResponse,
 };
 use crate::wire::REQUEST_ID_HEADER;
 
@@ -189,5 +189,11 @@ impl NodeLeaseAuthority for NodeClient {
 
     async fn renew(&self, epoch: u64) -> Result<NodeLeaseGrant, NodeLeaseError> {
         Ok(self.post(NODE_LEASE_RENEW_PATH, &NodeLeaseRenewRequest { epoch }).await?)
+    }
+
+    async fn surrender(&self, epoch: u64) -> Result<(), NodeLeaseError> {
+        let _: NodeLeaseGrant =
+            self.post(NODE_LEASE_SURRENDER_PATH, &NodeLeaseRenewRequest { epoch }).await?;
+        Ok(())
     }
 }

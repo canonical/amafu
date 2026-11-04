@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use amafu_domain::kinds::node_lease::LeaseTerms;
 use amafu_domain::{NodeName, ObjectId, ObjectReference, ProjectName};
-use amafu_interfaces::node_lease::{acquire_node_lease, node_fence, renew_node_lease};
+use amafu_interfaces::node_lease::{acquire_node_lease, node_fence, renew_node_lease, surrender_node_lease};
 use amafu_interfaces::{
     Clock, Consistency, Fence, Identifiers, NodeLeaseAuthority, NodeLeaseError, NodeLeaseGrant,
     NodeLeaseState, Store, StoreError, StoredRecord, WatchEvent,
@@ -103,5 +103,9 @@ impl NodeLeaseAuthority for LocalNodeLeases {
 
     async fn renew(&self, epoch: u64) -> Result<NodeLeaseGrant, NodeLeaseError> {
         renew_node_lease(self.store.as_ref(), &self.node, epoch, self.clock.now()).await
+    }
+
+    async fn surrender(&self, epoch: u64) -> Result<(), NodeLeaseError> {
+        surrender_node_lease(self.store.as_ref(), &self.node, epoch).await.map(|_| ())
     }
 }

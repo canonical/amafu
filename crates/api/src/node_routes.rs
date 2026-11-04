@@ -7,7 +7,7 @@ use amafu_domain::registry::{self, KindDescriptor};
 use amafu_domain::slice::NodeSlice;
 use amafu_domain::{NodeName, ObjectId, ObjectName, ObjectReference, ProjectName};
 use amafu_interfaces::node_lease::{
-    acquire_node_lease, admit_node_write, lease_reference, node_fence, renew_node_lease,
+    acquire_node_lease, admit_node_write, lease_reference, node_fence, renew_node_lease, surrender_node_lease,
 };
 use amafu_interfaces::{
     AuditEntry, AuditLog, AuditOutcome, Clock, Consistency, Identifiers, NodeLeaseError, NodeLeaseGrant,
@@ -27,9 +27,9 @@ use uuid::Uuid;
 
 use crate::node_identity::{NodeAuthenticator, NodeCredentials, PeerCertificate, node_identity_of};
 use crate::node_wire::{
-    NODE_LEASE_ACQUIRE_PATH, NODE_LEASE_RENEW_PATH, NODE_LIST_PATH, NODE_READ_PATH, NODE_SUBSCRIPTION_PATH,
-    NODE_SWAP_PATH, NodeLeaseAcquireRequest, NodeLeaseRenewRequest, NodeListRequest, NodeListResponse,
-    NodeReadRequest, NodeReadResponse, NodeSwapRequest, NodeSwapResponse,
+    NODE_LEASE_ACQUIRE_PATH, NODE_LEASE_RENEW_PATH, NODE_LEASE_SURRENDER_PATH, NODE_LIST_PATH,
+    NODE_READ_PATH, NODE_SUBSCRIPTION_PATH, NODE_SWAP_PATH, NodeLeaseAcquireRequest, NodeLeaseRenewRequest,
+    NodeListRequest, NodeListResponse, NodeReadRequest, NodeReadResponse, NodeSwapRequest, NodeSwapResponse,
 };
 use crate::wire::{ErrorBody, ErrorCode, MAXIMUM_BODY_BYTES, REQUEST_ID_HEADER};
 
@@ -65,6 +65,7 @@ pub fn node_router(state: NodeApiState) -> Router {
         .route(NODE_SUBSCRIPTION_PATH, get(subscribe))
         .route(NODE_LEASE_ACQUIRE_PATH, post(acquire_lease))
         .route(NODE_LEASE_RENEW_PATH, post(renew_lease))
+        .route(NODE_LEASE_SURRENDER_PATH, post(surrender_lease))
         .layer(DefaultBodyLimit::max(MAXIMUM_BODY_BYTES))
         .layer(middleware::from_fn_with_state(state.clone(), node_chain))
         .with_state(state)
@@ -364,6 +365,18 @@ async fn renew_lease(
         renew_node_lease(state.store.as_ref(), &context.credentials.name, request.epoch, state.clock.now())
             .await;
     lease_answer(&context, outcome, false)
+}
+
+async fn surrender_lease(
+    State(state): State<NodeApiState>,
+    Extension(context): Extension<NodeContext>,
+    Json(request): Json<NodeLeaseRenewRequest>,
+) -> Response {
+    let outcome = surrender_node_lease(state.store.as_ref(), &context.credentials.name, request.epoch).await;
+    if let Ok(grant) = &outcome {
+        tracing::info!(node = %context.credentials.name, epoch = grant.epoch, "a node surrendered its lease");
+    }
+    lease_answer(&context, outcome, true)
 }
 
 struct Subscription {

@@ -10,6 +10,7 @@ pub const NODE_SWAP_PATH: &str = "/v1/node/compare-and-swap";
 pub const NODE_SUBSCRIPTION_PATH: &str = "/v1/node/subscription";
 pub const NODE_LEASE_ACQUIRE_PATH: &str = "/v1/node/lease/acquire";
 pub const NODE_LEASE_RENEW_PATH: &str = "/v1/node/lease/renew";
+pub const NODE_LEASE_SURRENDER_PATH: &str = "/v1/node/lease/surrender";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
