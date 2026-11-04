@@ -180,6 +180,7 @@ impl ComputeController {
             node: Some(self.node.clone()),
             interfaces: vm.status.interfaces.clone(),
             message: Some(reason.to_owned()),
+            migration: vm.status.migration.clone(),
         };
         apply::<Vm>(
             self.store(),

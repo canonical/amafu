@@ -288,6 +288,54 @@ pub struct InterfaceStatus {
     pub address: Ipv4Addr,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MigrationPhase {
+    Preparing,
+    DestinationReady,
+    Copying,
+    Copied,
+    SwitchedOver,
+    Cleaned,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct MigrationReport {
+    pub total_bytes: u64,
+    pub final_round_bytes: u64,
+    pub duration_milliseconds: u64,
+    pub downtime_milliseconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VmMigration {
+    pub source: NodeName,
+    pub destination: NodeName,
+    pub phase: MigrationPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<MigrationReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+impl VmMigration {
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        !matches!(self.phase, MigrationPhase::Cleaned | MigrationPhase::Failed)
+    }
+
+    #[must_use]
+    pub fn involves(&self, node: &NodeName) -> bool {
+        self.is_active() && (&self.source == node || &self.destination == node)
+    }
+
+    #[must_use]
+    pub fn at(&self, phase: MigrationPhase) -> Self {
+        Self { phase, ..self.clone() }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct VmStatus {
     pub phase: VmPhase,
@@ -297,12 +345,24 @@ pub struct VmStatus {
     pub interfaces: Vec<InterfaceStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migration: Option<VmMigration>,
 }
 
 impl VmStatus {
     #[must_use]
     pub fn placed_on(&self, node: &NodeName) -> Self {
         Self { node: Some(node.clone()), ..self.clone() }
+    }
+
+    #[must_use]
+    pub fn active_migration(&self) -> Option<&VmMigration> {
+        self.migration.as_ref().filter(|migration| migration.is_active())
+    }
+
+    #[must_use]
+    pub fn is_migrating(&self) -> bool {
+        self.active_migration().is_some()
     }
 }
 

@@ -66,8 +66,13 @@ fn report(
     phase: VmPhase,
     message: Option<String>,
 ) -> Option<ComputeAction> {
-    let status =
-        VmStatus { phase, node: Some(node.clone()), interfaces: vm.status.interfaces.clone(), message };
+    let status = VmStatus {
+        phase,
+        node: Some(node.clone()),
+        interfaces: vm.status.interfaces.clone(),
+        message,
+        migration: vm.status.migration.clone(),
+    };
     if vm.status == status && vm.is_status_current() {
         return None;
     }
@@ -353,6 +358,7 @@ mod tests {
                 node: Some(here()),
                 interfaces: vm.status.interfaces.clone(),
                 message: None,
+                migration: None,
             },
         }
     }

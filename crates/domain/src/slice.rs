@@ -29,6 +29,28 @@ fn names_node(object: &Value, pointer: &str, node: &NodeName) -> bool {
     text(object, pointer) == Some(node.as_str())
 }
 
+fn takes_part_in_migration(vm: &Value, node: &NodeName) -> bool {
+    let is_active = matches!(
+        text(vm, "/status/migration/phase"),
+        Some("preparing" | "destination-ready" | "copying" | "copied" | "switched-over")
+    );
+    is_active
+        && (names_node(vm, "/status/migration/source", node)
+            || names_node(vm, "/status/migration/destination", node))
+}
+
+fn without_migration(object: &Value) -> Value {
+    let mut stripped = object.clone();
+    if let Some(status) = stripped.get_mut("status").and_then(Value::as_object_mut) {
+        status.remove("migration");
+    }
+    if let Some(metadata) = stripped.get_mut("metadata").and_then(Value::as_object_mut) {
+        metadata.remove("observed_generation");
+        metadata.remove("version");
+    }
+    stripped
+}
+
 fn without_status(object: &Value) -> Value {
     let mut stripped = object.clone();
     if let Some(fields) = stripped.as_object_mut() {
@@ -80,7 +102,10 @@ impl NodeSlice {
         self.hosted_vms.clear();
         self.hosted_projects.clear();
         self.used_volumes.clear();
-        for vm in vms.into_iter().filter(|vm| names_node(vm, "/status/node", &self.node)) {
+        let is_hosted = |vm: &&Value| {
+            names_node(vm, "/status/node", &self.node) || takes_part_in_migration(vm, &self.node)
+        };
+        for vm in vms.into_iter().filter(is_hosted) {
             let (project, name) = project_and_name(vm);
             let volumes =
                 vm.pointer("/specification/volumes").and_then(Value::as_array).into_iter().flatten();
@@ -104,7 +129,9 @@ impl NodeSlice {
         }
         match kind {
             "Node" => text(object, "/metadata/name") == Some(self.node.as_str()),
-            "Vm" => names_node(object, "/status/node", &self.node),
+            "Vm" => {
+                names_node(object, "/status/node", &self.node) || takes_part_in_migration(object, &self.node)
+            }
             "Volume" => {
                 self.used_volumes.contains(&project_and_name(object))
                     || names_node(object, "/status/provisioned/node", &self.node)
@@ -165,8 +192,11 @@ impl NodeSlice {
         match kind {
             "Node" => text(current, "/metadata/name") == Some(self.node.as_str()),
             "Vm" => {
-                names_node(current, "/status/node", &self.node)
-                    && names_node(updated, "/status/node", &self.node)
+                let owns = names_node(current, "/status/node", &self.node)
+                    && names_node(updated, "/status/node", &self.node);
+                let reports_migration = takes_part_in_migration(current, &self.node)
+                    && without_migration(current) == without_migration(updated);
+                owns || reports_migration
             }
             "Volume" => {
                 let provisioned_here_or_nowhere = |object: &Value| {
@@ -363,6 +393,33 @@ mod tests {
             Some(&foreign_withdrawal)
         ));
         assert!(!slice.may_write(&compute(), "NetworkEndpoint", Some(&endpoint("web-2", "node-2")), None));
+    }
+
+    fn migrating(name: &str, owner: &str, source: &str, destination: &str, phase: &str) -> Value {
+        let mut migrating = vm(name, Some(owner), &["data"]);
+        migrating["status"]["migration"] =
+            json!({"source": source, "destination": destination, "phase": phase});
+        migrating
+    }
+
+    #[test]
+    fn a_migration_destination_hosts_the_vm_but_reports_only_the_migration() {
+        let incoming = migrating("web-1", "node-2", "node-2", "node-1", "preparing");
+        let slice = slice_with(&[incoming.clone()]);
+        assert!(slice.hosts_vm("project-a", "web-1"));
+        assert!(slice.includes("Vm", &incoming));
+        assert!(slice.includes(
+            "Volume",
+            &json!({"metadata": {"name": "data", "project": "project-a"}, "status": {}})
+        ));
+        let mut ready = incoming.clone();
+        ready["status"]["migration"]["phase"] = json!("destination-ready");
+        assert!(slice.may_write(&compute(), "Vm", Some(&incoming), Some(&ready)));
+        let mut stolen = ready.clone();
+        stolen["status"]["node"] = json!("node-1");
+        assert!(!slice.may_write(&compute(), "Vm", Some(&incoming), Some(&stolen)));
+        let finished = migrating("web-1", "node-2", "node-2", "node-1", "cleaned");
+        assert!(!slice_with(&[finished]).hosts_vm("project-a", "web-1"));
     }
 
     #[test]

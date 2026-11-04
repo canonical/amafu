@@ -301,8 +301,13 @@ impl Controller for SchedulerController {
         let store = self.store.as_ref();
         match action {
             SchedulingAction::Assign { vm, node, interfaces, observed_generation } => {
-                let status =
-                    VmStatus { phase: VmPhase::Scheduled, node: Some(node), interfaces, message: None };
+                let status = VmStatus {
+                    phase: VmPhase::Scheduled,
+                    node: Some(node),
+                    interfaces,
+                    message: None,
+                    migration: None,
+                };
                 apply_fenced::<Vm>(
                     store,
                     &vm,
@@ -312,7 +317,13 @@ impl Controller for SchedulerController {
                 .await?;
             }
             SchedulingAction::ReportWaiting { vm, observed_generation, phase, reason } => {
-                let status = VmStatus { phase, node: None, interfaces: Vec::new(), message: Some(reason) };
+                let status = VmStatus {
+                    phase,
+                    node: None,
+                    interfaces: Vec::new(),
+                    message: Some(reason),
+                    migration: None,
+                };
                 apply_fenced::<Vm>(
                     store,
                     &vm,
