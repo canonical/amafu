@@ -44,6 +44,8 @@ pub struct LabState {
     pub nfs: Option<LabNfsServer>,
     #[serde(default)]
     pub block_backends: Vec<(String, StorageProviderSpecification)>,
+    #[serde(default)]
+    pub node_images: Option<amafu_scenario::NodeImages>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -337,6 +339,7 @@ pub async fn up(
         image_fingerprints: fingerprints,
         nfs: Some(nfs),
         block_backends: vec![(String::from("nvme-tcp"), nvme)],
+        node_images: None,
     };
     save_state(repository, &state)?;
     let waited = crate::switch::wait_until_ready(&lxd).await?;

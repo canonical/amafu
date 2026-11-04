@@ -16,27 +16,33 @@ use amafu_api::{
 use amafu_checkers::invariants::check_all;
 use amafu_controllers::node_lease::{LeaseKeeper, LeaseKeeperSettings, feed_while_leased};
 use amafu_controllers::{
-    CertificateRevocationController, ComputeController, ComputeServices, ExternalNetworkController,
-    FloatingIpController, ImageController, LocalVolumeController, NetworkController, NodeController,
-    NodeHealthController, NodeIdentity, NodeNetworkController, OperationSteps, OperationsController,
-    SchedulerController, SchedulingSettings, SecurityGroupController, StorageBackendController,
-    VolumeController,
+    BootSlotsController, BootSlotsServices, BootSlotsSettings, CertificateRevocationController,
+    ComputeController, ComputeServices, ExternalNetworkController, FloatingIpController, ImageController,
+    LocalVolumeController, NetworkController, NodeController, NodeHealthController, NodeIdentity,
+    NodeNetworkController, OperationSteps, OperationsController, SchedulerController, SchedulingSettings,
+    SecurityGroupController, StorageBackendController, VolumeController,
 };
 use amafu_domain::access::Role;
+use amafu_domain::features::{FeatureLevel, SUPPORTED_FEATURE_LEVEL};
+use amafu_domain::kinds::cluster_version::{
+    ClusterVersion, ClusterVersionSpecification, cluster_version_name,
+};
 use amafu_domain::kinds::external_network::ExternalNetworkSpecification;
 use amafu_domain::kinds::node::{CpuBaseline, NodeCapacity, NodeRole};
 use amafu_domain::kinds::node_lease::LeaseTerms;
 use amafu_domain::kinds::storage_backend::StorageProviderSpecification;
-use amafu_domain::{MacAddress, NodeName, ObjectId, ObjectName, ProjectName};
+use amafu_domain::node_image::NodeImage;
+use amafu_domain::{Change, MacAddress, NodeName, ObjectId, ObjectName, ProjectName, Sha256Digest};
+use amafu_interfaces::objects::apply;
 use amafu_interfaces::{
-    AuditLog, Clock, CoreConnection, Datapath, Fence, GuestAgents, Hypervisor, Identifiers, ImageStore,
-    InstanceMigration, Leases, LocalServices, NodeLeaseAuthority, NodeLeaseState, NodeNetworkState, Storage,
-    Store, WorkloadState,
+    AuditLog, BootSlots, Clock, CoreConnection, Datapath, Fence, GuestAgents, Hypervisor, Identifiers,
+    ImageSigningKey, ImageStore, InstanceMigration, Leases, LocalServices, NodeLeaseAuthority,
+    NodeLeaseState, NodeNetworkState, Storage, Store, TrustedImageKeys, WorkloadState,
 };
 use amafu_network::dhcp::{self, DhcpMessage, Lease, MessageType};
 use amafu_reconciler::{Controller, ReconcilerSettings, StepRegistry, run_controller, run_singleton};
 use amafu_scenario::{
-    CertificateAuthority, Cluster, ClusterObservation, Fault, FaultHandle, Level, NfsExport,
+    CertificateAuthority, Cluster, ClusterObservation, Fault, FaultHandle, Level, NfsExport, NodeImages,
     ObservedAttachment, ObservedFencedWrite, ObservedFloatingAddress, ObservedInstance, ObservedPort,
     ObservedRemoteEndpoint, ScenarioDefinition, ScenarioError, ScenarioResult, TlsIdentity,
 };
@@ -49,9 +55,9 @@ use uuid::Uuid;
 use crate::clock::VirtualClock;
 use crate::executor::{Executor, StepOutcome, TaskFuture, TaskId};
 use crate::fakes::{
-    FakeBackends, FakeDatapath, FakeHypervisor, FakeImageStore, FakeLeases, FakeLocalServices, FakeStorage,
-    FakeWatchdog, MemoryAuditLog, MemoryStore, MigrationFabric, NodeLink, PartitionedStore,
-    PartitionedTransport, SeededIdentifiers, simulated_ceph_rbd, simulated_nvme_tcp,
+    FakeBackends, FakeBootSlots, FakeDatapath, FakeHypervisor, FakeImageStore, FakeLeases, FakeLocalServices,
+    FakeStorage, FakeWatchdog, ImageRepository, MemoryAuditLog, MemoryStore, MigrationFabric, NodeLink,
+    PartitionedStore, PartitionedTransport, SeededIdentifiers, simulated_ceph_rbd, simulated_nvme_tcp,
 };
 
 const PROJECTS: [&str; 2] = ["project-a", "project-b"];
@@ -68,6 +74,55 @@ const SUBSCRIPTION_REFRESH: Duration = Duration::from_secs(5);
 const RESUBSCRIBE_DELAY: Duration = Duration::from_secs(1);
 const LEASE_DURATION: Duration = Duration::from_secs(8);
 const WATCHDOG_INTERVAL: Duration = Duration::from_secs(8);
+const BOOT_SLOT_SETTINGS: BootSlotsSettings =
+    BootSlotsSettings { confirm_after: Duration::from_secs(20), give_up_after: Duration::from_secs(120) };
+const IMAGE_SIZE_BYTES: u64 = 64 * 1024 * 1024;
+
+fn fake_digest(version: &str) -> Sha256Digest {
+    let hexadecimal: String = version.bytes().map(|byte| format!("{byte:02x}")).collect();
+    valid_name(&format!("{hexadecimal:0<64}"))
+}
+
+fn signed_node_images() -> (NodeImages, TrustedImageKeys, Arc<ImageRepository>) {
+    let (key, _) = ImageSigningKey::generate().unwrap_or_else(|_| unreachable!());
+    let keys = TrustedImageKeys::from_hexadecimal([key.public_key_hexadecimal().as_str()])
+        .unwrap_or_else(|_| unreachable!());
+    let sign = |version: &str, feature_level: FeatureLevel| {
+        key.sign(
+            version,
+            feature_level,
+            fake_digest(version),
+            IMAGE_SIZE_BYTES,
+            format!("https://images.simulated/{version}/node-image.tar"),
+        )
+    };
+    let raised = FeatureLevel(SUPPORTED_FEATURE_LEVEL.0 + 1);
+    let images = NodeImages {
+        installed: sign("0.1.0", SUPPORTED_FEATURE_LEVEL),
+        upgrade: sign("0.2.0", raised),
+        broken: sign("0.2.1-broken", raised),
+    };
+    let repository = ImageRepository::new();
+    repository.publish(images.installed.clone(), true);
+    repository.publish(images.upgrade.clone(), true);
+    repository.publish(images.broken.clone(), false);
+    (images, keys, repository)
+}
+
+fn install_cluster_version(store: &Arc<MemoryStore>, identifiers: &SeededIdentifiers, image: &NodeImage) {
+    let name = cluster_version_name();
+    let reference = amafu_domain::ObjectReference::of::<ClusterVersion>(None, name.clone());
+    let change = Change::Create {
+        id: ObjectId::from_uuid(identifiers.generate()),
+        name,
+        project: None,
+        labels: BTreeMap::new(),
+        specification: ClusterVersionSpecification::installed(image.clone()),
+    };
+    let store: &dyn Store = store.as_ref();
+    let installed = futures::executor::block_on(apply::<ClusterVersion>(store, &reference, change));
+    installed.unwrap_or_else(|_| unreachable!());
+}
 
 fn lease_terms() -> LeaseTerms {
     LeaseTerms::new(LEASE_DURATION, WATCHDOG_INTERVAL)
@@ -136,6 +191,7 @@ struct RoleTask {
 
 struct NodeServices {
     lease: NodeLeaseState,
+    boot_slots: Arc<FakeBootSlots>,
     watchdog: Arc<FakeWatchdog>,
     hypervisor: Arc<FakeHypervisor>,
     storage: Arc<FakeStorage>,
@@ -159,7 +215,7 @@ impl NodeServices {
     }
 
     fn power_off(&self) {
-        self.lease.drop_lease();
+        self.lease.forget();
         self.watchdog.disarm();
         self.hypervisor.power_off();
         self.storage.power_off();
@@ -186,6 +242,9 @@ struct WorldShared {
     leases: Arc<FakeLeases>,
     backends: Arc<FakeBackends>,
     fabric: Arc<MigrationFabric>,
+    node_images: NodeImages,
+    image_keys: TrustedImageKeys,
+    image_repository: Arc<ImageRepository>,
     audit: Arc<MemoryAuditLog>,
     router: axum::Router,
     tokens: BTreeMap<(Role, ProjectName), String>,
@@ -324,6 +383,8 @@ impl SimulatedWorld {
             identifiers: Arc::clone(&identifiers) as Arc<dyn Identifiers>,
             refresh_interval: SUBSCRIPTION_REFRESH,
         }));
+        let (node_images, image_keys, image_repository) = signed_node_images();
+        install_cluster_version(&store, &identifiers, &node_images.installed);
         let world = Self {
             shared: Rc::new(WorldShared {
                 seed: settings.seed,
@@ -335,6 +396,9 @@ impl SimulatedWorld {
                 leases: FakeLeases::new(),
                 backends: FakeBackends::new(),
                 fabric: MigrationFabric::new(),
+                node_images,
+                image_keys,
+                image_repository,
                 audit,
                 router,
                 tokens,
@@ -456,6 +520,37 @@ impl SimulatedWorld {
         ]
     }
 
+    fn boot_slots_role(
+        &self,
+        name: &NodeName,
+        store: &Arc<dyn Store>,
+        authority: &Arc<dyn NodeLeaseAuthority>,
+        services: &NodeServices,
+        settings: ReconcilerSettings,
+    ) -> RoleTask {
+        let (node, boot_store, leases, lease, boot_slots, clock) = (
+            name.clone(),
+            Arc::clone(store),
+            Arc::clone(authority),
+            services.lease.clone(),
+            Arc::clone(&services.boot_slots),
+            Arc::new(self.shared.clock.clone()) as Arc<dyn Clock>,
+        );
+        self.role(format!("{name}/boot-slots"), store, settings, move || {
+            BootSlotsController::new(
+                node.clone(),
+                BootSlotsServices {
+                    store: Arc::clone(&boot_store),
+                    clock: Arc::clone(&clock),
+                    boot_slots: Arc::clone(&boot_slots) as Arc<dyn BootSlots>,
+                    leases: Arc::clone(&leases),
+                    lease: lease.clone(),
+                },
+                BOOT_SLOT_SETTINGS,
+            )
+        })
+    }
+
     fn node_services(
         &self,
         name: &NodeName,
@@ -466,6 +561,12 @@ impl SimulatedWorld {
         let bundles = BTreeSet::from([valid_name::<ObjectName>(TEST_BUNDLE)]);
         NodeServices {
             lease: NodeLeaseState::new(),
+            boot_slots: Arc::new(FakeBootSlots::installed(
+                self.shared.node_images.installed.clone(),
+                Arc::clone(clock),
+                self.shared.image_keys.clone(),
+                Arc::clone(&self.shared.image_repository),
+            )),
             watchdog: Arc::new(FakeWatchdog::new(Arc::clone(clock), WATCHDOG_INTERVAL)),
             hypervisor: Arc::new(FakeHypervisor::on_fabric(
                 Arc::clone(clock),
@@ -522,6 +623,7 @@ impl SimulatedWorld {
         let (network_store, datapath, local_services) =
             (Arc::clone(&store), Arc::clone(&services.datapath), Arc::clone(&services.local_services));
         let (node_store, node_clock, node_name) = (Arc::clone(&store), Arc::clone(&clock), name.clone());
+        let node_boot_slots = Arc::clone(&services.boot_slots);
         let (image_store, image_cache, image_node) =
             (Arc::clone(&store), Arc::clone(&services.images) as Arc<dyn ImageStore>, name.clone());
         let (volume_store, volume_storage, volume_images, volume_node) = (
@@ -531,10 +633,12 @@ impl SimulatedWorld {
             name.clone(),
         );
         let mut tasks: Vec<RoleTask> = follower.into_iter().collect();
+        tasks.push(self.boot_slots_role(name, &store, &authority, &services, fast));
         tasks.extend(self.lease_roles(name, authority, &services));
         tasks.extend([
             self.role(format!("{name}/node"), &store, heartbeat, move || {
                 NodeController::new(identity.clone(), Arc::clone(&node_store), Arc::clone(&node_clock))
+                    .with_boot_slots(Arc::clone(&node_boot_slots) as Arc<dyn BootSlots>)
             }),
             self.role(format!("{name}/compute"), &store, fast, move || {
                 ComputeController::new(node_name.clone(), compute.clone())
@@ -603,10 +707,10 @@ impl SimulatedWorld {
         let (operations_store, operations_clock, operations_steps) = (
             Arc::clone(store),
             Arc::new(shared.clock.clone()) as Arc<dyn Clock>,
-            Arc::new(OperationSteps::new(
-                Arc::clone(&storage),
-                Arc::clone(identifiers) as Arc<dyn Identifiers>,
-            )) as Arc<dyn StepRegistry>,
+            Arc::new(
+                OperationSteps::new(Arc::clone(&storage), Arc::clone(identifiers) as Arc<dyn Identifiers>)
+                    .image_keys(shared.image_keys.clone()),
+            ) as Arc<dyn StepRegistry>,
         );
         vec![
             singleton_role(
@@ -744,6 +848,7 @@ impl SimulatedWorld {
         let simulated =
             nodes.get(node).ok_or_else(|| ScenarioError::Expectation(format!("no node named {node}")))?;
         simulated.services.power_off();
+        simulated.services.boot_slots.power_on();
         for role in &simulated.roles {
             self.restart_role(role);
         }
@@ -757,6 +862,7 @@ impl SimulatedWorld {
         let simulated =
             nodes.get(node).ok_or_else(|| ScenarioError::Expectation(format!("no node named {node}")))?;
         if is_powered {
+            simulated.services.boot_slots.power_on();
             simulated.link.restore();
             self.shared.leases.reconnect(node);
             for role in &simulated.roles {
@@ -858,6 +964,7 @@ impl SimulatedWorld {
                     offered_addresses,
                     console: String::new(),
                     is_receiving: running.migration == Some(InstanceMigration::Receiving),
+                    guest_boot: Some(instance.guest_boot.to_string()),
                 });
             }
             for (target, path) in services.storage.attachments() {
@@ -915,7 +1022,24 @@ impl SimulatedWorld {
         }
         self.maybe_crash_a_role();
         self.reset_nodes_whose_watchdog_fired();
+        self.reboot_nodes_that_asked();
         outcome
+    }
+
+    fn reboot_nodes_that_asked(&self) {
+        let rebooting: Vec<NodeName> = self
+            .shared
+            .nodes
+            .borrow()
+            .iter()
+            .filter(|(_, node)| node.services.boot_slots.wants_reboot())
+            .map(|(name, _)| name.clone())
+            .collect();
+        for node in rebooting {
+            if self.power_cycle(&node).is_ok() {
+                self.record(format!("{node} rebooted itself"));
+            }
+        }
     }
 
     fn reset_nodes_whose_watchdog_fired(&self) {
@@ -1137,6 +1261,10 @@ impl Cluster for SimulatedWorld {
             server: String::from(SIMULATED_NFS_SERVER),
             export: String::from(SIMULATED_NFS_EXPORT),
         })
+    }
+
+    fn node_images(&self) -> Option<NodeImages> {
+        Some(self.shared.node_images.clone())
     }
 
     fn clock(&self) -> &dyn Clock {

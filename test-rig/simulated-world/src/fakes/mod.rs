@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod boot_slots;
 pub mod datapath;
 pub mod hypervisor;
 pub mod identifiers;
@@ -10,6 +11,7 @@ pub mod store;
 pub mod watchdog;
 
 pub use audit::MemoryAuditLog;
+pub use boot_slots::{FakeBootSlots, ImageRepository, PublishedImage};
 pub use datapath::{FakeDatapath, FakeLocalServices};
 pub use hypervisor::{FakeHypervisor, FakeInstance, FakeMigration, MigrationFabric};
 pub use identifiers::SeededIdentifiers;

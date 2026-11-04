@@ -10,6 +10,7 @@ pub mod security;
 pub mod storage;
 pub mod store_history;
 pub mod support;
+pub mod upgrade;
 pub mod walking_skeleton;
 
 use amafu_scenario::ScenarioDefinition;
@@ -43,6 +44,10 @@ pub fn all() -> Vec<ScenarioDefinition> {
         migration::RUNNING_VM_MOVES,
         migration::NODE_IS_EVACUATED,
         migration::LOADED_VM_MOVES_WITHIN_BUDGET,
+        upgrade::BROKEN_IMAGE_FALLS_BACK,
+        upgrade::CLUSTER_UPGRADES_AND_ROLLS_BACK,
+        upgrade::LARGE_CLUSTER_UPGRADES_AND_ROLLS_BACK,
+        upgrade::FINALIZED_CLUSTER_REFUSES_ROLLBACK,
     ]
 }
 

@@ -9,6 +9,7 @@ use amafu_api::diagnostics::SandboxCheck;
 use amafu_domain::access::Role;
 use amafu_domain::kinds::external_network::ExternalNetworkSpecification;
 use amafu_domain::kinds::storage_backend::StorageProviderSpecification;
+use amafu_domain::node_image::NodeImage;
 use amafu_domain::{NodeName, ProjectName};
 use amafu_interfaces::Clock;
 use uuid::Uuid;
@@ -50,6 +51,13 @@ pub struct NfsExport {
     pub export: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct NodeImages {
+    pub installed: NodeImage,
+    pub upgrade: NodeImage,
+    pub broken: NodeImage,
+}
+
 #[async_trait::async_trait(?Send)]
 pub trait Cluster {
     async fn client_in_project(&self, role: Role, project: &ProjectName) -> ApiClient;
@@ -85,6 +93,8 @@ pub trait Cluster {
 
     async fn node_connection(&self, identity: Option<&TlsIdentity>)
     -> Result<Arc<NodeClient>, ScenarioError>;
+
+    fn node_images(&self) -> Option<NodeImages>;
 
     fn clock(&self) -> &dyn Clock;
 
