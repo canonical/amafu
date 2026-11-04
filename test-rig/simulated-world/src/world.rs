@@ -30,8 +30,8 @@ use amafu_domain::kinds::storage_backend::StorageProviderSpecification;
 use amafu_domain::{MacAddress, NodeName, ObjectId, ObjectName, ProjectName};
 use amafu_interfaces::{
     AuditLog, Clock, CoreConnection, Datapath, Fence, GuestAgents, Hypervisor, Identifiers, ImageStore,
-    Leases, LocalServices, NodeLeaseAuthority, NodeLeaseState, NodeNetworkState, Storage, Store,
-    WorkloadState,
+    InstanceMigration, Leases, LocalServices, NodeLeaseAuthority, NodeLeaseState, NodeNetworkState, Storage,
+    Store, WorkloadState,
 };
 use amafu_network::dhcp::{self, DhcpMessage, Lease, MessageType};
 use amafu_reconciler::{Controller, ReconcilerSettings, StepRegistry, run_controller, run_singleton};
@@ -603,7 +603,10 @@ impl SimulatedWorld {
         let (operations_store, operations_clock, operations_steps) = (
             Arc::clone(store),
             Arc::new(shared.clock.clone()) as Arc<dyn Clock>,
-            Arc::new(OperationSteps::new(Arc::clone(&storage))) as Arc<dyn StepRegistry>,
+            Arc::new(OperationSteps::new(
+                Arc::clone(&storage),
+                Arc::clone(identifiers) as Arc<dyn Identifiers>,
+            )) as Arc<dyn StepRegistry>,
         );
         vec![
             singleton_role(
@@ -854,6 +857,7 @@ impl SimulatedWorld {
                     disks: instance.launch.disks.iter().map(|disk| disk.path.clone()).collect(),
                     offered_addresses,
                     console: String::new(),
+                    is_receiving: running.migration == Some(InstanceMigration::Receiving),
                 });
             }
             for (target, path) in services.storage.attachments() {

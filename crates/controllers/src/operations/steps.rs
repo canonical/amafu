@@ -1,19 +1,23 @@
 use std::sync::Arc;
 
 use amafu_domain::kinds::operation::StepSpecification;
-use amafu_interfaces::{ActionError, Storage};
+use amafu_interfaces::{ActionError, Identifiers, Storage};
 use amafu_reconciler::{Step, StepRegistry};
 
+use crate::operations::migration::{
+    AnnounceAddresses, CleanUpSource, CopyMemory, Cordon, MigrateVm, PrepareDestination, SwitchOver,
+};
 use crate::operations::recovery::{MarkNodeLost, ReleaseAssignments, RevokeNodeOnStorage, WaitOutWatchdog};
 
 pub struct OperationSteps {
     storage: Arc<dyn Storage>,
+    identifiers: Arc<dyn Identifiers>,
 }
 
 impl OperationSteps {
     #[must_use]
-    pub fn new(storage: Arc<dyn Storage>) -> Self {
-        Self { storage }
+    pub fn new(storage: Arc<dyn Storage>, identifiers: Arc<dyn Identifiers>) -> Self {
+        Self { storage, identifiers }
     }
 }
 
@@ -28,8 +32,16 @@ impl StepRegistry for OperationSteps {
             StepSpecification::ReleaseAssignments { node } => {
                 Box::new(ReleaseAssignments { node: node.clone(), storage: Arc::clone(&self.storage) })
             }
-            other => {
-                return Err(ActionError::invalid(format!("the {} step has no implementation", other.name())));
+            StepSpecification::PrepareDestination { vm, destination } => {
+                Box::new(PrepareDestination { vm: vm.clone(), destination: destination.clone() })
+            }
+            StepSpecification::CopyMemory { vm } => Box::new(CopyMemory { vm: vm.clone() }),
+            StepSpecification::SwitchOver { vm } => Box::new(SwitchOver { vm: vm.clone() }),
+            StepSpecification::AnnounceAddresses { vm } => Box::new(AnnounceAddresses { vm: vm.clone() }),
+            StepSpecification::CleanUpSource { vm } => Box::new(CleanUpSource { vm: vm.clone() }),
+            StepSpecification::Cordon { node } => Box::new(Cordon { node: node.clone() }),
+            StepSpecification::MigrateVm { vm } => {
+                Box::new(MigrateVm { vm: vm.clone(), identifiers: Arc::clone(&self.identifiers) })
             }
         })
     }

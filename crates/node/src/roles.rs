@@ -289,8 +289,10 @@ fn recovery_roles(
     let (operations_store, operations_clock, operations_steps) = (
         Arc::clone(&services.store),
         Arc::clone(&services.clock),
-        Arc::new(OperationSteps::new(Arc::clone(&adapters.storage) as Arc<dyn Storage>))
-            as Arc<dyn StepRegistry>,
+        Arc::new(OperationSteps::new(
+            Arc::clone(&adapters.storage) as Arc<dyn Storage>,
+            Arc::new(RandomIdentifiers),
+        )) as Arc<dyn StepRegistry>,
     );
     singleton_role(
         roles,
