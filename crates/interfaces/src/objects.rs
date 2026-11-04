@@ -172,7 +172,25 @@ pub async fn update_status<R: Resource>(
     reference: &ObjectReference,
     compute: impl Fn(&Object<R>) -> Option<R::Status> + Send + Sync,
 ) -> Result<Object<R>, ObjectStoreError> {
-    let updated = update_with(store, reference, None, |current| {
+    update_status_with_fence(store, reference, None, compute).await
+}
+
+pub async fn update_status_fenced<R: Resource>(
+    store: &dyn Store,
+    reference: &ObjectReference,
+    fence: &Fence,
+    compute: impl Fn(&Object<R>) -> Option<R::Status> + Send + Sync,
+) -> Result<Object<R>, ObjectStoreError> {
+    update_status_with_fence(store, reference, Some(fence), compute).await
+}
+
+async fn update_status_with_fence<R: Resource>(
+    store: &dyn Store,
+    reference: &ObjectReference,
+    fence: Option<&Fence>,
+    compute: impl Fn(&Object<R>) -> Option<R::Status> + Send + Sync,
+) -> Result<Object<R>, ObjectStoreError> {
+    let updated = update_with(store, reference, fence, |current| {
         let current = current
             .map(|value| serde_json::from_value::<Object<R>>(value.clone()))
             .transpose()

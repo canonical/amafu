@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 amafu-domain.workspace = true
 amafu-interfaces.workspace = true
+async-trait.workspace = true
 futures.workspace = true
 thiserror.workspace = true
 time.workspace = true
