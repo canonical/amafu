@@ -109,7 +109,10 @@ impl NodeSlice {
                 self.used_volumes.contains(&project_and_name(object))
                     || names_node(object, "/status/provisioned/node", &self.node)
             }
-            "NetworkEndpoint" => self.hosted_projects.contains(&project_and_name(object).0),
+            "NetworkEndpoint" => {
+                self.hosted_projects.contains(&project_and_name(object).0)
+                    || names_node(object, "/specification/node", &self.node)
+            }
             "FloatingIp" => names_node(object, "/status/binding/node", &self.node),
             _ => false,
         }
@@ -360,6 +363,17 @@ mod tests {
             Some(&foreign_withdrawal)
         ));
         assert!(!slice.may_write(&compute(), "NetworkEndpoint", Some(&endpoint("web-2", "node-2")), None));
+    }
+
+    #[test]
+    fn a_node_keeps_seeing_its_endpoints_after_its_last_vm_of_the_project_is_gone() {
+        let slice = slice_with(&[]);
+        let mut endpoint_in_other_project = endpoint("gone", "node-1");
+        endpoint_in_other_project["metadata"]["project"] = json!("project-c");
+        assert!(slice.includes("NetworkEndpoint", &endpoint_in_other_project));
+        let mut foreign_endpoint = endpoint("web-2", "node-2");
+        foreign_endpoint["metadata"]["project"] = json!("project-c");
+        assert!(!slice.includes("NetworkEndpoint", &foreign_endpoint));
     }
 
     proptest! {
