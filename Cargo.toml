@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/*", "test-rig/*"]
-exclude = ["crates/api/fuzz", "crates/network/fuzz", "crates/guest-agent/fuzz"]
+exclude = ["crates/api/fuzz", "crates/network/fuzz", "crates/guest-agent/fuzz", "plugins"]
 resolver = "3"
 
 [workspace.package]
@@ -74,6 +74,8 @@ toml = "1.1.8"
 tar = "0.4.46"
 flate2 = "1.1.10"
 webpki-roots = "1.0.11"
+wasmtime = { version = "50.0.1", default-features = false, features = ["anyhow", "async", "cranelift", "component-model", "parallel-compilation", "runtime", "std"] }
+wasmtime-wasi = { version = "50.0.1", default-features = false }
 time = { version = "0.3.55", features = ["serde", "formatting", "parsing"] }
 tokio = { version = "1.54.1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net", "io-util", "signal", "process", "fs"] }
 tokio-vsock = "0.7.3"

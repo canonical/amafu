@@ -228,11 +228,17 @@ pub struct Directories {
 
 const IMAGE_CACHE_DIRECTORY: &str = "image-cache";
 const VOLUMES_DIRECTORY: &str = "volumes";
+const PLUGIN_CACHE_DIRECTORY: &str = "plugin-cache";
 
 impl Directories {
     #[must_use]
     pub fn image_cache(&self) -> PathBuf {
         self.data.join(IMAGE_CACHE_DIRECTORY)
+    }
+
+    #[must_use]
+    pub fn plugin_cache(&self) -> PathBuf {
+        self.data.join(PLUGIN_CACHE_DIRECTORY)
     }
 
     #[must_use]

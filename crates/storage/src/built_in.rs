@@ -9,6 +9,7 @@ use crate::ceph::{CephCluster, CephSettings, RbdAttacher};
 use crate::local_disk::{LocalDiskProvider, LocalFileAttacher};
 use crate::nfs::{NfsAttacher, NfsProvider};
 use crate::nvme_tcp::{NvmeTcpAttacher, SpdkTarget};
+use crate::plugins::{PluginHost, WebAssemblyProvider};
 
 pub struct BuiltInStorage {
     local_disk: Arc<LocalDiskProvider>,
@@ -16,6 +17,7 @@ pub struct BuiltInStorage {
     nfs: Arc<NfsAttacher>,
     nvme_tcp: Arc<NvmeTcpAttacher>,
     rbd: Arc<RbdAttacher>,
+    plugins: Option<Arc<PluginHost>>,
 }
 
 impl BuiltInStorage {
@@ -27,7 +29,14 @@ impl BuiltInStorage {
             local_file: Arc::new(LocalFileAttacher::new(node)),
             nfs: Arc::new(NfsAttacher::default()),
             rbd: Arc::new(RbdAttacher),
+            plugins: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_plugins(mut self, plugins: Arc<PluginHost>) -> Self {
+        self.plugins = Some(plugins);
+        self
     }
 }
 
@@ -78,6 +87,13 @@ impl Storage for BuiltInStorage {
                 command_key,
                 command_certificate_authority: command_certificate_authority.as_deref(),
             })?),
+            StorageProviderSpecification::Plugin(plugin) => {
+                let host = self
+                    .plugins
+                    .as_ref()
+                    .ok_or_else(|| ActionError::invalid("this node runs no storage plugin host"))?;
+                Arc::new(WebAssemblyProvider::new(Arc::clone(host), plugin.clone()))
+            }
         })
     }
 

@@ -37,6 +37,7 @@ use amafu_state::{
     DEFAULT_HEARTBEAT, LeaseFencedStore, LocalNodeLeases, LocalStateCache, QuoriumAuditLog, QuoriumLeases,
     QuoriumStore, StateTls, SubscribedStore, VoterSettings, start_voter,
 };
+use amafu_storage::plugins::{DownloadedModules, PluginHost, PluginLimits};
 use amafu_storage::{BuiltInStorage, CachedImages};
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
@@ -240,7 +241,14 @@ fn compute_adapters(
     let runtime = RuntimeDirectory::new(directories.runtime.join(VM_DIRECTORY));
     Ok(ComputeAdapters {
         hypervisor: Arc::clone(hypervisor),
-        storage: Arc::new(BuiltInStorage::new(configuration.node.name.clone(), directories.volumes())),
+        storage: Arc::new(
+            BuiltInStorage::new(configuration.node.name.clone(), directories.volumes()).with_plugins(
+                PluginHost::new(
+                    Arc::new(DownloadedModules::new(directories.plugin_cache())?),
+                    PluginLimits::default(),
+                )?,
+            ),
+        ),
         images: Arc::new(CachedImages::new(directories.image_cache(), compute.mkfs_erofs_tool())?),
         datapath: Arc::new(KernelDatapath::new(underlay, compute.nft_tool())),
         agents: Arc::new(HybridVsockAgents::new(runtime)),

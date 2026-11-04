@@ -1,7 +1,7 @@
 use amafu_domain::{NodeName, ObjectId};
 
 use super::{ContractViolation, ensure, succeed};
-use crate::storage::{StorageProvider, VolumeAttacher, VolumeRequest};
+use crate::storage::{FencedNode, StorageProvider, VolumeAttacher, VolumeRequest};
 
 pub async fn storage_contract(
     provider: &dyn StorageProvider,
@@ -50,4 +50,58 @@ pub async fn storage_contract(
 
     succeed(provider.delete_volume(&provisioned).await, "deleting works")?;
     succeed(provider.delete_volume(&provisioned).await, "deleting is idempotent")
+}
+
+fn contract_volume(volume_number: u128) -> VolumeRequest {
+    VolumeRequest {
+        volume_id: ObjectId::from_uuid(uuid::Uuid::from_u128(
+            0x00a1_fa00_0000_0000_0000_0000_0001_0000 + volume_number,
+        )),
+        size_bytes: 32 * 1024 * 1024,
+        source_image: None,
+    }
+}
+
+pub async fn provider_contract(
+    provider: &dyn StorageProvider,
+    node: &NodeName,
+) -> Result<(), ContractViolation> {
+    succeed(provider.check().await, "the backend is reachable")?;
+    let request = contract_volume(1);
+    let provisioned = succeed(provider.create_volume(&request).await, "creating a volume works")?;
+    let again = succeed(provider.create_volume(&request).await, "creating a volume is idempotent")?;
+    ensure(
+        again == provisioned,
+        "creating the same volume twice gives the same volume",
+        (&provisioned, &again),
+    )?;
+    ensure(
+        provisioned.size_bytes >= request.size_bytes,
+        "the volume is at least as large as asked",
+        &provisioned,
+    )?;
+    let other = succeed(provider.create_volume(&contract_volume(2)).await, "creating a second volume works")?;
+    ensure(
+        other.identifier != provisioned.identifier,
+        "two volumes have different identifiers",
+        (&provisioned, &other),
+    )?;
+
+    let target = succeed(provider.export_to_node(&provisioned, node).await, "exporting to a node works")?;
+    let target_again = succeed(provider.export_to_node(&provisioned, node).await, "exporting is idempotent")?;
+    ensure(target == target_again, "exporting twice gives the same target", (&target, &target_again))?;
+
+    let fenced = FencedNode { name: node.clone(), address: None };
+    succeed(provider.revoke_node(&fenced).await, "revoking a node works")?;
+    succeed(provider.revoke_node(&fenced).await, "revoking a node is idempotent")?;
+    let is_revoked = succeed(provider.has_revoked_node(&fenced).await, "asking about a revoked node works")?;
+    ensure(is_revoked, "a revoked node is reported revoked", is_revoked)?;
+    succeed(provider.readmit_node(&fenced).await, "readmitting a node works")?;
+    succeed(provider.export_to_node(&provisioned, node).await, "a readmitted node can be exported to again")?;
+
+    for volume in [&provisioned, &other] {
+        succeed(provider.delete_volume(volume).await, "deleting works")?;
+        succeed(provider.delete_volume(volume).await, "deleting is idempotent")?;
+    }
+    Ok(())
 }

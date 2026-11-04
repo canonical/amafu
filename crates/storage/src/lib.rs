@@ -5,6 +5,7 @@ pub mod local_disk;
 pub mod management;
 pub mod nfs;
 pub mod nvme_tcp;
+pub mod plugins;
 pub mod qcow2;
 
 pub use built_in::BuiltInStorage;
