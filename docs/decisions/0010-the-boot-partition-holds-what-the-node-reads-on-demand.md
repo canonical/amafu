@@ -17,6 +17,9 @@ kernel, the container initramfs and more kernel modules. Kept in the initramfs, 
   kernel modules and `tools/` (`nft`, `mkfs.erofs` and the libraries they need, run with `LD_LIBRARY_PATH`). It is
   mounted read-only, `nosuid` and `nodev`, and executable so the tools can run.
 - Kernel modules load in the background while the state store starts, and the compute roles wait for them.
+- The guest kernel, the container initramfs and the firmware are read once in the background at boot, so the first
+  VM on a node does not wait for them: a cold guest kernel took 3.8 seconds to load in the lab, and 2.4 milliseconds
+  from the page cache.
 
 ## Consequences
 
