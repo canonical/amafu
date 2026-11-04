@@ -67,6 +67,8 @@ pub enum NodePhase {
     Unknown,
     Ready,
     NotReady,
+    Suspect,
+    Lost,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]

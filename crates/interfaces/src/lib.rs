@@ -8,6 +8,7 @@ pub mod identifiers;
 pub mod images;
 pub mod lease;
 pub mod network;
+pub mod node_lease;
 pub mod objects;
 pub mod storage;
 pub mod store;
@@ -28,6 +29,7 @@ pub use network::{
     Datapath, FloatingAddress, LocalServices, NodeNetworkState, Port, PortKey, RealizedNetwork,
     RemoteEndpoint, Segment, SegmentKey,
 };
+pub use node_lease::{HeldNodeLease, NodeLeaseAuthority, NodeLeaseError, NodeLeaseGrant, NodeLeaseState};
 pub use objects::ObjectStoreError;
 pub use storage::{AttachTarget, Storage, StorageProtocol, StorageProvider, VolumeAttacher, VolumeRequest};
 pub use store::{Consistency, Fence, Store, StoreError, StoredRecord, WatchEvent};

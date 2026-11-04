@@ -121,14 +121,12 @@ impl StepSpecification {
 
     #[must_use]
     pub fn can_be_undone(&self) -> bool {
-        !matches!(
+        matches!(
             self,
             Self::MarkNodeLost { .. }
-                | Self::ReleaseAssignments { .. }
-                | Self::SwitchOver { .. }
-                | Self::AnnounceAddresses { .. }
-                | Self::CleanUpSource { .. }
-                | Self::MigrateVm { .. }
+                | Self::PrepareDestination { .. }
+                | Self::CopyMemory { .. }
+                | Self::Cordon { .. }
         )
     }
 }
@@ -376,5 +374,15 @@ mod tests {
             .map(StepSpecification::can_be_undone)
             .collect();
         assert_eq!(undoable, vec![true, true, false, false, false]);
+    }
+
+    #[test]
+    fn a_recovery_cannot_be_undone_once_storage_is_revoked() {
+        let undoable: Vec<bool> = OperationSpecification::recovery(node("node-1"))
+            .steps
+            .iter()
+            .map(StepSpecification::can_be_undone)
+            .collect();
+        assert_eq!(undoable, vec![true, false, false, false]);
     }
 }

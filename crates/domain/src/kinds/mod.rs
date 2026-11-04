@@ -5,6 +5,7 @@ pub mod image;
 pub mod network;
 pub mod network_endpoint;
 pub mod node;
+pub mod node_lease;
 pub mod operation;
 pub mod security_group;
 pub mod storage_backend;
