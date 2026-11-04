@@ -54,6 +54,10 @@ pub async fn advance(
         start_rollback(context, RollbackReason::Cancelled, touched).await?;
         return Ok(Progress::Advanced);
     }
+    if specification.is_cancelled && can_abandon(specification, index) {
+        finish(context, OperationOutcome::Cancelled).await?;
+        return Ok(Progress::Finished);
+    }
     if specification.is_paused {
         return Ok(Progress::Idle);
     }
@@ -75,6 +79,11 @@ pub async fn advance(
             start_rollback(context, RollbackReason::Failed { error: error.to_string() }, index + 1).await?;
             Ok(Progress::Advanced)
         }
+        Err(error) if !error.is_retryable() && step_specification.can_be_abandoned() => {
+            let reason = format!("step {} of {}: {error}", index + 1, step_specification.name());
+            finish(context, OperationOutcome::Failed { reason }).await?;
+            Ok(Progress::Finished)
+        }
         Err(error) => {
             record_failed_attempt(context, index, &error).await?;
             Err(ActionError::retryable(format!(
@@ -88,6 +97,10 @@ pub async fn advance(
 
 fn touched_steps(status: &OperationStatus) -> usize {
     status.completed_steps + usize::from(status.current_step.is_some())
+}
+
+fn can_abandon(specification: &OperationSpecification, index: usize) -> bool {
+    specification.steps.get(index).is_some_and(StepSpecification::can_be_abandoned)
 }
 
 fn can_undo(specification: &OperationSpecification, steps: usize) -> bool {
