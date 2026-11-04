@@ -123,8 +123,15 @@ pub fn mount_data_partition(device: &Path, target: &Path) -> Result<(), EarlyBoo
 
 pub fn mount_boot_partition(device: &Path, target: &Path) -> Result<(), EarlyBootError> {
     create_directory(target)?;
-    let flags = MountFlags::NOSUID.union(MountFlags::NODEV).union(MountFlags::RDONLY);
-    mount(device, target, "vfat", flags, Some(c"fmask=0022,dmask=0022")).map_err(mount_failure(target))
+    mount(device, target, "vfat", RESTRICTED, Some(c"fmask=0022,dmask=0022")).map_err(mount_failure(target))
+}
+
+pub fn expose_boot_slot(slot_directory: &Path, target: &Path) -> Result<(), EarlyBootError> {
+    create_directory(target)?;
+    rustix::mount::mount_bind(slot_directory, target).map_err(mount_failure(target))?;
+    let read_only =
+        MountFlags::BIND.union(MountFlags::RDONLY).union(MountFlags::NOSUID).union(MountFlags::NODEV);
+    rustix::mount::mount_remount(target, read_only, c"").map_err(mount_failure(target))
 }
 
 pub fn set_hostname(name: &str) -> Result<(), EarlyBootError> {

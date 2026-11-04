@@ -83,7 +83,7 @@ mod test_channel {
     const PLAN_FILE: &str = "plan.json";
     const TAIL_BYTES: usize = 2048;
     const HEAD_BYTES: usize = 16 * 1024;
-    const NODE_CONFIGURATION: &str = "/run/amafu/boot/amafu/node-configuration.yaml";
+    const NODE_CONFIGURATION: &str = crate::boot::CONFIGURATION_FILE;
     const PROBE_MEMORY_MEBIBYTES: usize = 1024;
     const KERNEL_LOG_DEVICE: &str = "/dev/kmsg";
     const KERNEL_RECORD_BYTES: usize = 8192;

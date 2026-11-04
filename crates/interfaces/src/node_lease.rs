@@ -208,6 +208,11 @@ impl NodeLeaseState {
         *self.lock() = None;
     }
 
+    pub fn forget(&self) {
+        self.drop_lease();
+        self.is_surrendered.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
     #[must_use]
     pub fn surrender(&self) -> Option<HeldNodeLease> {
         self.is_surrendered.store(true, std::sync::atomic::Ordering::SeqCst);

@@ -12,11 +12,11 @@ use amafu_api::{
 };
 use amafu_controllers::node_lease::{LeaseKeeper, LeaseKeeperSettings, feed_while_leased};
 use amafu_controllers::{
-    CertificateRevocationController, ComputeController, ComputeServices, ExternalNetworkController,
-    FloatingIpController, ImageController, LocalVolumeController, NetworkController, NodeController,
-    NodeHealthController, NodeIdentity, NodeNetworkController, OperationSteps, OperationsController,
-    SchedulerController, SchedulingSettings, SecurityGroupController, StorageBackendController,
-    VolumeController,
+    BootSlotsController, BootSlotsServices, BootSlotsSettings, CertificateRevocationController,
+    ComputeController, ComputeServices, ExternalNetworkController, FloatingIpController, ImageController,
+    LocalVolumeController, NetworkController, NodeController, NodeHealthController, NodeIdentity,
+    NodeNetworkController, OperationSteps, OperationsController, SchedulerController,
+    SecurityGroupController, StorageBackendController, VolumeController,
 };
 use amafu_domain::NodeName;
 use amafu_domain::ObjectId;
@@ -27,9 +27,9 @@ use amafu_hypervisor::{
     MigrationTransport, RuntimeDirectory, prepare_kvm_access,
 };
 use amafu_interfaces::{
-    AuditEntry, AuditLog, Clock, CoreConnection, Datapath, Fence, GuestAgents, Hypervisor, ImageStore,
-    Leases, LocalServices, NodeLeaseAuthority, NodeLeaseState, RandomIdentifiers, Storage, Store, StoreError,
-    Watchdog,
+    AuditEntry, AuditLog, BootSlots, Clock, CoreConnection, Datapath, Fence, GuestAgents, Hypervisor,
+    ImageStore, Leases, LocalServices, NodeLeaseAuthority, NodeLeaseState, RandomIdentifiers, Storage, Store,
+    StoreError, Watchdog,
 };
 use amafu_network::{KernelDatapath, LocalServicesServer};
 use amafu_reconciler::{Controller, ReconcilerSettings, StepRegistry, run_controller, run_singleton};
@@ -67,6 +67,7 @@ pub struct Services {
 pub struct BootServices {
     pub modules: Pin<Box<dyn Future<Output = ()> + Send>>,
     pub watchdog: Arc<dyn Watchdog>,
+    pub boot_slots: Arc<dyn BootSlots>,
 }
 
 struct AuditKeptByTheCore;
@@ -315,9 +316,8 @@ fn cloud_hypervisor(
 fn recovery_roles(
     roles: &mut JoinSet<()>,
     services: &Services,
-    adapters: &ComputeAdapters,
     settings: ReconcilerSettings,
-    scheduling: SchedulingSettings,
+    steps: OperationSteps,
 ) {
     let (health_store, health_clock) = (Arc::clone(&services.store), Arc::clone(&services.clock));
     singleton_role(
@@ -333,17 +333,8 @@ fn recovery_roles(
         services,
         settings,
     );
-    let (operations_store, operations_clock, operations_steps) = (
-        Arc::clone(&services.store),
-        Arc::clone(&services.clock),
-        Arc::new(
-            OperationSteps::new(
-                Arc::clone(&adapters.storage) as Arc<dyn Storage>,
-                Arc::new(RandomIdentifiers),
-            )
-            .scheduling(scheduling),
-        ) as Arc<dyn StepRegistry>,
-    );
+    let (operations_store, operations_clock, operations_steps) =
+        (Arc::clone(&services.store), Arc::clone(&services.clock), Arc::new(steps) as Arc<dyn StepRegistry>);
     singleton_role(
         roles,
         "operations",
@@ -364,8 +355,13 @@ fn core_roles(
     roles: &mut JoinSet<()>,
     services: &Services,
     adapters: &ComputeAdapters,
-    scheduling: SchedulingSettings,
-) {
+    configuration: &NodeConfiguration,
+) -> anyhow::Result<()> {
+    let scheduling = configuration.scheduling.settings();
+    let steps =
+        OperationSteps::new(Arc::clone(&adapters.storage) as Arc<dyn Storage>, Arc::new(RandomIdentifiers))
+            .scheduling(scheduling)
+            .image_keys(configuration.upgrade.trusted_keys()?);
     let store = || Arc::clone(&services.store);
     let settings = ReconcilerSettings::default();
     let scheduler_store = store();
@@ -410,7 +406,7 @@ fn core_roles(
         services,
         settings,
     );
-    recovery_roles(roles, services, adapters, settings, scheduling);
+    recovery_roles(roles, services, settings, steps);
     let external_store = store();
     singleton_role(
         roles,
@@ -443,6 +439,7 @@ fn core_roles(
         services,
         settings,
     );
+    Ok(())
 }
 
 fn compute_roles(
@@ -602,6 +599,28 @@ fn lease_roles(
     }
 }
 
+fn boot_slot_role(
+    roles: &mut JoinSet<()>,
+    node: &NodeName,
+    services: &Services,
+    lease: &NodeLeaseState,
+    boot_slots: Arc<dyn BootSlots>,
+    settings: BootSlotsSettings,
+) {
+    let controller = Arc::new(BootSlotsController::new(
+        node.clone(),
+        BootSlotsServices {
+            store: Arc::clone(&services.store),
+            clock: Arc::clone(&services.clock),
+            boot_slots,
+            leases: Arc::clone(&services.node_leases),
+            lease: lease.clone(),
+        },
+        settings,
+    ));
+    controller_role(roles, "boot-slots", controller, services, ReconcilerSettings::default());
+}
+
 fn fenced_by_lease(services: &Services, node: &NodeName, lease: &NodeLeaseState) -> Services {
     Services {
         store: Arc::new(LeaseFencedStore::new(
@@ -643,21 +662,33 @@ pub async fn run(configuration: NodeConfiguration, boot: Option<BootServices>) -
     };
     if is_core {
         start_api(&mut roles, &configuration, &services)?;
-        core_roles(&mut roles, &services, &adapters, configuration.scheduling.settings());
+        core_roles(&mut roles, &services, &adapters, &configuration)?;
     }
     let identity = node_identity(&configuration)?;
     let lease = NodeLeaseState::new();
-    let (modules, watchdog) = match boot {
-        Some(boot) => (Some(boot.modules), Some(boot.watchdog)),
-        None => (None, None),
+    let (modules, watchdog, boot_slots) = match boot {
+        Some(boot) => (Some(boot.modules), Some(boot.watchdog), Some(boot.boot_slots)),
+        None => (None, None, None),
     };
     lease_roles(&mut roles, &services, &lease, configuration.fencing.terms(), watchdog);
     let node_services = fenced_by_lease(&services, &identity.name, &lease);
-    let node = Arc::new(NodeController::new(
+    let mut node = NodeController::new(
         identity.clone(),
         Arc::clone(&node_services.store),
         Arc::clone(&node_services.clock),
-    ));
+    );
+    if let Some(boot_slots) = boot_slots {
+        node = node.with_boot_slots(Arc::clone(&boot_slots));
+        boot_slot_role(
+            &mut roles,
+            &identity.name,
+            &node_services,
+            &lease,
+            boot_slots,
+            configuration.upgrade.boot_slots(),
+        );
+    }
+    let node = Arc::new(node);
     let heartbeat = ReconcilerSettings {
         periodic_resynchronization: HEARTBEAT_INTERVAL / 2,
         ..ReconcilerSettings::default()

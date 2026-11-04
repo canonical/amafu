@@ -8,7 +8,7 @@ use tokio::net::UnixListener;
 use tokio::sync::mpsc;
 
 use crate::boot;
-use crate::control::{MODULES_READY_FILE, WATCHDOG_SOCKET};
+use crate::control::{FEED_REQUEST, INIT_SOCKET, MODULES_READY_FILE, RESTART_REQUEST};
 use crate::watchdog::KernelWatchdog;
 
 const CONTROL_COMMAND: &str = "control";
@@ -18,9 +18,16 @@ const MAXIMUM_RESTART_DELAY: Duration = Duration::from_secs(30);
 const REAP_INTERVAL: Duration = Duration::from_millis(200);
 const HEALTHY_RUN: Duration = Duration::from_secs(60);
 
-fn relay_feeding(watchdog: Arc<KernelWatchdog>) -> std::io::Result<()> {
-    let _ = std::fs::remove_file(WATCHDOG_SOCKET);
-    let listener = UnixListener::bind(WATCHDOG_SOCKET)?;
+fn restart_node() {
+    tracing::warn!("the control process asked to restart the node");
+    if let Err(error) = amafu_system::reboot() {
+        tracing::error!(%error, "restarting the node failed");
+    }
+}
+
+fn answer_control_requests(watchdog: Arc<KernelWatchdog>) -> std::io::Result<()> {
+    let _ = std::fs::remove_file(INIT_SOCKET);
+    let listener = UnixListener::bind(INIT_SOCKET)?;
     tokio::spawn(async move {
         loop {
             let Ok((stream, _)) = listener.accept().await else {
@@ -29,9 +36,15 @@ fn relay_feeding(watchdog: Arc<KernelWatchdog>) -> std::io::Result<()> {
             let watchdog = Arc::clone(&watchdog);
             tokio::spawn(async move {
                 let mut lines = tokio::io::BufReader::new(stream).lines();
-                while let Ok(Some(_)) = lines.next_line().await {
-                    if let Err(error) = watchdog.feed() {
-                        tracing::error!(%error, "feeding the watchdog failed");
+                while let Ok(Some(request)) = lines.next_line().await {
+                    match request.as_bytes() {
+                        FEED_REQUEST => {
+                            if let Err(error) = watchdog.feed() {
+                                tracing::error!(%error, "feeding the watchdog failed");
+                            }
+                        }
+                        RESTART_REQUEST => restart_node(),
+                        _ => tracing::warn!(request, "the control process sent an unknown request"),
                     }
                 }
             });
@@ -98,7 +111,7 @@ pub async fn run_as_process_one() -> anyhow::Result<()> {
         boot::boot_modules_directory(),
         configuration.fencing.terms().watchdog_interval(),
     ));
-    relay_feeding(watchdog)?;
+    answer_control_requests(watchdog)?;
     mark_modules_ready(modules);
     let (ended, endings) = mpsc::unbounded_channel();
     reap(ended);

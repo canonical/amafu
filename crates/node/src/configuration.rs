@@ -4,11 +4,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use amafu_api::TokenIdentity;
-use amafu_controllers::SchedulingSettings;
+use amafu_controllers::{BootSlotsSettings, SchedulingSettings};
 use amafu_domain::kinds::node::NodeRole;
 use amafu_domain::kinds::node_lease::LeaseTerms;
 use amafu_domain::{NodeName, ZoneName};
-use amafu_interfaces::ExternalTool;
+use amafu_interfaces::{ExternalTool, TrustedImageKeys};
 use amafu_network::UnderlayConfiguration;
 use serde::{Deserialize, Serialize};
 
@@ -36,8 +36,44 @@ pub struct NodeConfiguration {
     pub fencing: FencingSection,
     #[serde(default)]
     pub scheduling: SchedulingSection,
+    #[serde(default)]
+    pub upgrade: UpgradeSection,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diagnostics: Option<DiagnosticsSection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct UpgradeSection {
+    pub image_keys: Vec<String>,
+    pub confirm_after_seconds: u64,
+    pub give_up_after_seconds: u64,
+}
+
+impl Default for UpgradeSection {
+    fn default() -> Self {
+        let defaults = BootSlotsSettings::default();
+        Self {
+            image_keys: Vec::new(),
+            confirm_after_seconds: defaults.confirm_after.as_secs(),
+            give_up_after_seconds: defaults.give_up_after.as_secs(),
+        }
+    }
+}
+
+impl UpgradeSection {
+    #[must_use]
+    pub fn boot_slots(&self) -> BootSlotsSettings {
+        BootSlotsSettings {
+            confirm_after: Duration::from_secs(self.confirm_after_seconds),
+            give_up_after: Duration::from_secs(self.give_up_after_seconds),
+        }
+    }
+
+    pub fn trusted_keys(&self) -> Result<TrustedImageKeys, ConfigurationError> {
+        TrustedImageKeys::from_hexadecimal(self.image_keys.iter().map(String::as_str))
+            .map_err(|error| ConfigurationError::ImageKeys(error.to_string()))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -231,6 +267,10 @@ pub enum ConfigurationError {
     VotersWithoutIdentity,
     #[error("the lease and the watchdog interval must each be between 2 and 60 seconds")]
     FencingOutOfBounds,
+    #[error("an image key is malformed: {0}")]
+    ImageKeys(String),
+    #[error("a new boot slot must be given up later than it is confirmed")]
+    ConfirmationAfterGivingUp,
 }
 
 impl NodeConfiguration {
@@ -251,6 +291,10 @@ impl NodeConfiguration {
         }
         if !configuration.fencing.terms().is_within_bounds() {
             return Err(ConfigurationError::FencingOutOfBounds);
+        }
+        configuration.upgrade.trusted_keys()?;
+        if configuration.upgrade.give_up_after_seconds <= configuration.upgrade.confirm_after_seconds {
+            return Err(ConfigurationError::ConfirmationAfterGivingUp);
         }
         Ok(configuration)
     }
@@ -292,6 +336,24 @@ api:
         assert_eq!(configuration.network, None);
         assert_eq!(configuration.compute, ComputeSection::default());
         assert_eq!(configuration.fencing.terms().duration(), Duration::from_secs(8));
+    }
+
+    #[test]
+    fn image_keys_must_be_ed25519_and_confirmation_must_come_before_giving_up() {
+        let malformed = format!("{MINIMAL}upgrade:\n  image_keys: [abcd]\n");
+        assert!(matches!(NodeConfiguration::parse(&malformed), Err(ConfigurationError::ImageKeys(_))));
+        let key = "ab".repeat(32);
+        let trusted = format!(
+            "{MINIMAL}upgrade:\n  image_keys: [{key}]\n  confirm_after_seconds: 20\n  give_up_after_seconds: 300\n"
+        );
+        let configuration = NodeConfiguration::parse(&trusted).unwrap();
+        assert_eq!(configuration.upgrade.boot_slots().confirm_after, Duration::from_secs(20));
+        let impatient =
+            format!("{MINIMAL}upgrade:\n  confirm_after_seconds: 300\n  give_up_after_seconds: 20\n");
+        assert!(matches!(
+            NodeConfiguration::parse(&impatient),
+            Err(ConfigurationError::ConfirmationAfterGivingUp)
+        ));
     }
 
     #[test]

@@ -18,6 +18,7 @@ diagnostics = []
 
 [dependencies]
 amafu-api.workspace = true
+amafu-boot-slots.workspace = true
 amafu-controllers.workspace = true
 amafu-domain.workspace = true
 amafu-hypervisor.workspace = true

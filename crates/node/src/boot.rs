@@ -1,8 +1,10 @@
 use std::path::Path;
 use std::time::Duration;
 
+use amafu_boot_slots::EspLayout;
+use amafu_boot_slots::layout::booted_slot;
 use amafu_system::boot_media::{BOOT_PARTITION_NAME, DATA_PARTITION_NAME, find_partition};
-use amafu_system::early_boot::{mount_boot_partition, mount_data_partition, set_hostname};
+use amafu_system::early_boot::{expose_boot_slot, mount_boot_partition, mount_data_partition, set_hostname};
 use amafu_system::files::read_into_page_cache;
 use amafu_system::modules::load_listed_modules;
 use amafu_system::mount_essential_filesystems;
@@ -14,8 +16,10 @@ const BOOT_MODULES_DIRECTORY: &str = "/run/amafu/boot/amafu/modules";
 const MODULE_LIST: &str = "/run/amafu/boot/amafu/modules/load-order";
 const EARLY_MODULE_LIST: &str = "/usr/lib/amafu/modules/early-load-order";
 const SYSFS_BLOCK: &str = "/sys/class/block";
-const BOOT_MOUNT: &str = "/run/amafu/boot";
-pub const CONFIGURATION_FILE: &str = "/run/amafu/boot/amafu/node-configuration.yaml";
+pub const ESP_MOUNT: &str = "/run/amafu/esp";
+const BOOTED_SLOT_MOUNT: &str = "/run/amafu/boot/amafu";
+const KERNEL_COMMAND_LINE: &str = "/proc/cmdline";
+pub const CONFIGURATION_FILE: &str = "/run/amafu/esp/amafu/node-configuration.yaml";
 const RESOLVER_FILE: &str = "/etc/resolv.conf";
 const PARTITION_WAIT: Duration = Duration::from_secs(10);
 const PARTITION_POLL: Duration = Duration::from_millis(100);
@@ -40,6 +44,11 @@ fn write_name_resolution(resolvers: &[std::net::Ipv4Addr]) -> anyhow::Result<()>
     let lines: Vec<String> = resolvers.iter().map(|resolver| format!("nameserver {resolver}")).collect();
     std::fs::write(RESOLVER_FILE, lines.join("\n") + "\n")?;
     Ok(())
+}
+
+#[must_use]
+pub fn booted_from() -> amafu_domain::kinds::node::BootSlot {
+    booted_slot(&std::fs::read_to_string(KERNEL_COMMAND_LINE).unwrap_or_default())
 }
 
 pub type ModuleLoading = tokio::task::JoinHandle<()>;
@@ -74,7 +83,10 @@ pub async fn early_boot() -> anyhow::Result<(NodeConfiguration, ModuleLoading)> 
     mount_essential_filesystems()?;
     load_listed_modules(Path::new(MODULES_DIRECTORY), Path::new(EARLY_MODULE_LIST))?;
     let boot_partition = wait_for_partition(BOOT_PARTITION_NAME).await?;
-    mount_boot_partition(&boot_partition, Path::new(BOOT_MOUNT))?;
+    mount_boot_partition(&boot_partition, Path::new(ESP_MOUNT))?;
+    let slot = booted_slot(&std::fs::read_to_string(KERNEL_COMMAND_LINE)?);
+    expose_boot_slot(&EspLayout::new(ESP_MOUNT).slot_directory(slot), Path::new(BOOTED_SLOT_MOUNT))?;
+    tracing::info!(slot = slot.letter(), "booted from slot");
     let modules = load_modules_in_background();
     let configuration = NodeConfiguration::load(Path::new(CONFIGURATION_FILE))?;
     set_hostname(configuration.node.name.as_str())?;
