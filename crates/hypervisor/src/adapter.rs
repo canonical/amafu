@@ -7,7 +7,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use amafu_domain::ObjectId;
-use amafu_interfaces::{ActionError, Hypervisor, InstanceState, RunningInstance, VmLaunchSpecification};
+use amafu_interfaces::{
+    ActionError, Hypervisor, InstanceState, MigrationTarget, RunningInstance, VmLaunchSpecification,
+};
 use rustix::fs::{Mode, chmod};
 use rustix::process::Signal;
 
@@ -304,8 +306,17 @@ impl Hypervisor for CloudHypervisor {
                     vm_id: *vm_id,
                     state,
                     failure: (state == InstanceState::Exited).then(|| failure_of(directory)).flatten(),
+                    migration: None,
                 }
             })
             .collect())
+    }
+
+    async fn receive(&self, _launch: &VmLaunchSpecification) -> Result<(), ActionError> {
+        Err(ActionError::invalid("this node cannot receive a live migration yet"))
+    }
+
+    async fn send(&self, _vm_id: &ObjectId, _target: &MigrationTarget) -> Result<(), ActionError> {
+        Err(ActionError::invalid("this node cannot send a live migration yet"))
     }
 }

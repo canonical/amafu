@@ -1,6 +1,8 @@
+use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use amafu_domain::kinds::vm::MigrationReport;
 use amafu_domain::{MacAddress, ObjectId, ObjectName};
 use serde::{Deserialize, Serialize};
 
@@ -67,17 +69,40 @@ pub enum InstanceState {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "kebab-case")]
+pub enum InstanceMigration {
+    Receiving,
+    Sending,
+    Sent { report: MigrationReport },
+    Failed { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MigrationTarget {
+    pub node_address: Ipv4Addr,
+    pub downtime_milliseconds: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunningInstance {
     pub vm_id: ObjectId,
     pub state: InstanceState,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migration: Option<InstanceMigration>,
 }
 
 impl RunningInstance {
     #[must_use]
     pub fn new(vm_id: ObjectId, state: InstanceState) -> Self {
-        Self { vm_id, state, failure: None }
+        Self { vm_id, state, failure: None, migration: None }
+    }
+
+    #[must_use]
+    pub fn migrating(mut self, migration: Option<InstanceMigration>) -> Self {
+        self.migration = migration;
+        self
     }
 }
 
@@ -88,4 +113,8 @@ pub trait Hypervisor: Send + Sync {
     async fn stop(&self, vm_id: &ObjectId, grace_period: Duration) -> Result<(), ActionError>;
 
     async fn running(&self) -> Result<Vec<RunningInstance>, ActionError>;
+
+    async fn receive(&self, launch: &VmLaunchSpecification) -> Result<(), ActionError>;
+
+    async fn send(&self, vm_id: &ObjectId, target: &MigrationTarget) -> Result<(), ActionError>;
 }

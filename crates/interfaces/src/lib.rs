@@ -21,7 +21,8 @@ pub use clock::Clock;
 pub use error::ActionError;
 pub use guest::{GuestAgents, WorkloadSpecification, WorkloadState};
 pub use hypervisor::{
-    Hypervisor, InstanceState, LaunchDisk, LaunchInterface, Payload, RunningInstance, VmLaunchSpecification,
+    Hypervisor, InstanceMigration, InstanceState, LaunchDisk, LaunchInterface, MigrationTarget, Payload,
+    RunningInstance, VmLaunchSpecification,
 };
 pub use identifiers::{Identifiers, RandomIdentifiers};
 pub use images::{CachedImage, ContainerConfiguration, ImageRequest, ImageStore};

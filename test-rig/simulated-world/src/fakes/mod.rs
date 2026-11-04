@@ -11,7 +11,7 @@ pub mod watchdog;
 
 pub use audit::MemoryAuditLog;
 pub use datapath::{FakeDatapath, FakeLocalServices};
-pub use hypervisor::{FakeHypervisor, FakeInstance};
+pub use hypervisor::{FakeHypervisor, FakeInstance, FakeMigration, MigrationFabric};
 pub use identifiers::SeededIdentifiers;
 pub use images::FakeImageStore;
 pub use leases::{FakeLeases, NodeLeases};

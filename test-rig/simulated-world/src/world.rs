@@ -50,8 +50,8 @@ use crate::clock::VirtualClock;
 use crate::executor::{Executor, StepOutcome, TaskFuture, TaskId};
 use crate::fakes::{
     FakeBackends, FakeDatapath, FakeHypervisor, FakeImageStore, FakeLeases, FakeLocalServices, FakeStorage,
-    FakeWatchdog, MemoryAuditLog, MemoryStore, NodeLink, PartitionedStore, PartitionedTransport,
-    SeededIdentifiers, simulated_ceph_rbd, simulated_nvme_tcp,
+    FakeWatchdog, MemoryAuditLog, MemoryStore, MigrationFabric, NodeLink, PartitionedStore,
+    PartitionedTransport, SeededIdentifiers, simulated_ceph_rbd, simulated_nvme_tcp,
 };
 
 const PROJECTS: [&str; 2] = ["project-a", "project-b"];
@@ -185,6 +185,7 @@ struct WorldShared {
     store: Arc<MemoryStore>,
     leases: Arc<FakeLeases>,
     backends: Arc<FakeBackends>,
+    fabric: Arc<MigrationFabric>,
     audit: Arc<MemoryAuditLog>,
     router: axum::Router,
     tokens: BTreeMap<(Role, ProjectName), String>,
@@ -333,6 +334,7 @@ impl SimulatedWorld {
                 store,
                 leases: FakeLeases::new(),
                 backends: FakeBackends::new(),
+                fabric: MigrationFabric::new(),
                 audit,
                 router,
                 tokens,
@@ -454,12 +456,25 @@ impl SimulatedWorld {
         ]
     }
 
-    fn node_services(&self, name: &NodeName, clock: &Arc<dyn Clock>) -> NodeServices {
+    fn node_services(
+        &self,
+        name: &NodeName,
+        clock: &Arc<dyn Clock>,
+        underlay_address: Ipv4Addr,
+        link: &Arc<NodeLink>,
+    ) -> NodeServices {
         let bundles = BTreeSet::from([valid_name::<ObjectName>(TEST_BUNDLE)]);
         NodeServices {
             lease: NodeLeaseState::new(),
             watchdog: Arc::new(FakeWatchdog::new(Arc::clone(clock), WATCHDOG_INTERVAL)),
-            hypervisor: Arc::new(FakeHypervisor::new(Arc::clone(clock), BOOT_DURATION, bundles)),
+            hypervisor: Arc::new(FakeHypervisor::on_fabric(
+                Arc::clone(clock),
+                BOOT_DURATION,
+                bundles,
+                Arc::clone(&self.shared.fabric),
+                underlay_address,
+                Arc::clone(link),
+            )),
             storage: Arc::new(FakeStorage::new(name.clone(), Arc::clone(&self.shared.backends))),
             images: Arc::new(FakeImageStore::new()),
             datapath: Arc::new(FakeDatapath::new()),
@@ -475,7 +490,7 @@ impl SimulatedWorld {
         let link = NodeLink::new();
         let NodeStores { store: shared_store, authority, follower } =
             self.node_store(name, is_core, &link, identifiers);
-        let services = self.node_services(name, &clock);
+        let services = self.node_services(name, &clock, underlay_address, &link);
         let store: Arc<dyn Store> = Arc::new(LeaseFencedStore::new(
             Arc::clone(&shared_store),
             name.clone(),
