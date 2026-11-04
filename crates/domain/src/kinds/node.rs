@@ -6,6 +6,7 @@ use time::OffsetDateTime;
 
 use crate::access::ClusterPolicy;
 use crate::name::ZoneName;
+use crate::node_image::{ImageIdentity, NodeImage};
 use crate::resource::{Resource, Scope};
 use crate::validation::{Validate, ValidationError};
 
@@ -37,11 +38,111 @@ pub struct NodeSpecification {
     pub is_cordoned: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zone: Option<ZoneName>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<NodeImageRequest>,
 }
 
 impl Default for NodeSpecification {
     fn default() -> Self {
-        Self { roles: BTreeSet::from([NodeRole::Core, NodeRole::Compute]), is_cordoned: false, zone: None }
+        Self {
+            roles: BTreeSet::from([NodeRole::Core, NodeRole::Compute]),
+            is_cordoned: false,
+            zone: None,
+            image: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeImageRequest {
+    pub image: NodeImage,
+    #[serde(default)]
+    pub should_boot: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum BootSlot {
+    #[serde(rename = "a")]
+    First,
+    #[serde(rename = "b")]
+    Second,
+}
+
+impl BootSlot {
+    #[must_use]
+    pub fn other(self) -> Self {
+        match self {
+            Self::First => Self::Second,
+            Self::Second => Self::First,
+        }
+    }
+
+    #[must_use]
+    pub fn letter(self) -> &'static str {
+        match self {
+            Self::First => "a",
+            Self::Second => "b",
+        }
+    }
+
+    #[must_use]
+    pub fn from_letter(letter: &str) -> Option<Self> {
+        match letter {
+            "a" => Some(Self::First),
+            "b" => Some(Self::Second),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BootReport {
+    pub booted_slot: BootSlot,
+    pub default_slot: BootSlot,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub booted_image: Option<ImageIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inactive_image: Option<ImageIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallen_back_from: Option<ImageIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refused: Option<RefusedImage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RefusedImage {
+    pub image: ImageIdentity,
+    pub reason: String,
+}
+
+impl BootReport {
+    #[must_use]
+    pub fn is_confirmed(&self) -> bool {
+        self.booted_slot == self.default_slot
+    }
+
+    #[must_use]
+    pub fn runs(&self, image: &NodeImage) -> bool {
+        self.booted_image.as_ref().is_some_and(|booted| image.is(booted))
+    }
+
+    #[must_use]
+    pub fn holds_in_inactive_slot(&self, image: &NodeImage) -> bool {
+        self.inactive_image.as_ref().is_some_and(|inactive| image.is(inactive))
+    }
+
+    #[must_use]
+    pub fn refusal_of(&self, image: &NodeImage) -> Option<&str> {
+        self.refused
+            .as_ref()
+            .filter(|refused| image.is(&refused.image))
+            .map(|refused| refused.reason.as_str())
+    }
+
+    #[must_use]
+    pub fn fell_back_from(&self, image: &NodeImage) -> bool {
+        self.fallen_back_from.as_ref().is_some_and(|failed| image.is(failed))
     }
 }
 
@@ -56,6 +157,9 @@ impl Validate for NodeSpecification {
     fn validate(&self) -> Result<(), ValidationError> {
         let mut error = ValidationError::new();
         error.check(!self.roles.is_empty(), "specification.roles", "must name at least one role");
+        if let Some(request) = &self.image {
+            request.image.check("specification.image.image", &mut error);
+        }
         error.into_result()
     }
 }
@@ -126,12 +230,19 @@ pub struct NodeStatus {
     pub software_version: String,
     #[serde(default, with = "time::serde::rfc3339::option", skip_serializing_if = "Option::is_none")]
     pub last_heartbeat: Option<OffsetDateTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot: Option<BootReport>,
 }
 
 impl NodeStatus {
     #[must_use]
     pub fn is_ready(&self) -> bool {
         self.phase == NodePhase::Ready
+    }
+
+    #[must_use]
+    pub fn runs_confirmed(&self, image: &NodeImage) -> bool {
+        self.boot.as_ref().is_some_and(|boot| boot.runs(image) && boot.is_confirmed())
     }
 }
 

@@ -5,6 +5,7 @@ use serde_json::Value;
 use crate::access::{ClusterPolicy, ProjectPolicy};
 use crate::change::{Change, ChangeError, apply_change, confirm_removal};
 use crate::kinds::certificate_revocation::CertificateRevocation;
+use crate::kinds::cluster_version::ClusterVersion;
 use crate::kinds::external_network::ExternalNetwork;
 use crate::kinds::floating_ip::FloatingIp;
 use crate::kinds::image::Image;
@@ -93,13 +94,14 @@ impl KindDescriptor {
 }
 
 #[must_use]
-pub fn kinds() -> [KindDescriptor; 13] {
+pub fn kinds() -> [KindDescriptor; 14] {
     [
         KindDescriptor::of::<Node>(),
         KindDescriptor::of::<NodeLease>(),
         KindDescriptor::of::<StorageBackend>(),
         KindDescriptor::of::<ExternalNetwork>(),
         KindDescriptor::of::<CertificateRevocation>(),
+        KindDescriptor::of::<ClusterVersion>(),
         KindDescriptor::of::<Operation>(),
         KindDescriptor::of::<Vm>(),
         KindDescriptor::of::<Image>(),

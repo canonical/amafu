@@ -4,11 +4,14 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+use crate::install::InstallPlan;
 use crate::name::{NodeName, ObjectName, ProjectName};
+use crate::node_image::NodeImage;
 use crate::resource::{Resource, Scope};
+use crate::upgrade::UpgradePlan;
 use crate::validation::{Validate, ValidationError};
 
-pub const MAXIMUM_STEPS: usize = 1_000;
+pub const MAXIMUM_STEPS: usize = 10_000;
 const MAXIMUM_ERROR_LENGTH: usize = 1_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,6 +32,8 @@ pub enum OperationKind {
     Migration,
     Recovery,
     Evacuation,
+    Upgrade,
+    Install,
 }
 
 impl fmt::Display for OperationKind {
@@ -37,6 +42,8 @@ impl fmt::Display for OperationKind {
             Self::Migration => "migration",
             Self::Recovery => "recovery",
             Self::Evacuation => "evacuation",
+            Self::Upgrade => "upgrade",
+            Self::Install => "install",
         })
     }
 }
@@ -59,6 +66,14 @@ impl fmt::Display for VmReference {
 pub enum OperationTarget {
     Node { node: NodeName },
     Vm { vm: VmReference },
+    Cluster,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", tag = "kind")]
+pub enum OperationPlan {
+    Upgrade(UpgradePlan),
+    Install(InstallPlan),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,6 +114,27 @@ pub enum StepSpecification {
     MigrateVm {
         vm: VmReference,
     },
+    VerifyImage,
+    SetClusterImage,
+    Evacuate {
+        node: NodeName,
+    },
+    WriteInactiveSlot {
+        node: NodeName,
+    },
+    RebootIntoSlot {
+        node: NodeName,
+    },
+    AwaitHealthy {
+        node: NodeName,
+    },
+    Uncordon {
+        node: NodeName,
+    },
+    Soak,
+    DeployMachine {
+        node: NodeName,
+    },
 }
 
 impl StepSpecification {
@@ -116,6 +152,15 @@ impl StepSpecification {
             Self::CleanUpSource { .. } => "clean-up-source",
             Self::Cordon { .. } => "cordon",
             Self::MigrateVm { .. } => "migrate-vm",
+            Self::VerifyImage => "verify-image",
+            Self::SetClusterImage => "set-cluster-image",
+            Self::Evacuate { .. } => "evacuate",
+            Self::WriteInactiveSlot { .. } => "write-inactive-slot",
+            Self::RebootIntoSlot { .. } => "reboot-into-slot",
+            Self::AwaitHealthy { .. } => "await-healthy",
+            Self::Uncordon { .. } => "uncordon",
+            Self::Soak => "soak",
+            Self::DeployMachine { .. } => "deploy-machine",
         }
     }
 
@@ -127,6 +172,23 @@ impl StepSpecification {
                 | Self::PrepareDestination { .. }
                 | Self::CopyMemory { .. }
                 | Self::Cordon { .. }
+                | Self::VerifyImage
+        )
+    }
+
+    #[must_use]
+    pub fn can_be_abandoned(&self) -> bool {
+        matches!(
+            self,
+            Self::VerifyImage
+                | Self::SetClusterImage
+                | Self::Evacuate { .. }
+                | Self::WriteInactiveSlot { .. }
+                | Self::RebootIntoSlot { .. }
+                | Self::AwaitHealthy { .. }
+                | Self::Uncordon { .. }
+                | Self::Soak
+                | Self::DeployMachine { .. }
         )
     }
 }
@@ -141,6 +203,8 @@ pub struct OperationSpecification {
     pub is_paused: bool,
     #[serde(default)]
     pub is_cancelled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<OperationPlan>,
 }
 
 impl OperationSpecification {
@@ -164,12 +228,71 @@ impl OperationSpecification {
         Self::new(OperationKind::Evacuation, OperationTarget::Node { node }, steps)
     }
 
+    #[must_use]
+    pub fn upgrade(plan: UpgradePlan) -> Self {
+        let steps = plan.steps();
+        Self {
+            plan: Some(OperationPlan::Upgrade(plan)),
+            ..Self::new(OperationKind::Upgrade, OperationTarget::Cluster, steps)
+        }
+    }
+
+    #[must_use]
+    pub fn install(plan: InstallPlan) -> Self {
+        let steps = plan.steps();
+        Self {
+            plan: Some(OperationPlan::Install(plan)),
+            ..Self::new(OperationKind::Install, OperationTarget::Cluster, steps)
+        }
+    }
+
     fn new(kind: OperationKind, target: OperationTarget, steps: Vec<StepSpecification>) -> Self {
-        Self { kind, target, steps, is_paused: false, is_cancelled: false }
+        Self { kind, target, steps, is_paused: false, is_cancelled: false, plan: None }
+    }
+
+    #[must_use]
+    pub fn upgrade_plan(&self) -> Option<&UpgradePlan> {
+        match &self.plan {
+            Some(OperationPlan::Upgrade(plan)) => Some(plan),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn install_plan(&self) -> Option<&InstallPlan> {
+        match &self.plan {
+            Some(OperationPlan::Install(plan)) => Some(plan),
+            _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn image(&self) -> Option<&NodeImage> {
+        match &self.plan {
+            Some(OperationPlan::Upgrade(plan)) => Some(&plan.image),
+            Some(OperationPlan::Install(plan)) => Some(&plan.image),
+            None => None,
+        }
     }
 
     fn has_expected_steps(&self) -> bool {
+        let has_plan_of_kind = match (&self.kind, &self.plan) {
+            (OperationKind::Upgrade, Some(OperationPlan::Upgrade(_)))
+            | (OperationKind::Install, Some(OperationPlan::Install(_))) => true,
+            (OperationKind::Upgrade | OperationKind::Install, _) | (_, Some(_)) => false,
+            _ => true,
+        };
+        has_plan_of_kind && self.has_steps_of_target()
+    }
+
+    fn has_steps_of_target(&self) -> bool {
         match (&self.kind, &self.target) {
+            (OperationKind::Upgrade, OperationTarget::Cluster) => {
+                self.upgrade_plan().is_some_and(|plan| self.steps == plan.steps())
+            }
+            (OperationKind::Install, OperationTarget::Cluster) => {
+                self.install_plan().is_some_and(|plan| self.steps == plan.steps())
+            }
             (OperationKind::Recovery, OperationTarget::Node { node }) => self.steps == recovery_steps(node),
             (OperationKind::Migration, OperationTarget::Vm { vm }) => {
                 let destination = match self.steps.first() {
@@ -220,12 +343,21 @@ fn is_evacuation_of(node: &NodeName, steps: &[StepSpecification]) -> bool {
 impl Validate for OperationSpecification {
     fn validate(&self) -> Result<(), ValidationError> {
         let mut error = ValidationError::new();
-        error.check(self.steps.len() <= MAXIMUM_STEPS, "specification.steps", "must have at most 1000 steps");
+        error.check(
+            self.steps.len() <= MAXIMUM_STEPS,
+            "specification.steps",
+            "must have at most 10000 steps",
+        );
         error.check(
             self.has_expected_steps(),
             "specification.steps",
             "must be the steps of the operation kind",
         );
+        match &self.plan {
+            Some(OperationPlan::Upgrade(plan)) => plan.check(&mut error),
+            Some(OperationPlan::Install(plan)) => plan.check(&mut error),
+            None => {}
+        }
         error.into_result()
     }
 
@@ -234,6 +366,7 @@ impl Validate for OperationSpecification {
         error.check(self.kind == previous.kind, "specification.kind", "cannot change");
         error.check(self.target == previous.target, "specification.target", "cannot change");
         error.check(self.steps == previous.steps, "specification.steps", "cannot change");
+        error.check(self.plan == previous.plan, "specification.plan", "cannot change");
         error.check(
             self.is_cancelled || !previous.is_cancelled,
             "specification.is_cancelled",
@@ -374,6 +507,72 @@ mod tests {
             .map(StepSpecification::can_be_undone)
             .collect();
         assert_eq!(undoable, vec![true, true, false, false, false]);
+    }
+
+    fn image() -> NodeImage {
+        NodeImage {
+            version: String::from("0.2.0"),
+            feature_level: crate::features::FeatureLevel(1),
+            digest: "c".repeat(64).parse().unwrap(),
+            size_bytes: 1024,
+            url: String::from("https://images.example/0.2.0.tar"),
+            signature: "0".repeat(128),
+        }
+    }
+
+    fn upgrade_plan() -> UpgradePlan {
+        let inventory = [crate::upgrade::InventoryNode {
+            name: node("node-1"),
+            zone: None,
+            is_core: false,
+            runs_target: false,
+        }];
+        UpgradePlan::upgrade(&inventory, image(), &crate::upgrade::WavePolicy::default())
+    }
+
+    #[test]
+    fn an_upgrade_must_carry_the_steps_of_its_plan() {
+        let upgrade = OperationSpecification::upgrade(upgrade_plan());
+        assert_eq!(upgrade.validate(), Ok(()));
+        let mut skipped_evacuation = upgrade.clone();
+        skipped_evacuation.steps.remove(2);
+        assert!(skipped_evacuation.validate().is_err());
+        let mut without_plan = upgrade.clone();
+        without_plan.plan = None;
+        assert!(without_plan.validate().is_err());
+        let mut redirected = upgrade.clone();
+        if let Some(OperationPlan::Upgrade(plan)) = &mut redirected.plan {
+            plan.image.version = String::from("0.3.0");
+        }
+        assert!(redirected.validate_update(&upgrade).is_err());
+        let install =
+            OperationSpecification::install(InstallPlan { image: image(), nodes: vec![node("node-0")] });
+        assert_eq!(install.validate(), Ok(()));
+        let mut planned_migration = OperationSpecification::migration(vm("web-1"), None);
+        planned_migration.plan = upgrade.plan.clone();
+        assert!(planned_migration.validate().is_err());
+    }
+
+    #[test]
+    fn upgrade_steps_may_be_abandoned_but_recovery_and_migration_steps_may_not() {
+        assert!(
+            OperationSpecification::upgrade(upgrade_plan())
+                .steps
+                .iter()
+                .all(StepSpecification::can_be_abandoned)
+        );
+        assert!(
+            !OperationSpecification::recovery(node("node-1"))
+                .steps
+                .iter()
+                .any(StepSpecification::can_be_abandoned)
+        );
+        assert!(
+            !OperationSpecification::migration(vm("web-1"), None)
+                .steps
+                .iter()
+                .any(StepSpecification::can_be_abandoned)
+        );
     }
 
     #[test]

@@ -132,6 +132,11 @@ impl NodeLeaseSpecification {
         Ok(Self { epoch: self.epoch + 1, is_lost: true, is_released: false, ..self.clone() })
     }
 
+    pub fn surrendered(&self, presented_epoch: u64) -> Result<Self, LeaseRefusal> {
+        self.admits(presented_epoch)?;
+        Ok(Self { epoch: self.epoch + 1, is_lost: true, is_released: true, ..self.clone() })
+    }
+
     #[must_use]
     pub fn released(&self) -> Self {
         Self { is_released: true, ..self.clone() }
@@ -223,6 +228,18 @@ mod tests {
         let returned = NodeLeaseSpecification::acquired(Some(&lost.released()), terms(), at(30)).unwrap();
         assert_eq!(returned.epoch, 3);
         assert!(!returned.is_lost);
+    }
+
+    #[test]
+    fn a_surrendered_lease_fences_the_old_epoch_and_can_be_taken_again_at_once() {
+        let held = NodeLeaseSpecification::acquired(None, terms(), at(0)).unwrap();
+        assert!(held.surrendered(2).is_err());
+        let surrendered = held.surrendered(1).unwrap();
+        assert_eq!(surrendered.validate(), Ok(()));
+        assert_eq!(surrendered.admits(1), Err(LeaseRefusal::Lost));
+        assert_eq!(surrendered.renewed(1, at(1)), Err(LeaseRefusal::Lost));
+        let returned = NodeLeaseSpecification::acquired(Some(&surrendered), terms(), at(1)).unwrap();
+        assert_eq!(returned.epoch, 3);
     }
 
     #[test]

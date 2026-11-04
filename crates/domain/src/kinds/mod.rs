@@ -1,4 +1,5 @@
 pub mod certificate_revocation;
+pub mod cluster_version;
 pub mod external_network;
 pub mod floating_ip;
 pub mod image;

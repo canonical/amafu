@@ -2,13 +2,17 @@ pub mod access;
 pub mod addressing;
 pub mod change;
 pub mod digest;
+pub mod features;
+pub mod install;
 pub mod kinds;
 pub mod name;
+pub mod node_image;
 pub mod object;
 pub mod object_id;
 pub mod registry;
 pub mod resource;
 pub mod slice;
+pub mod upgrade;
 pub mod validation;
 
 pub use addressing::{InvalidAddress, Ipv4Network, MacAddress, SegmentId};
