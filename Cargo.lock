@@ -115,12 +115,17 @@ version = "0.1.0"
 dependencies = [
  "amafu-api",
  "amafu-domain",
+ "amafu-installer",
+ "amafu-interfaces",
  "anyhow",
  "clap",
  "futures",
+ "hex",
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "sha2",
+ "time",
  "tokio",
 ]
 

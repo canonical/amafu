@@ -72,7 +72,7 @@ fn print_operations(operations: &[Object<Operation>], format: OutputFormat) -> a
     Ok(())
 }
 
-fn unique_name(prefix: &str, subject: &str) -> anyhow::Result<ObjectName> {
+pub fn unique_name(prefix: &str, subject: &str) -> anyhow::Result<ObjectName> {
     let stamp =
         SystemTime::now().duration_since(UNIX_EPOCH).map(|elapsed| elapsed.as_millis()).unwrap_or_default();
     let subject: String = subject.chars().take(LONGEST_SUBJECT).collect();

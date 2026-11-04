@@ -2,13 +2,16 @@ mod connection;
 mod container;
 mod floating_ip;
 mod image;
+mod install;
 mod network;
 mod node;
 mod operation;
 mod output;
+mod release;
 mod resources;
 mod security_group;
 mod storage_backend;
+mod upgrade;
 mod vm;
 mod volume;
 
@@ -52,13 +55,27 @@ enum Command {
     StorageBackend(storage_backend::StorageBackendCommand),
     #[command(subcommand, about = "Inspect and manage nodes")]
     Node(node::NodeCommand),
-    #[command(subcommand, about = "Follow, pause and cancel migrations, evacuations and recoveries")]
+    #[command(
+        subcommand,
+        about = "Follow, pause and cancel migrations, evacuations, recoveries and upgrades"
+    )]
     Operation(operation::OperationCommand),
+    #[command(subcommand, about = "Upgrade the cluster to a new image, roll back or finalize")]
+    Upgrade(upgrade::UpgradeCommand),
+    #[command(about = "Deploy a new cluster from MAAS")]
+    Install(install::InstallArguments),
+    #[command(subcommand, about = "Create signing keys and sign node images")]
+    Release(release::ReleaseCommand),
 }
 
 async fn run(arguments: Arguments) -> anyhow::Result<()> {
+    let command = match arguments.command {
+        Command::Install(install) => return install::run(install).await,
+        Command::Release(command) => return release::run(command),
+        command => command,
+    };
     let client = arguments.connection.client()?;
-    match arguments.command {
+    match command {
         Command::Vm(command) => vm::run(&client, command, arguments.output).await,
         Command::Container(command) => container::run(&client, command, arguments.output).await,
         Command::Image(command) => image::run(&client, command, arguments.output).await,
@@ -72,6 +89,8 @@ async fn run(arguments: Arguments) -> anyhow::Result<()> {
         Command::StorageBackend(command) => storage_backend::run(&client, command, arguments.output).await,
         Command::Node(command) => node::run(&client, command, arguments.output).await,
         Command::Operation(command) => operation::run(&client, command, arguments.output).await,
+        Command::Upgrade(command) => upgrade::run(&client, command, arguments.output).await,
+        Command::Install(_) | Command::Release(_) => Ok(()),
     }
 }
 
