@@ -1,6 +1,8 @@
 pub mod migration;
+pub mod node_specification;
 pub mod recovery;
 pub mod steps;
+pub mod upgrade;
 
 use std::sync::Arc;
 use std::time::Duration;

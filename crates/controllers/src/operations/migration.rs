@@ -13,6 +13,7 @@ use amafu_interfaces::objects::{apply, get, list, update_status_fenced};
 use amafu_interfaces::{ActionError, Consistency, Identifiers, ObjectStoreError, Store};
 use amafu_reconciler::{OperationContext, Step};
 
+use crate::operations::node_specification::{change_node_specification, node_reference};
 use crate::scheduling::{SchedulingSettings, choose_destination, observe_cluster};
 
 pub const DOWNTIME_TARGET_MILLISECONDS: u64 = 100;
@@ -254,35 +255,19 @@ pub struct Cordon {
 }
 
 impl Cordon {
-    fn reference(&self) -> ObjectReference {
-        ObjectReference::of::<Node>(None, ObjectName::from(&self.node))
-    }
-
     async fn set_cordoned(&self, store: &dyn Store, is_cordoned: bool) -> Result<(), ActionError> {
-        let Some(node) = get::<Node>(store, &self.reference(), Consistency::Linearizable).await? else {
-            return Err(ActionError::invalid(format!("there is no node named {}", self.node)));
-        };
-        if node.specification.is_cordoned == is_cordoned {
-            return Ok(());
-        }
-        let specification = NodeSpecification { is_cordoned, ..node.specification };
-        apply::<Node>(
-            store,
-            &self.reference(),
-            Change::UpdateSpecification {
-                expected_generation: Some(node.metadata.generation),
-                specification,
-            },
-        )
-        .await?;
-        Ok(())
+        change_node_specification(store, &self.node, |current| NodeSpecification {
+            is_cordoned,
+            ..current.clone()
+        })
+        .await
     }
 }
 
 #[async_trait::async_trait]
 impl Step for Cordon {
     async fn is_complete(&self, context: &OperationContext<'_>) -> Result<bool, ActionError> {
-        let node = get::<Node>(context.store, &self.reference(), Consistency::Linearizable).await?;
+        let node = get::<Node>(context.store, &node_reference(&self.node), Consistency::Linearizable).await?;
         Ok(node.is_some_and(|node| node.specification.is_cordoned))
     }
 
@@ -303,15 +288,24 @@ pub struct MigrateVm {
 fn evacuated_node(context: &OperationContext<'_>) -> Result<NodeName, ActionError> {
     match &context.operation.specification.target {
         OperationTarget::Node { node } => Ok(node.clone()),
-        OperationTarget::Vm { .. } => Err(ActionError::fatal("only an evacuation moves VMs off a node")),
+        OperationTarget::Vm { .. } | OperationTarget::Cluster => {
+            Err(ActionError::fatal("only an evacuation moves VMs off a node"))
+        }
     }
 }
 
-fn child_name(context: &OperationContext<'_>, vm_id: ObjectId) -> Result<ObjectName, ActionError> {
+pub fn child_name(
+    context: &OperationContext<'_>,
+    prefix: &str,
+    subject: &str,
+) -> Result<ObjectName, ActionError> {
     let parent = context.operation.metadata.id.to_string();
     let parent_prefix = parent.get(..8).unwrap_or(&parent);
-    ObjectName::new(format!("migrate-{}-{parent_prefix}", vm_id.to_string().replace('-', "")))
-        .map_err(ActionError::fatal)
+    ObjectName::new(format!("{prefix}-{subject}-{parent_prefix}")).map_err(ActionError::fatal)
+}
+
+fn migration_child_name(context: &OperationContext<'_>, vm_id: ObjectId) -> Result<ObjectName, ActionError> {
+    child_name(context, "migrate", &vm_id.to_string().replace('-', ""))
 }
 
 #[async_trait::async_trait]
@@ -326,7 +320,8 @@ impl Step for MigrateVm {
         if has_left {
             return Ok(true);
         }
-        let reference = ObjectReference::of::<Operation>(None, child_name(context, vm.metadata.id)?);
+        let reference =
+            ObjectReference::of::<Operation>(None, migration_child_name(context, vm.metadata.id)?);
         match get::<Operation>(context.store, &reference, Consistency::Linearizable).await? {
             Some(child) => match &child.status.outcome {
                 Some(OperationOutcome::Failed { reason }) => {
@@ -340,7 +335,7 @@ impl Step for MigrateVm {
 
     async fn run(&self, context: &OperationContext<'_>) -> Result<(), ActionError> {
         let vm = vm_object(context.store, &self.vm).await?;
-        let name = child_name(context, vm.metadata.id)?;
+        let name = migration_child_name(context, vm.metadata.id)?;
         let reference = ObjectReference::of::<Operation>(None, name.clone());
         if get::<Operation>(context.store, &reference, Consistency::Linearizable).await?.is_some() {
             return Ok(());

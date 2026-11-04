@@ -5,11 +5,11 @@ use std::time::Duration;
 use std::net::Ipv4Addr;
 
 use amafu_domain::kinds::node::{
-    CpuBaseline, Node, NodeCapacity, NodePhase, NodeRole, NodeSpecification, NodeStatus,
+    BootReport, CpuBaseline, Node, NodeCapacity, NodePhase, NodeRole, NodeSpecification, NodeStatus,
 };
 use amafu_domain::{Change, NodeName, Object, ObjectId, ObjectName, ObjectReference, ZoneName};
 use amafu_interfaces::objects::{apply, get, remove};
-use amafu_interfaces::{ActionError, Clock, Consistency, Store};
+use amafu_interfaces::{ActionError, BootSlots, Clock, Consistency, Store};
 use amafu_reconciler::{Controller, KeyMapping, WatchedKind};
 use time::OffsetDateTime;
 
@@ -28,7 +28,7 @@ pub struct NodeIdentity {
 
 impl NodeIdentity {
     #[must_use]
-    pub fn status(&self, now: OffsetDateTime) -> NodeStatus {
+    pub fn status(&self, now: OffsetDateTime, boot: Option<BootReport>) -> NodeStatus {
         NodeStatus {
             phase: NodePhase::Ready,
             capacity: self.capacity,
@@ -36,6 +36,7 @@ impl NodeIdentity {
             underlay_address: self.underlay_address,
             software_version: self.software_version.clone(),
             last_heartbeat: Some(now),
+            boot,
         }
     }
 }
@@ -44,12 +45,19 @@ pub struct NodeController {
     identity: NodeIdentity,
     store: Arc<dyn Store>,
     clock: Arc<dyn Clock>,
+    boot_slots: Option<Arc<dyn BootSlots>>,
 }
 
 impl NodeController {
     #[must_use]
     pub fn new(identity: NodeIdentity, store: Arc<dyn Store>, clock: Arc<dyn Clock>) -> Self {
-        Self { identity, store, clock }
+        Self { identity, store, clock, boot_slots: None }
+    }
+
+    #[must_use]
+    pub fn with_boot_slots(mut self, boot_slots: Arc<dyn BootSlots>) -> Self {
+        self.boot_slots = Some(boot_slots);
+        self
     }
 
     fn reference(&self) -> ObjectReference {
@@ -70,6 +78,7 @@ pub fn node_reference(name: &NodeName) -> ObjectReference {
 pub struct NodeObservation {
     pub identity: NodeIdentity,
     pub node: Option<Object<Node>>,
+    pub boot: Option<BootReport>,
     pub now: OffsetDateTime,
 }
 
@@ -92,23 +101,21 @@ pub fn plan_node(observation: &NodeObservation) -> Vec<NodeAction> {
             roles: identity.roles.clone(),
             is_cordoned: false,
             zone: identity.zone.clone(),
+            image: None,
         })];
     };
     if node.metadata.is_deleting {
         return vec![NodeAction::Remove];
     }
-    let reported =
-        NodeStatus { last_heartbeat: node.status.last_heartbeat, ..identity.status(observation.now) };
+    let current = identity.status(observation.now, observation.boot.clone());
+    let reported = NodeStatus { last_heartbeat: node.status.last_heartbeat, ..current.clone() };
     let is_current = node.is_status_current()
         && node.status == reported
         && !is_heartbeat_due(&node.status, observation.now, identity.heartbeat_interval);
     if is_current {
         return Vec::new();
     }
-    vec![NodeAction::ReportReady {
-        observed_generation: node.metadata.generation,
-        status: identity.status(observation.now),
-    }]
+    vec![NodeAction::ReportReady { observed_generation: node.metadata.generation, status: current }]
 }
 
 impl Controller for NodeController {
@@ -132,7 +139,8 @@ impl Controller for NodeController {
         } else {
             None
         };
-        Ok(NodeObservation { identity: self.identity.clone(), node, now: self.clock.now() })
+        let boot = self.boot_slots.as_ref().map(|boot_slots| boot_slots.report());
+        Ok(NodeObservation { identity: self.identity.clone(), node, boot, now: self.clock.now() })
     }
 
     fn plan(&self, observation: &NodeObservation) -> Vec<NodeAction> {
@@ -217,19 +225,21 @@ mod tests {
     }
 
     fn ready(identity: &NodeIdentity, heartbeat: OffsetDateTime) -> NodeStatus {
-        identity.status(heartbeat)
+        identity.status(heartbeat, None)
     }
 
     #[test]
     fn an_unknown_node_registers_itself() {
         let identity = identity();
-        let actions = plan_node(&NodeObservation { identity: identity.clone(), node: None, now: at(0) });
+        let actions =
+            plan_node(&NodeObservation { identity: identity.clone(), node: None, boot: None, now: at(0) });
         assert_eq!(
             actions,
             vec![NodeAction::Register(NodeSpecification {
                 roles: identity.roles,
                 is_cordoned: false,
-                zone: None
+                zone: None,
+                image: None
             })]
         );
     }
@@ -238,8 +248,12 @@ mod tests {
     fn a_registered_node_reports_ready() {
         let identity = identity();
         let node = registered(&identity, NodeStatus::default());
-        let actions =
-            plan_node(&NodeObservation { identity: identity.clone(), node: Some(node), now: at(5) });
+        let actions = plan_node(&NodeObservation {
+            identity: identity.clone(),
+            node: Some(node),
+            boot: None,
+            now: at(5),
+        });
         assert_eq!(
             actions,
             vec![NodeAction::ReportReady { observed_generation: 1, status: ready(&identity, at(5)) }]
@@ -250,15 +264,22 @@ mod tests {
     fn a_recent_heartbeat_needs_nothing() {
         let identity = identity();
         let node = registered(&identity, ready(&identity, at(0)));
-        assert_eq!(plan_node(&NodeObservation { identity, node: Some(node), now: at(9) }), Vec::new());
+        assert_eq!(
+            plan_node(&NodeObservation { identity, node: Some(node), boot: None, now: at(9) }),
+            Vec::new()
+        );
     }
 
     #[test]
     fn an_old_heartbeat_is_renewed() {
         let identity = identity();
         let node = registered(&identity, ready(&identity, at(0)));
-        let actions =
-            plan_node(&NodeObservation { identity: identity.clone(), node: Some(node), now: at(10) });
+        let actions = plan_node(&NodeObservation {
+            identity: identity.clone(),
+            node: Some(node),
+            boot: None,
+            now: at(10),
+        });
         assert_eq!(
             actions,
             vec![NodeAction::ReportReady { observed_generation: 1, status: ready(&identity, at(10)) }]
@@ -271,7 +292,7 @@ mod tests {
         let mut node = registered(&identity, ready(&identity, at(0)));
         node.metadata.is_deleting = true;
         assert_eq!(
-            plan_node(&NodeObservation { identity, node: Some(node), now: at(1) }),
+            plan_node(&NodeObservation { identity, node: Some(node), boot: None, now: at(1) }),
             vec![NodeAction::Remove]
         );
     }
