@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::addressing::MacAddress;
 use crate::kinds::node::CpuBaseline;
 use crate::name::{NodeName, ObjectName};
+use crate::object_id::ObjectId;
 use crate::resource::{Resource, Scope};
 use crate::validation::{Validate, ValidationError};
 
@@ -310,8 +311,11 @@ pub struct MigrationReport {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VmMigration {
+    pub attempt: ObjectId,
     pub source: NodeName,
     pub destination: NodeName,
+    pub destination_address: Ipv4Addr,
+    pub downtime_milliseconds: u64,
     pub phase: MigrationPhase,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<MigrationReport>,

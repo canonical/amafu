@@ -21,9 +21,9 @@ const FINAL_ROUND_BYTES: u64 = 2 * MEBIBYTE;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FakeMigration {
     Receiving,
-    Sending { destination: Ipv4Addr, completes_at: OffsetDateTime },
-    Sent { report: MigrationReport },
-    Failed { reason: String },
+    Sending { attempt: ObjectId, destination: Ipv4Addr, completes_at: OffsetDateTime },
+    Sent { attempt: ObjectId, report: MigrationReport },
+    Failed { attempt: ObjectId, reason: String },
 }
 
 #[derive(Debug, Clone)]
@@ -108,25 +108,33 @@ impl FakeHypervisor {
 
     fn finish_due_migrations(&self) {
         let now = self.clock.now();
-        let due: Vec<(ObjectId, Ipv4Addr)> = lock(&self.instances)
+        let due: Vec<(ObjectId, ObjectId, Ipv4Addr)> = lock(&self.instances)
             .iter()
             .filter_map(|(vm_id, instance)| match instance.migration {
-                Some(FakeMigration::Sending { destination, completes_at }) if now >= completes_at => {
-                    Some((*vm_id, destination))
+                Some(FakeMigration::Sending { attempt, destination, completes_at })
+                    if now >= completes_at =>
+                {
+                    Some((*vm_id, attempt, destination))
                 }
                 _ => None,
             })
             .collect();
-        for (vm_id, destination) in due {
-            let outcome = self.hand_over(&vm_id, destination, now);
+        for (vm_id, attempt, destination) in due {
+            let outcome = self.hand_over(&vm_id, attempt, destination, now);
             if let Some(instance) = lock(&self.instances).get_mut(&vm_id) {
                 instance.migration = Some(outcome);
             }
         }
     }
 
-    fn hand_over(&self, vm_id: &ObjectId, destination: Ipv4Addr, now: OffsetDateTime) -> FakeMigration {
-        let failed = |reason: &str| FakeMigration::Failed { reason: reason.to_owned() };
+    fn hand_over(
+        &self,
+        vm_id: &ObjectId,
+        attempt: ObjectId,
+        destination: Ipv4Addr,
+        now: OffsetDateTime,
+    ) -> FakeMigration {
+        let failed = |reason: &str| FakeMigration::Failed { attempt, reason: reason.to_owned() };
         let Some((remote, remote_link)) = self.fabric.host(destination) else {
             return failed("no node answers at the destination address");
         };
@@ -149,6 +157,7 @@ impl FakeHypervisor {
         incoming.exit_code = source.exit_code;
         let total_bytes = source.launch.memory_mebibytes * MEBIBYTE;
         FakeMigration::Sent {
+            attempt,
             report: MigrationReport {
                 total_bytes,
                 final_round_bytes: FINAL_ROUND_BYTES,
@@ -164,9 +173,13 @@ impl FakeHypervisor {
     fn reported_migration(instance: &FakeInstance) -> Option<InstanceMigration> {
         instance.migration.as_ref().map(|migration| match migration {
             FakeMigration::Receiving => InstanceMigration::Receiving,
-            FakeMigration::Sending { .. } => InstanceMigration::Sending,
-            FakeMigration::Sent { report } => InstanceMigration::Sent { report: *report },
-            FakeMigration::Failed { reason } => InstanceMigration::Failed { reason: reason.clone() },
+            FakeMigration::Sending { attempt, .. } => InstanceMigration::Sending { attempt: *attempt },
+            FakeMigration::Sent { attempt, report } => {
+                InstanceMigration::Sent { attempt: *attempt, report: *report }
+            }
+            FakeMigration::Failed { attempt, reason } => {
+                InstanceMigration::Failed { attempt: *attempt, reason: reason.clone() }
+            }
         })
     }
 
@@ -244,10 +257,17 @@ impl Hypervisor for FakeHypervisor {
         let mut instances = lock(&self.instances);
         let instance =
             instances.get_mut(vm_id).ok_or_else(|| ActionError::retryable("the VM is not running"))?;
-        if matches!(instance.migration, Some(FakeMigration::Sending { .. } | FakeMigration::Sent { .. })) {
+        let is_this_attempt = match &instance.migration {
+            Some(FakeMigration::Sending { attempt, .. } | FakeMigration::Sent { attempt, .. }) => {
+                *attempt == target.attempt
+            }
+            _ => false,
+        };
+        if is_this_attempt {
             return Ok(());
         }
         instance.migration = Some(FakeMigration::Sending {
+            attempt: target.attempt,
             destination: target.node_address,
             completes_at: now + transfer_time(instance.launch.memory_mebibytes),
         });
@@ -328,8 +348,11 @@ mod tests {
         );
         futures::executor::block_on(source.start(&launch)).unwrap();
         futures::executor::block_on(destination.receive(&launch)).unwrap();
-        let target =
-            MigrationTarget { node_address: Ipv4Addr::new(192, 0, 2, 11), downtime_milliseconds: 100 };
+        let target = MigrationTarget {
+            attempt: ObjectId::from_uuid(uuid::Uuid::new_v4()),
+            node_address: Ipv4Addr::new(192, 0, 2, 11),
+            downtime_milliseconds: 100,
+        };
         futures::executor::block_on(source.send(&launch.vm_id, &target)).unwrap();
         let mut sleeping = clock.sleep(Duration::from_secs(1));
         assert!(futures::FutureExt::now_or_never(&mut sleeping).is_none());

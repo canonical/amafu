@@ -72,13 +72,26 @@ pub enum InstanceState {
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub enum InstanceMigration {
     Receiving,
-    Sending,
-    Sent { report: MigrationReport },
-    Failed { reason: String },
+    Sending { attempt: ObjectId },
+    Sent { attempt: ObjectId, report: MigrationReport },
+    Failed { attempt: ObjectId, reason: String },
+}
+
+impl InstanceMigration {
+    #[must_use]
+    pub fn attempt(&self) -> Option<ObjectId> {
+        match self {
+            Self::Receiving => None,
+            Self::Sending { attempt } | Self::Sent { attempt, .. } | Self::Failed { attempt, .. } => {
+                Some(*attempt)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MigrationTarget {
+    pub attempt: ObjectId,
     pub node_address: Ipv4Addr,
     pub downtime_milliseconds: u64,
 }
