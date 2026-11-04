@@ -254,16 +254,20 @@ build_guest_kernel() {
 
 pack() {
     rm -rf "${output}"
-    mkdir -p "${output}/esp/EFI/BOOT" "${output}/esp/EFI/ubuntu" "${output}/esp/amafu"
-    pack_initramfs "${staging}" "${output}/esp/amafu/initramfs"
-    cp "${cache}/extracted/boot/vmlinuz-${kernel_release}" "${output}/esp/amafu/vmlinuz"
-    cp "${guest_kernel}" "${output}/esp/amafu/vmlinux"
-    cp -r "${boot_staging}"/. "${output}/esp/amafu/"
+    local slot="${output}/slot"
+    mkdir -p "${output}/esp/EFI/BOOT" "${output}/esp/EFI/ubuntu" "${slot}"
+    pack_initramfs "${staging}" "${slot}/initramfs"
+    cp "${cache}/extracted/boot/vmlinuz-${kernel_release}" "${slot}/vmlinuz"
+    cp "${guest_kernel}" "${slot}/vmlinux"
+    cp -r "${boot_staging}"/. "${slot}/"
+    git -C "${repository}" describe --always --dirty 2>/dev/null > "${slot}/release" || echo unknown > "${slot}/release"
     cp "${cache}/extracted/usr/lib/shim/shimx64.efi.signed.latest" "${output}/esp/EFI/BOOT/BOOTX64.EFI"
     cp "${cache}/extracted/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed" "${output}/esp/EFI/BOOT/grubx64.efi"
     cp "${image_directory}/grub.cfg" "${output}/esp/EFI/ubuntu/grub.cfg"
-    (cd "${output}/esp" && find . -type f | LC_ALL=C sort | xargs sha256sum) > "${output}/SHA256SUMS"
-    du -sb "${output}/esp" | awk '{ printf "image size: %.1f MiB\n", $1 / 1048576 }'
+    tar --create --file "${output}/node-image.tar" --directory "${slot}" --sort=name --owner=0 --group=0 \
+        --numeric-owner --mtime=@0 --format=gnu .
+    (cd "${output}" && sha256sum node-image.tar > node-image.tar.sha256)
+    du -sb "${slot}" | awk '{ printf "slot size: %.1f MiB\n", $1 / 1048576 }'
 }
 
 check_node_tools

@@ -6,14 +6,15 @@ readonly boot_size_mebibytes=256
 readonly data_size_mebibytes="${AMAFU_DATA_SIZE_MEBIBYTES:-16384}"
 readonly first_partition_offset_mebibytes=1
 
-if [[ $# -ne 3 ]]; then
-    echo "usage: image/assemble-disk <built image directory> <node configuration> <output directory>" >&2
+if [[ $# -lt 3 || $# -gt 4 ]]; then
+    echo "usage: image/assemble-disk <built image directory> <node configuration> <output directory> [signed image manifest]" >&2
     exit 2
 fi
 
 readonly built="$1"
 readonly configuration="$2"
 readonly output="$3"
+readonly manifest="${4:-}"
 readonly work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
 
@@ -36,7 +37,33 @@ done
 (cd "${built}/esp" && find . -type f | LC_ALL=C sort) | while read -r file; do
     mcopy -i "${work}/boot.vfat" "${built}/esp/${file#./}" "::${file#./}"
 done
+copy_slot() {
+    local source="$1"
+    local slot="$2"
+    mmd -i "${work}/boot.vfat" "::${slot}"
+    (cd "${source}" && find . -mindepth 1 -type d | LC_ALL=C sort) | while read -r directory; do
+        mmd -i "${work}/boot.vfat" "::${slot}/${directory#./}"
+    done
+    (cd "${source}" && find . -type f | LC_ALL=C sort) | while read -r file; do
+        mcopy -i "${work}/boot.vfat" "${source}/${file#./}" "::${slot}/${file#./}"
+    done
+}
+
+grub_environment() {
+    local block
+    block="$(printf '# GRUB Environment Block\ndefault_slot=a\nnext_slot=\n')"
+    printf '%s\n' "${block}" > "${work}/grubenv"
+    local padding=$((1024 - $(stat --format=%s "${work}/grubenv")))
+    head -c "${padding}" /dev/zero | tr '\0' '#' >> "${work}/grubenv"
+}
+
+copy_slot "${built}/slot" "amafu-a"
+if [[ -n "${manifest}" ]]; then
+    mcopy -o -i "${work}/boot.vfat" "${manifest}" "::amafu-a/node-image.json"
+fi
 mmd -i "${work}/boot.vfat" "::amafu" 2>/dev/null || true
+grub_environment
+mcopy -o -i "${work}/boot.vfat" "${work}/grubenv" "::amafu/grubenv"
 mcopy -o -i "${work}/boot.vfat" "${configuration}" "::amafu/node-configuration.yaml"
 dd if="${work}/boot.vfat" of="${work}/disk.raw" bs=1M seek="${first_partition_offset_mebibytes}" conv=notrunc status=none
 
