@@ -1,0 +1,32 @@
+[workspace]
+members = ["kit", "spdk-rpc", "hostile"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+base64 = "0.23.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+wit-bindgen = "0.63.0"
+amafu-storage-plugin-kit = { path = "kit" }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+min_ident_chars = "deny"
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

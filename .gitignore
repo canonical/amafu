@@ -25,3 +25,4 @@ rustc-ice-*.txt
 
 /image/output
 /design-do-not-commit
+/plugins/target

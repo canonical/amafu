@@ -1,0 +1,82 @@
+package amafu:storage@1.0.0;
+
+interface types {
+    record volume-request {
+        volume-id: string,
+        size-in-bytes: u64,
+    }
+
+    record provisioned-volume {
+        identifier: string,
+        size-in-bytes: u64,
+    }
+
+    record fenced-node {
+        name: string,
+        address: option<string>,
+    }
+
+    variant provider-error {
+        retryable(string),
+        invalid(string),
+        not-found,
+        unsupported,
+    }
+}
+
+interface provider {
+    use types.{volume-request, provisioned-volume, fenced-node, provider-error};
+
+    check: func(configuration: string) -> result<_, provider-error>;
+    create-volume: func(configuration: string, request: volume-request) -> result<provisioned-volume, provider-error>;
+    delete-volume: func(configuration: string, volume: provisioned-volume) -> result<_, provider-error>;
+    export-to-node: func(configuration: string, volume: provisioned-volume, node-name: string) -> result<string, provider-error>;
+    revoke-node: func(configuration: string, node: fenced-node) -> result<_, provider-error>;
+    has-revoked-node: func(configuration: string, node: fenced-node) -> result<bool, provider-error>;
+    readmit-node: func(configuration: string, node: fenced-node) -> result<_, provider-error>;
+}
+
+interface http {
+    record request {
+        method: string,
+        url: string,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+    }
+
+    record response {
+        status: u16,
+        headers: list<tuple<string, string>>,
+        body: list<u8>,
+    }
+
+    variant http-error {
+        denied(string),
+        failed(string),
+        too-large,
+    }
+
+    send: func(request: request) -> result<response, http-error>;
+}
+
+interface secrets {
+    get: func(name: string) -> option<string>;
+}
+
+interface logging {
+    enum level {
+        debug,
+        info,
+        warning,
+        error,
+    }
+
+    log: func(level: level, message: string);
+}
+
+world storage-plugin {
+    import http;
+    import secrets;
+    import logging;
+    export provider;
+}
