@@ -48,6 +48,7 @@ impl Tabulated for StorageBackend {
             StorageProviderSpecification::CephRbd { management, pool, .. } => {
                 format!("ceph-rbd {management} {pool}")
             }
+            StorageProviderSpecification::Plugin(plugin) => format!("plugin {}", plugin.module.url),
         };
         vec![backend.metadata.name.to_string(), kebab_name(backend.status.phase), provider]
     }

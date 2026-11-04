@@ -1,7 +1,9 @@
+use std::collections::BTreeMap;
 use std::net::SocketAddrV4;
 
 use serde::{Deserialize, Serialize};
 
+use crate::digest::Sha256Digest;
 use crate::resource::{Resource, Scope};
 use crate::validation::{Validate, ValidationError};
 
@@ -48,6 +50,67 @@ pub enum StorageProviderSpecification {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         command_certificate_authority: Option<String>,
     },
+    Plugin(PluginBackend),
+}
+
+pub const LONGEST_PLUGIN_CONFIGURATION: usize = 64 * 1024;
+pub const MOST_PLUGIN_ENDPOINTS: usize = 16;
+pub const MOST_PLUGIN_SECRETS: usize = 16;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginModule {
+    pub url: String,
+    pub digest: Sha256Digest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginBackend {
+    pub module: PluginModule,
+    #[serde(default)]
+    pub configuration: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub endpoints: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub secrets: BTreeMap<String, String>,
+}
+
+impl PluginBackend {
+    #[must_use]
+    pub fn allows(&self, url: &str) -> bool {
+        self.endpoints.iter().any(|endpoint| {
+            url == endpoint
+                || url.strip_prefix(endpoint.as_str()).is_some_and(|rest| {
+                    endpoint.ends_with('/') || rest.starts_with('/') || rest.starts_with('?')
+                })
+        })
+    }
+
+    fn check(&self, error: &mut ValidationError) {
+        error.check(
+            is_management_url(&self.module.url),
+            "specification.provider.module.url",
+            "must be an HTTP URL",
+        );
+        error.check(
+            self.configuration.to_string().len() <= LONGEST_PLUGIN_CONFIGURATION,
+            "specification.provider.configuration",
+            "must be at most 64 KiB of JSON",
+        );
+        error.check(
+            self.endpoints.len() <= MOST_PLUGIN_ENDPOINTS
+                && self.endpoints.iter().all(|endpoint| is_management_url(endpoint)),
+            "specification.provider.endpoints",
+            "must be at most 16 HTTP URLs",
+        );
+        error.check(
+            self.secrets.len() <= MOST_PLUGIN_SECRETS
+                && self.secrets.iter().all(|(name, value)| is_plain_word(name) && is_secret(value)),
+            "specification.provider.secrets",
+            "must be at most 16 named, printable secrets",
+        );
+    }
 }
 
 impl StorageProviderSpecification {
@@ -194,6 +257,7 @@ impl Validate for StorageBackendSpecification {
                     "the management credentials must be printable",
                 );
             }
+            StorageProviderSpecification::Plugin(plugin) => plugin.check(&mut error),
         }
         error.into_result()
     }
@@ -231,6 +295,42 @@ impl StorageBackendStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn plugin(endpoints: &[&str]) -> PluginBackend {
+        PluginBackend {
+            module: PluginModule {
+                url: String::from("https://plugins.example/a.wasm"),
+                digest: "a".repeat(64).parse().unwrap(),
+            },
+            configuration: serde_json::Value::Null,
+            endpoints: endpoints.iter().map(|endpoint| (*endpoint).to_owned()).collect(),
+            secrets: BTreeMap::new(),
+        }
+    }
+
+    #[test]
+    fn a_plugin_reaches_only_below_the_endpoints_it_declares() {
+        let backend = plugin(&["https://target.example:8080", "https://other.example/api/"]);
+        assert!(backend.allows("https://target.example:8080"));
+        assert!(backend.allows("https://target.example:8080/rpc"));
+        assert!(backend.allows("https://other.example/api/volumes"));
+        assert!(!backend.allows("https://target.example:80801/rpc"));
+        assert!(!backend.allows("https://target.example:8080.attacker.example/"));
+        assert!(!backend.allows("https://other.example/apix"));
+        assert!(!plugin(&[]).allows("https://target.example:8080"));
+    }
+
+    #[test]
+    fn a_plugin_backend_with_too_much_or_malformed_configuration_is_refused() {
+        let specification = |plugin: PluginBackend| StorageBackendSpecification {
+            provider: StorageProviderSpecification::Plugin(plugin),
+        };
+        assert_eq!(specification(plugin(&["https://target.example"])).validate(), Ok(()));
+        assert!(specification(plugin(&["ftp://target.example"])).validate().is_err());
+        let mut secretive = plugin(&[]);
+        secretive.secrets.insert(String::from("pass word"), String::from("x"));
+        assert!(specification(secretive).validate().is_err());
+    }
 
     fn nfs(server: &str, export: &str) -> StorageBackendSpecification {
         StorageBackendSpecification {

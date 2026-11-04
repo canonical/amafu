@@ -55,6 +55,7 @@ fn backend_key(specification: &StorageProviderSpecification, node: &NodeName) ->
         StorageProviderSpecification::CephRbd { management, pool, .. } => {
             format!("rbd://{management}/{pool}")
         }
+        StorageProviderSpecification::Plugin(plugin) => format!("plugin://{}", plugin.module.digest),
     }
 }
 
@@ -124,6 +125,10 @@ impl StorageProvider for FakeProvider {
                 image: volume.identifier.clone(),
                 user: user.clone(),
                 key: key.clone(),
+            },
+            StorageProviderSpecification::Plugin(_) => AttachTarget::NvmeTcp {
+                qualified_name: format!("nqn.2026-11.io.amafu:volume:{}", volume.identifier),
+                addresses: Vec::new(),
             },
         })
     }
@@ -290,7 +295,9 @@ mod tests {
             let protocol = match specification {
                 StorageProviderSpecification::LocalDisk => StorageProtocol::LocalFile,
                 StorageProviderSpecification::Nfs { .. } => StorageProtocol::Nfs,
-                StorageProviderSpecification::NvmeTcp { .. } => StorageProtocol::NvmeTcp,
+                StorageProviderSpecification::NvmeTcp { .. } | StorageProviderSpecification::Plugin(_) => {
+                    StorageProtocol::NvmeTcp
+                }
                 StorageProviderSpecification::CephRbd { .. } => StorageProtocol::Rbd,
             };
             let attacher = storage.attacher(protocol).unwrap();
