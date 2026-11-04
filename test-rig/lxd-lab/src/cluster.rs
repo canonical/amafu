@@ -45,6 +45,7 @@ impl Clock for WallClock {
 struct ActiveFaults {
     next_handle: u64,
     partitions: std::collections::BTreeMap<FaultHandle, String>,
+    powered_off: std::collections::BTreeMap<FaultHandle, NodeName>,
 }
 
 pub struct VirtualLab {
@@ -232,6 +233,10 @@ impl Cluster for VirtualLab {
             Fault::PowerCycle { node } => {
                 self.lxd.change_state(node.as_str(), "restart", true).await.map_err(lab_failure)?;
             }
+            Fault::PowerOff { node } => {
+                self.lxd.change_state(node.as_str(), "stop", true).await.map_err(lab_failure)?;
+                self.faults.borrow_mut().powered_off.insert(handle, node.clone());
+            }
             Fault::Partition { node } => {
                 self.faults.borrow_mut().partitions.insert(handle, self.switch_port(node)?);
                 self.apply_partitions().await?;
@@ -244,6 +249,10 @@ impl Cluster for VirtualLab {
         let removed = self.faults.borrow_mut().partitions.remove(&handle);
         if removed.is_some() {
             self.apply_partitions().await?;
+        }
+        let powered_off = self.faults.borrow_mut().powered_off.remove(&handle);
+        if let Some(node) = powered_off {
+            self.lxd.change_state(node.as_str(), "start", false).await.map_err(lab_failure)?;
         }
         Ok(())
     }

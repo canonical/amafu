@@ -14,29 +14,33 @@ use amafu_api::{
     TokenAuthenticator, node_router, router,
 };
 use amafu_checkers::invariants::check_all;
+use amafu_controllers::node_lease::{LeaseKeeper, LeaseKeeperSettings, feed_while_leased};
 use amafu_controllers::{
     CertificateRevocationController, ComputeController, ComputeServices, ExternalNetworkController,
     FloatingIpController, ImageController, LocalVolumeController, NetworkController, NodeController,
-    NodeHealthController, NodeIdentity, NodeNetworkController, SchedulerController, SchedulingSettings,
-    SecurityGroupController, StorageBackendController, VolumeController,
+    NodeHealthController, NodeIdentity, NodeNetworkController, OperationSteps, OperationsController,
+    SchedulerController, SchedulingSettings, SecurityGroupController, StorageBackendController,
+    VolumeController,
 };
 use amafu_domain::access::Role;
 use amafu_domain::kinds::external_network::ExternalNetworkSpecification;
 use amafu_domain::kinds::node::{CpuBaseline, NodeCapacity, NodeRole};
+use amafu_domain::kinds::node_lease::LeaseTerms;
 use amafu_domain::kinds::storage_backend::StorageProviderSpecification;
 use amafu_domain::{MacAddress, NodeName, ObjectId, ObjectName, ProjectName};
 use amafu_interfaces::{
-    AuditLog, Clock, Datapath, Fence, GuestAgents, Hypervisor, Identifiers, ImageStore, Leases,
-    LocalServices, NodeNetworkState, Storage, Store, WorkloadState,
+    AuditLog, Clock, CoreConnection, Datapath, Fence, GuestAgents, Hypervisor, Identifiers, ImageStore,
+    Leases, LocalServices, NodeLeaseAuthority, NodeLeaseState, NodeNetworkState, Storage, Store,
+    WorkloadState,
 };
 use amafu_network::dhcp::{self, DhcpMessage, Lease, MessageType};
-use amafu_reconciler::{Controller, ReconcilerSettings, run_controller, run_singleton};
+use amafu_reconciler::{Controller, ReconcilerSettings, StepRegistry, run_controller, run_singleton};
 use amafu_scenario::{
     CertificateAuthority, Cluster, ClusterObservation, Fault, FaultHandle, Level, NfsExport,
     ObservedAttachment, ObservedFencedWrite, ObservedFloatingAddress, ObservedInstance, ObservedPort,
     ObservedRemoteEndpoint, ScenarioDefinition, ScenarioError, ScenarioResult, TlsIdentity,
 };
-use amafu_state::{LocalStateCache, SubscribedStore};
+use amafu_state::{LeaseFencedStore, LocalNodeLeases, LocalStateCache, SubscribedStore};
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use time::OffsetDateTime;
@@ -46,8 +50,8 @@ use crate::clock::VirtualClock;
 use crate::executor::{Executor, StepOutcome, TaskFuture, TaskId};
 use crate::fakes::{
     FakeBackends, FakeDatapath, FakeHypervisor, FakeImageStore, FakeLeases, FakeLocalServices, FakeStorage,
-    MemoryAuditLog, MemoryStore, NodeLink, PartitionedStore, PartitionedTransport, SeededIdentifiers,
-    simulated_ceph_rbd, simulated_nvme_tcp,
+    FakeWatchdog, MemoryAuditLog, MemoryStore, NodeLink, PartitionedStore, PartitionedTransport,
+    SeededIdentifiers, simulated_ceph_rbd, simulated_nvme_tcp,
 };
 
 const PROJECTS: [&str; 2] = ["project-a", "project-b"];
@@ -62,7 +66,18 @@ const TEST_BUNDLE: &str = "test-guest";
 const CORE_MEMBER_COUNT: usize = 3;
 const SUBSCRIPTION_REFRESH: Duration = Duration::from_secs(5);
 const RESUBSCRIBE_DELAY: Duration = Duration::from_secs(1);
-const SILENCE_ALLOWED: Duration = Duration::from_secs(30);
+const LEASE_DURATION: Duration = Duration::from_secs(8);
+const WATCHDOG_INTERVAL: Duration = Duration::from_secs(8);
+
+fn lease_terms() -> LeaseTerms {
+    LeaseTerms::new(LEASE_DURATION, WATCHDOG_INTERVAL)
+}
+
+struct NodeStores {
+    store: Arc<dyn Store>,
+    authority: Arc<dyn NodeLeaseAuthority>,
+    follower: Option<RoleTask>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SimulationSettings {
@@ -120,6 +135,8 @@ struct RoleTask {
 }
 
 struct NodeServices {
+    lease: NodeLeaseState,
+    watchdog: Arc<FakeWatchdog>,
     hypervisor: Arc<FakeHypervisor>,
     storage: Arc<FakeStorage>,
     images: Arc<FakeImageStore>,
@@ -128,8 +145,10 @@ struct NodeServices {
 }
 
 impl NodeServices {
-    fn compute(&self, store: &Arc<dyn Store>) -> ComputeServices {
+    fn compute(&self, store: &Arc<dyn Store>, clock: &Arc<dyn Clock>) -> ComputeServices {
         ComputeServices {
+            lease: self.lease.clone(),
+            clock: Arc::clone(clock),
             store: Arc::clone(store),
             hypervisor: Arc::clone(&self.hypervisor) as Arc<dyn Hypervisor>,
             storage: Arc::clone(&self.storage) as Arc<dyn Storage>,
@@ -140,6 +159,8 @@ impl NodeServices {
     }
 
     fn power_off(&self) {
+        self.lease.drop_lease();
+        self.watchdog.disarm();
         self.hypervisor.power_off();
         self.storage.power_off();
         self.datapath.power_off();
@@ -152,6 +173,7 @@ struct SimulatedNode {
     roles: Vec<RoleTask>,
     link: Arc<NodeLink>,
     is_core: bool,
+    is_powered: Cell<bool>,
 }
 
 struct WorldShared {
@@ -324,11 +346,7 @@ impl SimulatedWorld {
             }),
         };
         for index in 0..node_count {
-            world.add_node(
-                u8::try_from(index).unwrap_or(u8::MAX),
-                index < CORE_MEMBER_COUNT,
-                identifiers.as_ref(),
-            );
+            world.add_node(u8::try_from(index).unwrap_or(u8::MAX), index < CORE_MEMBER_COUNT, &identifiers);
         }
         world
     }
@@ -370,11 +388,21 @@ impl SimulatedWorld {
         name: &NodeName,
         is_core: bool,
         link: &Arc<NodeLink>,
-    ) -> (Arc<dyn Store>, Option<RoleTask>) {
+        identifiers: &Arc<SeededIdentifiers>,
+    ) -> NodeStores {
         let shared = &self.shared;
         if is_core {
-            let store = PartitionedStore::new(Arc::clone(&shared.store) as Arc<dyn Store>, Arc::clone(link));
-            return (Arc::new(store), None);
+            let store: Arc<dyn Store> = Arc::new(PartitionedStore::new(
+                Arc::clone(&shared.store) as Arc<dyn Store>,
+                Arc::clone(link),
+            ));
+            let authority = Arc::new(LocalNodeLeases::new(
+                Arc::clone(&store),
+                name.clone(),
+                Arc::new(shared.clock.clone()),
+                Arc::clone(identifiers) as Arc<dyn Identifiers>,
+            ));
+            return NodeStores { store, authority, follower: None };
         }
         let identity =
             shared.authority.issue_node(name, &[NodeRole::Compute]).unwrap_or_else(|_| unreachable!());
@@ -382,27 +410,78 @@ impl SimulatedWorld {
             Arc::new(RouterTransport::presenting(shared.router.clone(), identity.certificate_der)),
             Arc::clone(link),
         ));
-        let store =
-            SubscribedStore::new(Arc::new(NodeClient::new(vec![transport])), LocalStateCache::in_memory());
+        let client = Arc::new(NodeClient::new(vec![transport]));
+        let store = SubscribedStore::new(
+            name.clone(),
+            Arc::clone(&client) as Arc<dyn CoreConnection>,
+            LocalStateCache::in_memory(),
+        );
         let follower = self.subscription_role(format!("{name}/subscription"), store.clone());
-        (Arc::new(store), Some(follower))
+        NodeStores { store: Arc::new(store), authority: client, follower: Some(follower) }
     }
 
-    fn add_node(&self, index: u8, is_core: bool, identifiers: &dyn Identifiers) {
+    fn lease_roles(
+        &self,
+        name: &NodeName,
+        authority: Arc<dyn NodeLeaseAuthority>,
+        services: &NodeServices,
+    ) -> [RoleTask; 2] {
+        let clock: Arc<dyn Clock> = Arc::new(self.shared.clock.clone());
+        let (keeper_clock, keeper_state) = (Arc::clone(&clock), services.lease.clone());
+        let keep: Rc<dyn Fn() -> TaskFuture> = Rc::new(move || {
+            let (authority, clock, state) =
+                (Arc::clone(&authority), Arc::clone(&keeper_clock), keeper_state.clone());
+            Box::pin(async move {
+                let keeper = LeaseKeeper {
+                    authority: authority.as_ref(),
+                    clock: clock.as_ref(),
+                    state: &state,
+                    settings: LeaseKeeperSettings::for_terms(lease_terms()),
+                };
+                keeper.keep().await;
+            })
+        });
+        let (watchdog, feeder_state) = (Arc::clone(&services.watchdog), services.lease.clone());
+        let feed: Rc<dyn Fn() -> TaskFuture> = Rc::new(move || {
+            let (watchdog, state, clock) = (Arc::clone(&watchdog), feeder_state.clone(), Arc::clone(&clock));
+            Box::pin(async move {
+                feed_while_leased(watchdog.as_ref(), &state, clock.as_ref(), WATCHDOG_INTERVAL).await;
+            })
+        });
+        [
+            RoleTask { label: format!("{name}/lease"), start: keep, task: Cell::new(TaskId::default()) },
+            RoleTask { label: format!("{name}/watchdog"), start: feed, task: Cell::new(TaskId::default()) },
+        ]
+    }
+
+    fn node_services(&self, name: &NodeName, clock: &Arc<dyn Clock>) -> NodeServices {
+        let bundles = BTreeSet::from([valid_name::<ObjectName>(TEST_BUNDLE)]);
+        NodeServices {
+            lease: NodeLeaseState::new(),
+            watchdog: Arc::new(FakeWatchdog::new(Arc::clone(clock), WATCHDOG_INTERVAL)),
+            hypervisor: Arc::new(FakeHypervisor::new(Arc::clone(clock), BOOT_DURATION, bundles)),
+            storage: Arc::new(FakeStorage::new(name.clone(), Arc::clone(&self.shared.backends))),
+            images: Arc::new(FakeImageStore::new()),
+            datapath: Arc::new(FakeDatapath::new()),
+            local_services: Arc::new(FakeLocalServices::new()),
+        }
+    }
+
+    fn add_node(&self, index: u8, is_core: bool, identifiers: &Arc<SeededIdentifiers>) {
         let name: &NodeName = &valid_name(&format!("node-{index}"));
         let underlay_address = Ipv4Addr::new(192, 0, 2, index.saturating_add(10));
         let shared = &self.shared;
         let clock: Arc<dyn Clock> = Arc::new(shared.clock.clone());
         let link = NodeLink::new();
-        let (store, follower) = self.node_store(name, is_core, &link);
-        let bundles = BTreeSet::from([valid_name::<ObjectName>(TEST_BUNDLE)]);
-        let services = NodeServices {
-            hypervisor: Arc::new(FakeHypervisor::new(Arc::clone(&clock), BOOT_DURATION, bundles)),
-            storage: Arc::new(FakeStorage::new(name.clone(), Arc::clone(&shared.backends))),
-            images: Arc::new(FakeImageStore::new()),
-            datapath: Arc::new(FakeDatapath::new()),
-            local_services: Arc::new(FakeLocalServices::new()),
-        };
+        let NodeStores { store: shared_store, authority, follower } =
+            self.node_store(name, is_core, &link, identifiers);
+        let services = self.node_services(name, &clock);
+        let store: Arc<dyn Store> = Arc::new(LeaseFencedStore::new(
+            Arc::clone(&shared_store),
+            name.clone(),
+            services.lease.clone(),
+            Arc::clone(&clock),
+        ));
         let mut roles = BTreeSet::from([NodeRole::Compute]);
         if is_core {
             roles.insert(NodeRole::Core);
@@ -424,7 +503,7 @@ impl SimulatedWorld {
             periodic_resynchronization: Duration::from_secs(2),
         };
         let heartbeat = ReconcilerSettings { periodic_resynchronization: Duration::from_secs(5), ..fast };
-        let compute = services.compute(&store);
+        let compute = services.compute(&store, &clock);
         let (network_store, datapath, local_services) =
             (Arc::clone(&store), Arc::clone(&services.datapath), Arc::clone(&services.local_services));
         let (node_store, node_clock, node_name) = (Arc::clone(&store), Arc::clone(&clock), name.clone());
@@ -437,6 +516,7 @@ impl SimulatedWorld {
             name.clone(),
         );
         let mut tasks: Vec<RoleTask> = follower.into_iter().collect();
+        tasks.extend(self.lease_roles(name, authority, &services));
         tasks.extend([
             self.role(format!("{name}/node"), &store, heartbeat, move || {
                 NodeController::new(identity.clone(), Arc::clone(&node_store), Arc::clone(&node_clock))
@@ -472,15 +552,71 @@ impl SimulatedWorld {
             )
         }));
         if is_core {
-            tasks.extend(self.core_roles(name, &store, &services, fast));
+            tasks.extend(self.core_roles(name, &shared_store, &services, fast));
+            tasks.extend(self.recovery_roles(name, &shared_store, &services, identifiers, fast));
         }
         for role in &tasks {
             role.task.set(shared.executor.spawn(role.label.clone(), (role.start)()));
         }
-        shared
-            .nodes
-            .borrow_mut()
-            .insert(name.clone(), SimulatedNode { services, roles: tasks, link, is_core });
+        shared.nodes.borrow_mut().insert(
+            name.clone(),
+            SimulatedNode { services, roles: tasks, link, is_core, is_powered: Cell::new(true) },
+        );
+    }
+
+    fn recovery_roles(
+        &self,
+        name: &NodeName,
+        store: &Arc<dyn Store>,
+        services: &NodeServices,
+        identifiers: &Arc<SeededIdentifiers>,
+        settings: ReconcilerSettings,
+    ) -> Vec<RoleTask> {
+        let shared = &self.shared;
+        let singletons = SingletonServices {
+            leases: Arc::new(shared.leases.for_node(name.clone())),
+            store: Arc::clone(store),
+            clock: Arc::new(shared.clock.clone()),
+            failures: Rc::clone(&shared.failures),
+        };
+        let storage: Arc<dyn Storage> = Arc::clone(&services.storage) as Arc<dyn Storage>;
+        let (health_store, health_clock, health_identifiers) = (
+            Arc::clone(store),
+            Arc::new(shared.clock.clone()) as Arc<dyn Clock>,
+            Arc::clone(identifiers) as Arc<dyn Identifiers>,
+        );
+        let (operations_store, operations_clock, operations_steps) = (
+            Arc::clone(store),
+            Arc::new(shared.clock.clone()) as Arc<dyn Clock>,
+            Arc::new(OperationSteps::new(Arc::clone(&storage))) as Arc<dyn StepRegistry>,
+        );
+        vec![
+            singleton_role(
+                format!("{name}/node-health"),
+                move |_| {
+                    NodeHealthController::new(
+                        Arc::clone(&health_store),
+                        Arc::clone(&health_clock),
+                        Arc::clone(&health_identifiers),
+                    )
+                },
+                &singletons,
+                settings,
+            ),
+            singleton_role(
+                format!("{name}/operations"),
+                move |fence| {
+                    OperationsController::new(
+                        Arc::clone(&operations_store),
+                        Arc::clone(&operations_clock),
+                        Arc::clone(&operations_steps),
+                        fence,
+                    )
+                },
+                &singletons,
+                settings,
+            ),
+        ]
     }
 
     fn core_roles(
@@ -506,8 +642,6 @@ impl SimulatedWorld {
         let (backend_store, backend_storage) = (Arc::clone(store), Arc::clone(&storage));
         let floating_store = Arc::clone(store);
         let (external_store, revocation_store) = (Arc::clone(store), Arc::clone(store));
-        let (health_store, health_clock) =
-            (Arc::clone(store), Arc::new(shared.clock.clone()) as Arc<dyn Clock>);
         vec![
             singleton_role(
                 format!("{name}/external-network"),
@@ -524,18 +658,6 @@ impl SimulatedWorld {
             singleton_role(
                 format!("{name}/floating-ip"),
                 move |_| FloatingIpController::new(Arc::clone(&floating_store)),
-                &singletons,
-                settings,
-            ),
-            singleton_role(
-                format!("{name}/node-health"),
-                move |_| {
-                    NodeHealthController::new(
-                        Arc::clone(&health_store),
-                        Arc::clone(&health_clock),
-                        SILENCE_ALLOWED,
-                    )
-                },
                 &singletons,
                 settings,
             ),
@@ -612,6 +734,32 @@ impl SimulatedWorld {
         Ok(())
     }
 
+    fn set_powered(&self, node: &NodeName, is_powered: bool) -> Result<(), ScenarioError> {
+        let nodes = self.shared.nodes.borrow();
+        let simulated =
+            nodes.get(node).ok_or_else(|| ScenarioError::Expectation(format!("no node named {node}")))?;
+        if is_powered {
+            simulated.link.restore();
+            self.shared.leases.reconnect(node);
+            for role in &simulated.roles {
+                self.restart_role(role);
+            }
+        } else {
+            simulated.services.power_off();
+            simulated.link.cut();
+            if simulated.is_core {
+                self.shared.leases.isolate(node);
+            }
+            for role in &simulated.roles {
+                self.shared.executor.kill(role.task.get());
+            }
+        }
+        simulated.is_powered.set(is_powered);
+        drop(nodes);
+        self.record(format!("{} {node}", if is_powered { "powered on" } else { "powered off" }));
+        Ok(())
+    }
+
     fn set_partitioned(&self, node: &NodeName, is_partitioned: bool) -> Result<(), ScenarioError> {
         let nodes = self.shared.nodes.borrow();
         let simulated =
@@ -636,7 +784,8 @@ impl SimulatedWorld {
             return;
         }
         let nodes = self.shared.nodes.borrow();
-        let roles: Vec<&RoleTask> = nodes.values().flat_map(|node| node.roles.iter()).collect();
+        let roles: Vec<&RoleTask> =
+            nodes.values().filter(|node| node.is_powered.get()).flat_map(|node| node.roles.iter()).collect();
         if roles.is_empty() {
             return;
         }
@@ -746,7 +895,24 @@ impl SimulatedWorld {
             StepOutcome::Idle => self.record(String::from("idle")),
         }
         self.maybe_crash_a_role();
+        self.reset_nodes_whose_watchdog_fired();
         outcome
+    }
+
+    fn reset_nodes_whose_watchdog_fired(&self) {
+        let fired: Vec<NodeName> = self
+            .shared
+            .nodes
+            .borrow()
+            .iter()
+            .filter(|(_, node)| node.services.watchdog.has_fired())
+            .map(|(name, _)| name.clone())
+            .collect();
+        for node in fired {
+            if self.power_cycle(&node).is_ok() {
+                self.record(format!("the watchdog reset {node}"));
+            }
+        }
     }
 
     fn failure(&self, step: u64, reason: String) -> SimulationFailure {
@@ -870,6 +1036,7 @@ impl Cluster for SimulatedWorld {
     async fn inject(&self, fault: Fault) -> Result<FaultHandle, ScenarioError> {
         match &fault {
             Fault::PowerCycle { node } => self.power_cycle(node)?,
+            Fault::PowerOff { node } => self.set_powered(node, false)?,
             Fault::Partition { node } => self.set_partitioned(node, true)?,
         }
         let handle = FaultHandle(self.shared.next_fault.get());
@@ -880,8 +1047,10 @@ impl Cluster for SimulatedWorld {
 
     async fn heal(&self, handle: FaultHandle) -> Result<(), ScenarioError> {
         let fault = self.shared.active_faults.borrow_mut().remove(&handle);
-        if let Some(Fault::Partition { node }) = fault {
-            self.set_partitioned(&node, false)?;
+        match fault {
+            Some(Fault::Partition { node }) => self.set_partitioned(&node, false)?,
+            Some(Fault::PowerOff { node }) => self.set_powered(&node, true)?,
+            Some(Fault::PowerCycle { .. }) | None => {}
         }
         Ok(())
     }

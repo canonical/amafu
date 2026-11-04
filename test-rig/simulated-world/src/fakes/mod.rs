@@ -7,6 +7,7 @@ pub mod leases;
 pub mod partition;
 pub mod storage;
 pub mod store;
+pub mod watchdog;
 
 pub use audit::MemoryAuditLog;
 pub use datapath::{FakeDatapath, FakeLocalServices};
@@ -17,3 +18,4 @@ pub use leases::{FakeLeases, NodeLeases};
 pub use partition::{NodeLink, PartitionedStore, PartitionedTransport};
 pub use storage::{FakeBackends, FakeStorage, simulated_ceph_rbd, simulated_nvme_tcp};
 pub use store::MemoryStore;
+pub use watchdog::FakeWatchdog;

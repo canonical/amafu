@@ -37,6 +37,7 @@ impl fmt::Display for Level {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fault {
     PowerCycle { node: NodeName },
+    PowerOff { node: NodeName },
     Partition { node: NodeName },
 }
 

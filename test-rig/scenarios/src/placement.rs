@@ -36,7 +36,7 @@ pub const NODE_KEEPS_SERVING_WITHOUT_THE_CORE: ScenarioDefinition = ScenarioDefi
 };
 
 const GROUP: &str = "spread";
-const CUT_OFF: Duration = Duration::from_secs(30);
+const CUT_OFF: Duration = Duration::from_secs(5);
 
 fn grouped() -> Result<VmSpecification, ScenarioError> {
     Ok(VmSpecification { anti_affinity_group: Some(name(GROUP)?), ..VmSpecification::small() })
