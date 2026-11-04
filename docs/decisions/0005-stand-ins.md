@@ -1,6 +1,6 @@
 # 0005: Stand-ins, and what replaces them
 
-Status: accepted for milestones 1 to 4
+Status: accepted for milestones 1 to 5
 
 Milestone 1 builds every layer thinly. Where the plan's full design belongs to a later milestone, milestone 1 uses
 a simpler stand-in behind the same interface, so that replacing it does not ripple through the other crates.
@@ -46,6 +46,17 @@ Milestone 4 replaces the single process (0020) and the heartbeats (0018). It add
 | Every simulator run covers 1,000 seeds | 10,000 seeds take hours on one machine | 10,000 seeds nightly |
 | The kernel's software watchdog (`softdog`) | LXD exposes no emulated watchdog device | A hardware watchdog on real nodes |
 | Migrations use one connection and send zero pages | Cloud Hypervisor's receiver supports nothing else through a unix socket | Parallel TLS streams and zero-page skipping, contributed upstream |
+
+Milestone 5 replaces the rig issuing node certificates (the installer issues them, 0022) and adds:
+
+| Stand-in | Why | Replaced by |
+|---|---|---|
+| The MAAS lab installs three machines with one core member, and the virtual lab is still built by the rig, with the same slots and signed images | The lab server has about 24 GiB, and the virtual lab's storage targets need most of it | A ten-node MAAS lab installing in under 30 minutes |
+| MAAS commissions machines the rig creates and enlists with the LXD power driver, instead of composing them | The machines' NICs, MACs and boot order must be known to write the install description | Composed machines once the MAAS lab is larger |
+| The twenty-node, 200-VM upgrade and rollback runs in the simulator on six seeds with role crashes; the lab upgrades and rolls back its four nodes with eight VMs | One seed of the large world takes about 15 minutes; the lab has four nodes | The twenty-node lab with 200 VMs in CI |
+| The previous release is the same build with another release file, and the broken image has an empty initramfs | There is one build per lab run, and no CI keeps earlier releases | CI upgrading every build from the previous release |
+| Node configurations, with their private keys, travel in MAAS user data | There is no join endpoint yet | A join token exchanged for a TPM-bound certificate at first boot |
+| The two features of the plan are gates with nothing behind them | Neither feature exists yet | Parallel migration streams and dedicated subscription relays |
 
 None of these stand-ins weakens a guarantee the plan says must not be simplified: generations on every object,
 audit of every request including denials, at most one running instance of each VM, and signed images. Each of
