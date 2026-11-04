@@ -63,8 +63,8 @@ mod test_channel {
     use amafu_hypervisor::{Attempt, CloudHypervisor, HybridVsockAgents, RuntimeDirectory, VmProcessPlan};
     use amafu_interfaces::contract::hypervisor::hypervisor_contract;
     use amafu_interfaces::{
-        AuditEntry, AuditLog, Datapath, GuestAgents, Hypervisor, InstanceState, Storage, StorageProtocol,
-        VmLaunchSpecification,
+        AuditEntry, AuditLog, Datapath, GuestAgents, Hypervisor, InstanceMigration, InstanceState,
+        RunningInstance, Storage, StorageProtocol, VmLaunchSpecification,
     };
     use amafu_network::{KernelDatapath, LocalServicesServer};
     use amafu_storage::BuiltInStorage;
