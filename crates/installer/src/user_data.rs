@@ -37,13 +37,16 @@ printf '# GRUB Environment Block\ndefault_slot=a\nnext_slot=\n' > "${work}/esp/a
 head -c "$((1024 - $(stat --format=%s "${work}/esp/amafu/grubenv")))" /dev/zero | tr '\0' '#' >> "${work}/esp/amafu/grubenv"
 umount "${work}/esp"
 sync
-for entry in $(efibootmgr | awk '/ Amafu$/ { print substr($1, 5, 4) }'); do
-    efibootmgr --quiet --delete-bootnum --bootnum "${entry}"
-done
-efibootmgr --quiet --create --disk "${disk}" --part 1 --label Amafu --loader '\EFI\BOOT\BOOTX64.EFI'
-amafu_entry="$(efibootmgr | awk '/ Amafu$/ { print substr($1, 5, 4); exit }')"
-others="$(efibootmgr | awk -F': ' '/^BootOrder/ { print $2 }' | tr ',' '\n' | grep -v "^${amafu_entry}$" | paste -sd, -)"
-efibootmgr --quiet --bootorder "${amafu_entry}${others:+,${others}}"
+put_amafu_first() {
+    for entry in $(efibootmgr | awk '/ Amafu$/ { print substr($1, 5, 4) }'); do
+        efibootmgr --quiet --delete-bootnum --bootnum "${entry}"
+    done
+    efibootmgr --quiet --create --disk "${disk}" --part 1 --label Amafu --loader '\EFI\BOOT\BOOTX64.EFI'
+    amafu_entry="$(efibootmgr | awk '/ Amafu$/ { print substr($1, 5, 4); exit }')"
+    others="$(efibootmgr | awk -F': ' '/^BootOrder/ { print $2 }' | tr ',' '\n' | grep -v "^${amafu_entry}$" | paste -sd, -)"
+    efibootmgr --quiet --bootorder "${amafu_entry}${others:+,${others}}"
+}
+put_amafu_first || echo "amafu installer: the firmware boot order could not be changed; the disk must come before the network"
 echo "amafu installer: ${AMAFU_NODE} is written; restarting into it"
 systemd-run --on-active=15 --unit amafu-restart systemctl reboot
 "#;

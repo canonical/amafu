@@ -70,6 +70,8 @@ enum LabCommand {
     },
     #[command(about = "Run the hypervisor contract against the real adapter on every node")]
     Contract,
+    #[command(subcommand, about = "Manage the MAAS lab, whose nodes are installed as customers install them")]
+    Maas(MaasCommand),
     #[command(about = "Show the VM processes running on every node, with their console output")]
     Instances,
     #[command(about = "Show what every node reports about one of its subsystems")]
@@ -77,6 +79,35 @@ enum LabCommand {
         #[arg(value_enum)]
         subsystem: Subsystem,
     },
+}
+
+#[derive(Subcommand)]
+enum MaasCommand {
+    #[command(about = "Create a MAAS VM and empty machines it commissions")]
+    Up {
+        #[arg(long, default_value_t = 3)]
+        nodes: u8,
+    },
+    #[command(about = "Install a cluster on the commissioned machines with amafu install")]
+    Install,
+    #[command(about = "Delete the MAAS lab")]
+    Down,
+}
+
+async fn maas_lab(repository: &std::path::Path, command: MaasCommand) -> anyhow::Result<()> {
+    let settings = LabSettings::default();
+    match command {
+        MaasCommand::Up { nodes } => {
+            let state = amafu_lxd_lab::maas_lab::up(repository, &settings, nodes).await?;
+            println!("the MAAS lab commissioned {} machines", state.machines.len());
+        }
+        MaasCommand::Install => {
+            let took = amafu_lxd_lab::maas_lab::install(&settings).await?;
+            println!("amafu install deployed the MAAS lab in {} seconds", took.as_secs());
+        }
+        MaasCommand::Down => amafu_lxd_lab::maas_lab::down(repository, &settings).await?,
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -155,6 +186,24 @@ async fn soak(repository: &std::path::Path, forced_stops: u32) -> anyhow::Result
     Ok(())
 }
 
+async fn run_in_lab(repository: &std::path::Path, scenario: Option<&str>) -> anyhow::Result<()> {
+    let lab = VirtualLab::connect(load_state(repository)?)?;
+    let mut failures = 0;
+    for definition in selected(Level::VirtualLab, scenario)? {
+        match (definition.run)(&lab).await {
+            Ok(()) => println!("passed: {}", definition.name),
+            Err(error) => {
+                failures += 1;
+                println!("FAILED: {}: {error}", definition.name);
+            }
+        }
+    }
+    if failures > 0 {
+        bail!("{failures} scenarios failed in the virtual lab");
+    }
+    Ok(())
+}
+
 async fn lab(command: LabCommand) -> anyhow::Result<()> {
     let repository = repository()?;
     match command {
@@ -179,23 +228,7 @@ async fn lab(command: LabCommand) -> anyhow::Result<()> {
         }
         LabCommand::Down => down(&repository, &LabSettings::default()).await,
         LabCommand::Soak { forced_stops } => soak(&repository, forced_stops).await,
-        LabCommand::Run { scenario } => {
-            let lab = VirtualLab::connect(load_state(&repository)?)?;
-            let mut failures = 0;
-            for definition in selected(Level::VirtualLab, scenario.as_deref())? {
-                match (definition.run)(&lab).await {
-                    Ok(()) => println!("passed: {}", definition.name),
-                    Err(error) => {
-                        failures += 1;
-                        println!("FAILED: {}: {error}", definition.name);
-                    }
-                }
-            }
-            if failures > 0 {
-                bail!("{failures} scenarios failed in the virtual lab");
-            }
-            Ok(())
-        }
+        LabCommand::Run { scenario } => run_in_lab(&repository, scenario.as_deref()).await,
         LabCommand::Instances => {
             let state = load_state(&repository)?;
             let http = reqwest::Client::builder().timeout(Duration::from_secs(10)).build()?;
@@ -237,6 +270,7 @@ async fn lab(command: LabCommand) -> anyhow::Result<()> {
             }
             Ok(())
         }
+        LabCommand::Maas(command) => maas_lab(&repository, command).await,
         LabCommand::Contract => {
             let state = load_state(&repository)?;
             let http = reqwest::Client::builder().timeout(Duration::from_secs(120)).build()?;

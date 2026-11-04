@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 amafu-api.workspace = true
 amafu-domain.workspace = true
+amafu-installer.workspace = true
 amafu-interfaces.workspace = true
 amafu-network.workspace = true
 amafu-node.workspace = true

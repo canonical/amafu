@@ -256,6 +256,7 @@ version = "0.1.0"
 dependencies = [
  "amafu-api",
  "amafu-domain",
+ "amafu-installer",
  "amafu-interfaces",
  "amafu-network",
  "amafu-node",
