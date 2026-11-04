@@ -1,6 +1,6 @@
 # Amafu ☁️
 
-**A cloud with minimal footprint, just a kernel and one binary.**
+**A scalable cloud with minimal footprint, just a kernel and one binary.**
 
 *Amafu* is Zulu for "clouds".
 
