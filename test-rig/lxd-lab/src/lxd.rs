@@ -181,6 +181,19 @@ impl LxdClient {
         })
     }
 
+    pub async fn push_file(&self, instance: &str, path: &str, contents: Vec<u8>) -> anyhow::Result<()> {
+        let request = self
+            .http
+            .post(self.url(&format!("/1.0/instances/{instance}/files?path={path}")))
+            .header("Content-Type", "application/octet-stream")
+            .header("X-LXD-type", "file")
+            .header("X-LXD-mode", "0644")
+            .header("X-LXD-write", "overwrite")
+            .body(contents);
+        self.send(request).await?;
+        Ok(())
+    }
+
     pub async fn console_log(&self, instance: &str) -> anyhow::Result<String> {
         let response = self.http.get(self.url(&format!("/1.0/instances/{instance}/console"))).send().await?;
         Ok(response.text().await?)

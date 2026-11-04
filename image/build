@@ -266,7 +266,9 @@ pack() {
     cp "${image_directory}/grub.cfg" "${output}/esp/EFI/ubuntu/grub.cfg"
     tar --create --file "${output}/node-image.tar" --directory "${slot}" --sort=name --owner=0 --group=0 \
         --numeric-owner --mtime=@0 --format=gnu .
-    (cd "${output}" && sha256sum node-image.tar > node-image.tar.sha256)
+    tar --create --file "${output}/boot-loader.tar" --directory "${output}/esp" --sort=name --owner=0 --group=0 \
+        --numeric-owner --mtime=@0 --format=gnu .
+    (cd "${output}" && sha256sum node-image.tar boot-loader.tar > SHA256SUMS)
     du -sb "${slot}" | awk '{ printf "slot size: %.1f MiB\n", $1 / 1048576 }'
 }
 

@@ -6,8 +6,8 @@ readonly boot_size_mebibytes=256
 readonly data_size_mebibytes="${AMAFU_DATA_SIZE_MEBIBYTES:-16384}"
 readonly first_partition_offset_mebibytes=1
 
-if [[ $# -lt 3 || $# -gt 4 ]]; then
-    echo "usage: image/assemble-disk <built image directory> <node configuration> <output directory> [signed image manifest]" >&2
+if [[ $# -ne 3 && $# -ne 5 ]]; then
+    echo "usage: image/assemble-disk <built image directory> <node configuration> <output directory> [<signed image manifest> <node image bundle>]" >&2
     exit 2
 fi
 
@@ -15,6 +15,7 @@ readonly built="$1"
 readonly configuration="$2"
 readonly output="$3"
 readonly manifest="${4:-}"
+readonly bundle="${5:-}"
 readonly work="$(mktemp -d)"
 trap 'rm -rf "${work}"' EXIT
 
@@ -57,7 +58,13 @@ grub_environment() {
     head -c "${padding}" /dev/zero | tr '\0' '#' >> "${work}/grubenv"
 }
 
-copy_slot "${built}/slot" "amafu-a"
+if [[ -n "${bundle}" ]]; then
+    mkdir -p "${work}/slot"
+    tar --extract --no-same-owner --file "${bundle}" --directory "${work}/slot"
+    copy_slot "${work}/slot" "amafu-a"
+else
+    copy_slot "${built}/slot" "amafu-a"
+fi
 if [[ -n "${manifest}" ]]; then
     mcopy -o -i "${work}/boot.vfat" "${manifest}" "::amafu-a/node-image.json"
 fi

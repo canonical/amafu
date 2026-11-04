@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::lxd::LxdClient;
 use crate::machines::{MachineSize, MachineSource, create as create_machine, definition, wait_for_marker};
+use crate::node_images::{IMAGE_DIRECTORY, IMAGE_SERVER_PORT};
 use crate::topology::{LabSettings, LabTopology};
 
 pub const NFS_EXPORT: &str = "/srv/amafu";
@@ -19,7 +20,7 @@ pub struct LabNfsServer {
 
 fn user_data(settings: &LabSettings) -> String {
     format!(
-        "#cloud-config\npackages:\n  - nfs-kernel-server\nwrite_files:\n  - path: /etc/exports\n    content: \"{NFS_EXPORT} {}(rw,sync,no_root_squash,no_subtree_check)\\n\"\nruncmd:\n  - [mkdir, -p, {NFS_EXPORT}]\n  - [chmod, \"0755\", {NFS_EXPORT}]\n  - [exportfs, -ra]\n  - [systemctl, restart, nfs-kernel-server]\n  - [touch, {READY_MARKER}]\n",
+        "#cloud-config\npackages:\n  - nfs-kernel-server\nwrite_files:\n  - path: /etc/exports\n    content: \"{NFS_EXPORT} {}(rw,sync,no_root_squash,no_subtree_check)\\n\"\n  - path: /etc/systemd/system/amafu-images.service\n    content: |\n      [Service]\n      ExecStart=/usr/bin/python3 -m http.server {IMAGE_SERVER_PORT} --directory {IMAGE_DIRECTORY}\n      Restart=always\n      [Install]\n      WantedBy=multi-user.target\nruncmd:\n  - [mkdir, -p, {NFS_EXPORT}, {IMAGE_DIRECTORY}]\n  - [chmod, \"0755\", {NFS_EXPORT}]\n  - [exportfs, -ra]\n  - [systemctl, restart, nfs-kernel-server]\n  - [systemctl, enable, --now, amafu-images.service]\n  - [touch, {READY_MARKER}]\n",
         settings.underlay
     )
 }

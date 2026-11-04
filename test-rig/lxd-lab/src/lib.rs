@@ -5,6 +5,7 @@ pub mod lab;
 pub mod lxd;
 pub mod machines;
 pub mod nfs;
+pub mod node_images;
 pub mod pinning;
 pub mod spdk;
 pub mod switch;

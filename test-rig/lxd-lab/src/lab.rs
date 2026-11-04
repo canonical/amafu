@@ -11,7 +11,7 @@ use amafu_domain::kinds::storage_backend::StorageProviderSpecification;
 use amafu_network::{StaticAddress, UnderlayConfiguration};
 use amafu_node::configuration::{
     ApiSection, ComputeSection, DiagnosticsSection, Directories, FencingSection, IdentitySection,
-    NodeConfiguration, NodeSection, SUPPORTED_VERSION, SchedulingSection, StateSection,
+    NodeConfiguration, NodeSection, SUPPORTED_VERSION, SchedulingSection, StateSection, UpgradeSection,
 };
 use anyhow::{Context, bail};
 use reqwest::Method;
@@ -19,11 +19,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::OffsetDateTime;
 
+use amafu_interfaces::ImageSigningKey;
 use amafu_scenario::{CertificateAuthority, TlsIdentity};
 
 use crate::credentials::{ClientTokens, ServerCredentials, client_tokens};
 use crate::lxd::{LxdClient, LxdCredentials};
 use crate::nfs::LabNfsServer;
+use crate::node_images::PreparedImages;
 use crate::topology::{
     LabNode, LabSettings, LabTopology, MANAGEMENT_MTU, NODE_API_PORT, NODE_DIAGNOSTICS_PORT, node_listen,
 };
@@ -46,7 +48,12 @@ pub struct LabState {
     pub block_backends: Vec<(String, StorageProviderSpecification)>,
     #[serde(default)]
     pub node_images: Option<amafu_scenario::NodeImages>,
+    #[serde(default)]
+    pub image_signing_key: String,
 }
+
+const LAB_CONFIRM_AFTER_SECONDS: u64 = 30;
+const LAB_GIVE_UP_AFTER_SECONDS: u64 = 300;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct NodeBoot {
@@ -87,6 +94,7 @@ fn node_configuration(
     node: &LabNode,
     credentials: &NodeCredentials,
     identities: Vec<amafu_api::TokenIdentity>,
+    image_key: &str,
 ) -> anyhow::Result<NodeConfiguration> {
     let machine = &node.machine;
     let mut roles = BTreeSet::from([NodeRole::Compute]);
@@ -140,6 +148,11 @@ fn node_configuration(
             cpu_overcommit_ratio: LAB_CPU_OVERCOMMIT_RATIO,
             ..SchedulingSection::default()
         },
+        upgrade: UpgradeSection {
+            image_keys: vec![image_key.to_owned()],
+            confirm_after_seconds: LAB_CONFIRM_AFTER_SECONDS,
+            give_up_after_seconds: LAB_GIVE_UP_AFTER_SECONDS,
+        },
         diagnostics: Some(DiagnosticsSection { listen: node_listen(NODE_DIAGNOSTICS_PORT) }),
     })
 }
@@ -170,16 +183,24 @@ fn issue_node_credentials(
     })
 }
 
+struct InstalledImage<'a> {
+    manifest: &'a Path,
+    bundle: &'a Path,
+}
+
 fn assemble_disk(
     repository: &Path,
     image: &Path,
     configuration: &Path,
     output: &Path,
+    installed: &InstalledImage<'_>,
 ) -> anyhow::Result<PathBuf> {
     let status = Command::new(repository.join("image/assemble-disk"))
         .arg(image)
         .arg(configuration)
         .arg(output)
+        .arg(installed.manifest)
+        .arg(installed.bundle)
         .status()
         .context("running image/assemble-disk")?;
     if !status.success() {
@@ -276,6 +297,11 @@ fn generated_password() -> String {
     amafu_api::authentication::generate_token().chars().filter(char::is_ascii_alphanumeric).take(24).collect()
 }
 
+struct LabImages<'a> {
+    prepared: &'a PreparedImages,
+    public_key: &'a str,
+}
+
 async fn create_nodes(
     repository: &Path,
     lxd: &LxdClient,
@@ -283,17 +309,36 @@ async fn create_nodes(
     topology: &LabTopology,
     authority: &CertificateAuthority,
     identities: &[amafu_api::TokenIdentity],
+    images: &LabImages<'_>,
 ) -> anyhow::Result<Vec<String>> {
     let image = repository.join(&settings.image_directory);
     let work = repository.join("target/rig/work");
     std::fs::create_dir_all(&work)?;
+    let manifest = work.join("installed-image.json");
+    std::fs::write(&manifest, serde_json::to_vec_pretty(&images.prepared.images.installed)?)?;
+    let bundle = images
+        .prepared
+        .files
+        .iter()
+        .find(|(name, _)| name == "installed.tar")
+        .map(|(_, path)| path.clone())
+        .context("the installed image bundle was not prepared")?;
+    let installed = InstalledImage { manifest: &manifest, bundle: &bundle };
     let mut fingerprints = Vec::new();
     for node in &topology.nodes {
         let credentials = issue_node_credentials(settings, authority, node)?;
-        let configuration = node_configuration(settings, topology, node, &credentials, identities.to_vec())?;
+        let configuration = node_configuration(
+            settings,
+            topology,
+            node,
+            &credentials,
+            identities.to_vec(),
+            images.public_key,
+        )?;
         let configuration_path = work.join(format!("{}-configuration.yaml", node.name()));
         std::fs::write(&configuration_path, serde_yaml_ng::to_string(&configuration)?)?;
-        let tarball = assemble_disk(repository, &image, &configuration_path, &work.join(node.name()))?;
+        let tarball =
+            assemble_disk(repository, &image, &configuration_path, &work.join(node.name()), &installed)?;
         let fingerprint = lxd.upload_image(&tarball).await?;
         lxd.request(Method::POST, "/1.0/instances", Some(instance_definition(settings, node, &fingerprint)))
             .await?;
@@ -324,7 +369,17 @@ pub async fn up(
     let authority = CertificateAuthority::generate("Amafu lab certificate authority")?;
     crate::ceph::create(&lxd, &settings, &topology, &ceph_password, &authority).await?;
     let (tokens, identities) = client_tokens(OffsetDateTime::now_utc())?;
-    let fingerprints = create_nodes(repository, &lxd, &settings, &topology, &authority, &identities).await?;
+    let (signing_key, signing_document) = ImageSigningKey::generate()?;
+    let prepared = crate::node_images::prepare(
+        &image,
+        &repository.join("target/rig/images"),
+        topology.nfs_server.underlay_address,
+        &signing_key,
+    )?;
+    let public_key = signing_key.public_key_hexadecimal();
+    let lab_images = LabImages { prepared: &prepared, public_key: &public_key };
+    let fingerprints =
+        create_nodes(repository, &lxd, &settings, &topology, &authority, &identities, &lab_images).await?;
     let server = ServerCredentials {
         certificate_authority: authority.certificate_pem.clone(),
         certificate: String::new(),
@@ -339,7 +394,8 @@ pub async fn up(
         image_fingerprints: fingerprints,
         nfs: Some(nfs),
         block_backends: vec![(String::from("nvme-tcp"), nvme)],
-        node_images: None,
+        node_images: Some(prepared.images.clone()),
+        image_signing_key: hex::encode(signing_document),
     };
     save_state(repository, &state)?;
     let waited = crate::switch::wait_until_ready(&lxd).await?;
@@ -352,6 +408,8 @@ pub async fn up(
     }
     let waited = crate::nfs::wait_until_serving(&lxd, &state.topology).await?;
     tracing::info!(seconds = waited.as_secs(), "the NFS server is serving");
+    crate::node_images::publish(&lxd, &state.topology.nfs_server.name, &prepared).await?;
+    tracing::info!("the node images are published");
     let waited = crate::spdk::wait_until_serving(&lxd, &state.topology).await?;
     tracing::info!(seconds = waited.as_secs(), "the NVMe/TCP target is serving");
     let ceph =
