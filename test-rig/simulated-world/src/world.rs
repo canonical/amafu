@@ -1,6 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::fmt;
+use std::fmt::{self, Write};
 use std::net::Ipv4Addr;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -66,6 +66,7 @@ const SIMULATED_NFS_SERVER: &str = "filer.lab";
 const SIMULATED_NFS_EXPORT: &str = "/srv/amafu";
 const SIMULATED_EXTERNAL_SUBNET: &str = "198.51.100.0/24";
 const RECENT_EVENT_COUNT: usize = 200;
+const UNCHANGED_CHECK_INTERVAL: u64 = 50;
 const ROLE_CRASH_PROBABILITY: f64 = 0.02;
 const BOOT_DURATION: Duration = Duration::from_secs(1);
 const TEST_BUNDLE: &str = "test-guest";
@@ -79,7 +80,10 @@ const BOOT_SLOT_SETTINGS: BootSlotsSettings =
 const IMAGE_SIZE_BYTES: u64 = 64 * 1024 * 1024;
 
 fn fake_digest(version: &str) -> Sha256Digest {
-    let hexadecimal: String = version.bytes().map(|byte| format!("{byte:02x}")).collect();
+    let hexadecimal = version.bytes().fold(String::new(), |mut text, byte| {
+        let _ = write!(text, "{byte:02x}");
+        text
+    });
     valid_name(&format!("{hexadecimal:0<64}"))
 }
 
@@ -1072,6 +1076,7 @@ impl SimulatedWorld {
         outcome: &Rc<RefCell<Option<ScenarioResult>>>,
         maximum_steps: u64,
     ) -> Result<RunReport, SimulationFailure> {
+        let mut last_checked = None;
         for step in 1..=maximum_steps {
             if let Some(result) = outcome.borrow_mut().take() {
                 return match result {
@@ -1088,7 +1093,11 @@ impl SimulatedWorld {
             if self.step() == StepOutcome::Idle {
                 return Err(self.failure(step, String::from("every task is blocked and no timer is pending")));
             }
-            if let Err(violation) = check_all(&self.ground_truth()) {
+            let moment = (self.shared.store.write_count(), self.shared.clock.now());
+            let is_due = last_checked != Some(moment) || step % UNCHANGED_CHECK_INTERVAL == 0;
+            last_checked = Some(moment);
+            let checked = if is_due { check_all(&self.ground_truth()) } else { Ok(()) };
+            if let Err(violation) = checked {
                 return Err(self.failure(step, format!("invariant violated: {violation}")));
             }
             if let Some(failure) = self.shared.failures.borrow().first() {

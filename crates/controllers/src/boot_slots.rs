@@ -123,6 +123,13 @@ impl BootSlotsController {
         Duration::try_from(now - since).unwrap_or_default()
     }
 
+    async fn hosts_running_vms(&self) -> Result<bool, ActionError> {
+        Ok(list::<Vm>(self.store.as_ref(), None, Consistency::Linearizable).await?.iter().any(|vm| {
+            vm.status.node.as_ref() == Some(&self.node)
+                && (vm.status.phase == VmPhase::Running || vm.status.is_migrating())
+        }))
+    }
+
     async fn surrender_and_reboot(&self) -> Result<(), ActionError> {
         if let Some(held) = self.lease.surrender()
             && let Err(error) = self.leases.surrender(held.epoch).await
@@ -138,37 +145,35 @@ fn boot_slot_failure(error: amafu_interfaces::BootSlotError) -> ActionError {
 }
 
 impl Controller for BootSlotsController {
-    type Key = NodeName;
+    type Key = ();
     type Observation = BootSlotsObservation;
     type Action = BootSlotsAction;
 
     const NAME: &'static str = "boot-slots";
-    const WATCHES: &'static [WatchedKind<NodeName>] = &[
-        WatchedKind {
-            kind: "Node",
-            mapping: KeyMapping::ObjectKey(|reference| NodeName::new(reference.name.as_str()).ok()),
-        },
-        WatchedKind { kind: "Vm", mapping: KeyMapping::EveryKey },
-    ];
+    const WATCHES: &'static [WatchedKind<()>] =
+        &[WatchedKind { kind: "Node", mapping: KeyMapping::EveryKey }];
 
-    async fn discover_keys(&self) -> Result<Vec<NodeName>, ActionError> {
-        Ok(vec![self.node.clone()])
+    async fn discover_keys(&self) -> Result<Vec<()>, ActionError> {
+        Ok(vec![()])
     }
 
-    async fn observe(&self, _key: &NodeName) -> Result<BootSlotsObservation, ActionError> {
+    async fn observe(&self, _key: &()) -> Result<BootSlotsObservation, ActionError> {
         let now = self.clock.now();
         let node =
             get::<Node>(self.store.as_ref(), &node_reference(&self.node), Consistency::Linearizable).await?;
         let is_healthy = self.lease.epoch_valid_at(now).is_some()
             && node.as_ref().is_some_and(|node| node.status.is_ready());
-        let hosts_running_vms =
-            list::<Vm>(self.store.as_ref(), None, Consistency::Linearizable).await?.iter().any(|vm| {
-                vm.status.node.as_ref() == Some(&self.node)
-                    && (vm.status.phase == VmPhase::Running || vm.status.is_migrating())
-            });
+        let report = self.boot_slots.report();
+        let request = node.and_then(|node| node.specification.image);
+        let is_due_to_boot = request.as_ref().is_some_and(|request| {
+            request.should_boot
+                && report.holds_in_inactive_slot(&request.image)
+                && !report.runs(&request.image)
+        });
+        let hosts_running_vms = is_due_to_boot && self.hosts_running_vms().await?;
         Ok(BootSlotsObservation {
-            report: self.boot_slots.report(),
-            request: node.and_then(|node| node.specification.image),
+            report,
+            request,
             healthy_for: self.healthy_for(is_healthy, now),
             running_for: Duration::try_from(now - self.started_at).unwrap_or_default(),
             hosts_running_vms,
@@ -179,7 +184,7 @@ impl Controller for BootSlotsController {
         plan_boot_slots(observation, &self.settings)
     }
 
-    async fn apply(&self, _key: &NodeName, action: BootSlotsAction) -> Result<(), ActionError> {
+    async fn apply(&self, _key: &(), action: BootSlotsAction) -> Result<(), ActionError> {
         match action {
             BootSlotsAction::WriteInactiveSlot(image) => {
                 tracing::info!(node = %self.node, image = %image.identity(), "writing the inactive boot slot");
@@ -202,7 +207,7 @@ impl Controller for BootSlotsController {
     }
 
     fn revisit_after(&self, observation: &BootSlotsObservation) -> Option<Duration> {
-        (!observation.report.is_confirmed()).then_some(UNCONFIRMED_REVISIT)
+        (!observation.report.is_confirmed() || observation.hosts_running_vms).then_some(UNCONFIRMED_REVISIT)
     }
 }
 
