@@ -250,4 +250,86 @@ mod resuming {
         assert_eq!(finished.status.outcome, Some(OperationOutcome::Cancelled));
         assert_eq!(harness.ledger.lock().unwrap().undos, vec![0]);
     }
+
+    fn upgrade_of_two_nodes() -> OperationSpecification {
+        let image = amafu_domain::node_image::NodeImage {
+            version: String::from("0.2.0"),
+            feature_level: amafu_domain::features::FeatureLevel(1),
+            digest: "d".repeat(64).parse().unwrap(),
+            size_bytes: 1024,
+            url: String::from("https://images.example/node-image.tar"),
+            signature: "0".repeat(128),
+        };
+        let wave = amafu_domain::upgrade::UpgradeWave {
+            nodes: vec![NodeName::new("node-1").unwrap(), NodeName::new("node-2").unwrap()],
+        };
+        OperationSpecification::upgrade(amafu_domain::upgrade::UpgradePlan {
+            image,
+            waves: vec![wave],
+            health_deadline_seconds: 600,
+            soak_seconds: 30,
+            is_rollback: false,
+        })
+    }
+
+    #[test]
+    fn an_upgrade_resumes_at_the_right_step_after_a_crash_between_any_two_steps() {
+        let step_count = upgrade_of_two_nodes().steps.len();
+        for crashing_step in 0..step_count {
+            let harness = Harness::new(
+                upgrade_of_two_nodes(),
+                BTreeMap::from([(crashing_step, Behaviour::CrashesAfterEffect)]),
+            );
+            let finished = harness.advance_until_finished();
+            assert_eq!(
+                finished.status.outcome,
+                Some(OperationOutcome::Succeeded),
+                "crash after step {crashing_step}"
+            );
+            assert_eq!(
+                harness.ledger.lock().unwrap().runs,
+                (0..step_count).collect::<Vec<_>>(),
+                "crash after step {crashing_step}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_node_that_falls_back_ends_the_upgrade_without_undoing_the_nodes_before_it() {
+        let upgrade = upgrade_of_two_nodes();
+        let second_reboot = upgrade
+            .steps
+            .iter()
+            .rposition(|step| matches!(step, StepSpecification::RebootIntoSlot { .. }))
+            .unwrap();
+        let harness = Harness::new(upgrade, BTreeMap::from([(second_reboot, Behaviour::FailsPermanently)]));
+        let finished = harness.advance_until_finished();
+        assert!(
+            matches!(&finished.status.outcome, Some(OperationOutcome::Failed { reason }) if reason.contains("reboot-into-slot"))
+        );
+        assert_eq!(finished.status.completed_steps, second_reboot);
+        assert_eq!(harness.ledger.lock().unwrap().undos, Vec::<usize>::new());
+    }
+
+    #[test]
+    fn a_cancelled_upgrade_stops_at_the_next_step_and_leaves_upgraded_nodes_alone() {
+        let upgrade = upgrade_of_two_nodes();
+        let harness = Harness::new(upgrade, BTreeMap::new());
+        for _ in 0..5 {
+            harness.advance_once().unwrap();
+        }
+        let mut operation = harness.operation();
+        let reached = operation.status.completed_steps;
+        operation.specification.is_cancelled = true;
+        block_on(apply::<Operation>(
+            harness.store.as_ref(),
+            &reference(),
+            Change::UpdateSpecification { expected_generation: None, specification: operation.specification },
+        ))
+        .unwrap();
+        let finished = harness.advance_until_finished();
+        assert_eq!(finished.status.outcome, Some(OperationOutcome::Cancelled));
+        assert_eq!(finished.status.completed_steps, reached);
+        assert_eq!(harness.ledger.lock().unwrap().undos, Vec::<usize>::new());
+    }
 }
