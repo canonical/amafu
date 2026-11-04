@@ -61,6 +61,10 @@ impl Storage for BuiltInStorage {
                 management,
                 management_user,
                 management_password,
+                command_endpoint,
+                command_user,
+                command_key,
+                command_certificate_authority,
             } => Arc::new(CephCluster::new(&CephSettings {
                 monitors,
                 pool,
@@ -69,6 +73,10 @@ impl Storage for BuiltInStorage {
                 management,
                 management_user,
                 management_password,
+                command_endpoint,
+                command_user,
+                command_key,
+                command_certificate_authority: command_certificate_authority.as_deref(),
             })?),
         })
     }

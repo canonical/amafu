@@ -5,7 +5,7 @@ use std::sync::{Mutex, PoisonError};
 use amafu_domain::NodeName;
 use amafu_domain::kinds::volume::ProvisionedVolume;
 use amafu_interfaces::{
-    ActionError, AttachTarget, StorageProtocol, StorageProvider, VolumeAttacher, VolumeRequest,
+    ActionError, AttachTarget, FencedNode, StorageProtocol, StorageProvider, VolumeAttacher, VolumeRequest,
 };
 
 use crate::qcow2::{self, Backing, BackingFormat};
@@ -97,7 +97,15 @@ impl StorageProvider for LocalDiskProvider {
         })
     }
 
-    async fn revoke_node(&self, _node: &NodeName) -> Result<(), ActionError> {
+    async fn revoke_node(&self, _node: &FencedNode) -> Result<(), ActionError> {
+        Ok(())
+    }
+
+    async fn has_revoked_node(&self, _node: &FencedNode) -> Result<bool, ActionError> {
+        Ok(true)
+    }
+
+    async fn readmit_node(&self, _node: &FencedNode) -> Result<(), ActionError> {
         Ok(())
     }
 }

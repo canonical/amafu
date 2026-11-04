@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 use amafu_domain::NodeName;
 use amafu_domain::kinds::volume::ProvisionedVolume;
 use amafu_interfaces::{
-    ActionError, AttachTarget, StorageProtocol, StorageProvider, VolumeAttacher, VolumeRequest,
+    ActionError, AttachTarget, FencedNode, StorageProtocol, StorageProvider, VolumeAttacher, VolumeRequest,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -224,15 +224,11 @@ impl StorageProvider for SpdkTarget {
         Ok(AttachTarget::NvmeTcp { qualified_name, addresses: self.addresses.clone() })
     }
 
-    async fn revoke_node(&self, node: &NodeName) -> Result<(), ActionError> {
-        let host = host_qualified_name(node);
+    async fn revoke_node(&self, node: &FencedNode) -> Result<(), ActionError> {
+        let host = host_qualified_name(&node.name);
         for subsystem in self.subsystems().await? {
-            let allows = subsystem["hosts"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .any(|entry| entry["nqn"].as_str() == Some(&host));
-            if let (true, Some(qualified_name)) = (allows, subsystem["nqn"].as_str()) {
+            if let (true, Some(qualified_name)) = (allows_host(&subsystem, &host), subsystem["nqn"].as_str())
+            {
                 self.call_tolerating(
                     "nvmf_subsystem_remove_host",
                     json!({"nqn": qualified_name, "host": host}),
@@ -241,6 +237,15 @@ impl StorageProvider for SpdkTarget {
                 .await?;
             }
         }
+        Ok(())
+    }
+
+    async fn has_revoked_node(&self, node: &FencedNode) -> Result<bool, ActionError> {
+        let host = host_qualified_name(&node.name);
+        Ok(!self.subsystems().await?.iter().any(|subsystem| allows_host(subsystem, &host)))
+    }
+
+    async fn readmit_node(&self, _node: &FencedNode) -> Result<(), ActionError> {
         Ok(())
     }
 }

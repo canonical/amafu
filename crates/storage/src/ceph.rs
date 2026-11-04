@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use amafu_domain::NodeName;
 use amafu_domain::kinds::volume::ProvisionedVolume;
 use amafu_interfaces::{
-    ActionError, AttachTarget, StorageProtocol, StorageProvider, VolumeAttacher, VolumeRequest,
+    ActionError, AttachTarget, FencedNode, StorageProtocol, StorageProvider, VolumeAttacher, VolumeRequest,
 };
 use reqwest::StatusCode;
 use serde_json::{Value, json};
@@ -16,6 +16,7 @@ const RBD_REMOVE: &str = "/sys/bus/rbd/remove_single_major";
 const DASHBOARD_ACCEPT: &str = "application/vnd.ceph.api.v1.0+json";
 const DEVICE_WAIT: Duration = Duration::from_secs(2);
 const DEVICE_POLL: Duration = Duration::from_millis(100);
+const BLOCKLIST_SECONDS: f64 = 3600.0;
 
 pub struct CephCluster {
     monitors: Vec<SocketAddrV4>,
@@ -25,6 +26,9 @@ pub struct CephCluster {
     management: String,
     management_user: String,
     management_password: String,
+    command_endpoint: String,
+    command_user: String,
+    command_key: String,
     http: reqwest::Client,
 }
 
@@ -36,6 +40,10 @@ pub struct CephSettings<'settings> {
     pub management: &'settings str,
     pub management_user: &'settings str,
     pub management_password: &'settings str,
+    pub command_endpoint: &'settings str,
+    pub command_user: &'settings str,
+    pub command_key: &'settings str,
+    pub command_certificate_authority: Option<&'settings str>,
 }
 
 fn unreachable_dashboard(error: impl std::fmt::Display) -> ActionError {
@@ -44,7 +52,10 @@ fn unreachable_dashboard(error: impl std::fmt::Display) -> ActionError {
 
 impl CephCluster {
     pub fn new(settings: &CephSettings<'_>) -> Result<Self, ActionError> {
-        let http = crate::management::management_client(Duration::from_secs(30))?;
+        let http = crate::management::management_client_trusting(
+            Duration::from_secs(30),
+            settings.command_certificate_authority,
+        )?;
         Ok(Self {
             monitors: settings.monitors.to_vec(),
             pool: settings.pool.to_owned(),
@@ -53,8 +64,31 @@ impl CephCluster {
             management: settings.management.trim_end_matches('/').to_owned(),
             management_user: settings.management_user.to_owned(),
             management_password: settings.management_password.to_owned(),
+            command_endpoint: settings.command_endpoint.trim_end_matches('/').to_owned(),
+            command_user: settings.command_user.to_owned(),
+            command_key: settings.command_key.to_owned(),
             http,
         })
+    }
+
+    async fn command(&self, command: Value) -> Result<String, ActionError> {
+        let response = self
+            .http
+            .post(format!("{}/request?wait=1", self.command_endpoint))
+            .basic_auth(&self.command_user, Some(&self.command_key))
+            .json(&command)
+            .send()
+            .await
+            .map_err(unreachable_commands)?;
+        if !response.status().is_success() {
+            return Err(unreachable_commands(format!(
+                "{} answered {}",
+                command["prefix"],
+                response.status()
+            )));
+        }
+        let answer: Value = response.json().await.map_err(unreachable_commands)?;
+        command_output(&answer)
     }
 
     async fn token(&self) -> Result<String, ActionError> {
@@ -176,9 +210,52 @@ impl StorageProvider for CephCluster {
         })
     }
 
-    async fn revoke_node(&self, _node: &NodeName) -> Result<(), ActionError> {
+    async fn revoke_node(&self, node: &FencedNode) -> Result<(), ActionError> {
+        let address = blocklisted_address(node)?;
+        self.command(json!({
+            "prefix": "osd blocklist",
+            "blocklistop": "add",
+            "addr": address,
+            "expire": BLOCKLIST_SECONDS,
+        }))
+        .await?;
         Ok(())
     }
+
+    async fn has_revoked_node(&self, node: &FencedNode) -> Result<bool, ActionError> {
+        let address = blocklisted_address(node)?;
+        let listed = self.command(json!({"prefix": "osd blocklist ls", "format": "json"})).await?;
+        let entries: Vec<Value> = serde_json::from_str(&listed).map_err(unreachable_commands)?;
+        Ok(entries.iter().any(|entry| entry["addr"].as_str() == Some(address.as_str())))
+    }
+
+    async fn readmit_node(&self, node: &FencedNode) -> Result<(), ActionError> {
+        let address = blocklisted_address(node)?;
+        self.command(json!({"prefix": "osd blocklist", "blocklistop": "rm", "addr": address})).await?;
+        Ok(())
+    }
+}
+
+fn blocklisted_address(node: &FencedNode) -> Result<String, ActionError> {
+    let address = node
+        .address
+        .ok_or_else(|| ActionError::invalid(format!("{} has no underlay address to blocklist", node.name)))?;
+    Ok(format!("{address}:0/0"))
+}
+
+fn unreachable_commands(error: impl std::fmt::Display) -> ActionError {
+    ActionError::retryable(format!("the Ceph command endpoint: {error}"))
+}
+
+fn command_output(answer: &Value) -> Result<String, ActionError> {
+    if let Some(failure) = answer["failed"].as_array().and_then(|failed| failed.first()) {
+        return Err(unreachable_commands(format!("the command failed: {}", failure["outs"])));
+    }
+    let finished = answer["finished"]
+        .as_array()
+        .and_then(|finished| finished.first())
+        .ok_or_else(|| unreachable_commands("the command did not finish"))?;
+    Ok(finished["outb"].as_str().unwrap_or_default().to_owned())
 }
 
 fn read_attribute(path: &Path) -> Option<String> {
@@ -285,8 +362,31 @@ mod tests {
             management: "http://192.0.2.42:8080",
             management_user: "amafu",
             management_password: "secret",
+            command_endpoint: "https://192.0.2.42:8003",
+            command_user: "amafu",
+            command_key: "secret",
+            command_certificate_authority: None,
         });
         assert!(cluster.is_ok());
+    }
+
+    #[test]
+    fn a_node_is_blocklisted_by_its_whole_underlay_address() {
+        let node = FencedNode {
+            name: NodeName::new("node-1").unwrap(),
+            address: Some("10.216.0.11".parse().unwrap()),
+        };
+        assert_eq!(blocklisted_address(&node).unwrap(), "10.216.0.11:0/0");
+        let unaddressed = FencedNode { address: None, ..node };
+        assert!(blocklisted_address(&unaddressed).is_err());
+    }
+
+    #[test]
+    fn a_command_answer_yields_its_output_or_its_failure() {
+        let finished = json!({"finished": [{"outb": "[]", "outs": ""}], "failed": []});
+        assert_eq!(command_output(&finished).unwrap(), "[]");
+        let failed = json!({"finished": [], "failed": [{"outs": "permission denied"}]});
+        assert!(command_output(&failed).is_err());
     }
 
     #[test]

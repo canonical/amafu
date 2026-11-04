@@ -60,7 +60,17 @@ pub trait StorageProvider: Send + Sync {
         node: &NodeName,
     ) -> Result<AttachTarget, ActionError>;
 
-    async fn revoke_node(&self, node: &NodeName) -> Result<(), ActionError>;
+    async fn revoke_node(&self, node: &FencedNode) -> Result<(), ActionError>;
+
+    async fn has_revoked_node(&self, node: &FencedNode) -> Result<bool, ActionError>;
+
+    async fn readmit_node(&self, node: &FencedNode) -> Result<(), ActionError>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FencedNode {
+    pub name: NodeName,
+    pub address: Option<std::net::Ipv4Addr>,
 }
 
 #[async_trait::async_trait]

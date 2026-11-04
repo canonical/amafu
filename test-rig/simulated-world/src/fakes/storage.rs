@@ -6,7 +6,8 @@ use amafu_domain::kinds::storage_backend::StorageProviderSpecification;
 use amafu_domain::kinds::volume::ProvisionedVolume;
 use amafu_domain::{NodeName, ObjectId};
 use amafu_interfaces::{
-    ActionError, AttachTarget, Storage, StorageProtocol, StorageProvider, VolumeAttacher, VolumeRequest,
+    ActionError, AttachTarget, FencedNode, Storage, StorageProtocol, StorageProvider, VolumeAttacher,
+    VolumeRequest,
 };
 
 use crate::lock::lock;
@@ -15,6 +16,7 @@ use crate::lock::lock;
 pub struct FakeBackends {
     volumes: Mutex<BTreeMap<String, BTreeSet<ObjectId>>>,
     unreachable: Mutex<BTreeSet<String>>,
+    revoked: Mutex<BTreeSet<(String, NodeName)>>,
 }
 
 impl FakeBackends {
@@ -30,6 +32,11 @@ impl FakeBackends {
         } else {
             unreachable.insert(backend.to_owned());
         }
+    }
+
+    #[must_use]
+    pub fn is_revoked(&self, backend: &str, node: &NodeName) -> bool {
+        lock(&self.revoked).contains(&(backend.to_owned(), node.clone()))
     }
 
     #[must_use]
@@ -121,7 +128,20 @@ impl StorageProvider for FakeProvider {
         })
     }
 
-    async fn revoke_node(&self, _node: &NodeName) -> Result<(), ActionError> {
+    async fn revoke_node(&self, node: &FencedNode) -> Result<(), ActionError> {
+        self.check().await?;
+        lock(&self.backends.revoked).insert((self.key.clone(), node.name.clone()));
+        Ok(())
+    }
+
+    async fn has_revoked_node(&self, node: &FencedNode) -> Result<bool, ActionError> {
+        self.check().await?;
+        Ok(self.specification.is_file_based() || self.backends.is_revoked(&self.key, &node.name))
+    }
+
+    async fn readmit_node(&self, node: &FencedNode) -> Result<(), ActionError> {
+        self.check().await?;
+        lock(&self.backends.revoked).remove(&(self.key.clone(), node.name.clone()));
         Ok(())
     }
 }
@@ -203,6 +223,10 @@ pub fn simulated_ceph_rbd() -> StorageProviderSpecification {
         management: String::from("http://ceph.lab:8080"),
         management_user: String::from("admin"),
         management_password: String::from("simulated"),
+        command_endpoint: String::from("https://ceph.lab:8003"),
+        command_user: String::from("amafu"),
+        command_key: String::from("simulated"),
+        command_certificate_authority: None,
     }
 }
 

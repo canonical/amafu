@@ -42,6 +42,11 @@ pub enum StorageProviderSpecification {
         management: String,
         management_user: String,
         management_password: String,
+        command_endpoint: String,
+        command_user: String,
+        command_key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command_certificate_authority: Option<String>,
     },
 }
 
@@ -62,6 +67,10 @@ fn is_host(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 253
         && value.chars().all(|character| character.is_ascii_alphanumeric() || ".-".contains(character))
+}
+
+fn is_certificate(text: &str) -> bool {
+    text.trim_start().starts_with("-----BEGIN CERTIFICATE-----")
 }
 
 fn is_management_url(value: &str) -> bool {
@@ -143,7 +152,26 @@ impl Validate for StorageBackendSpecification {
                 management,
                 management_user,
                 management_password,
+                command_endpoint,
+                command_user,
+                command_key,
+                command_certificate_authority,
             } => {
+                error.check(
+                    command_certificate_authority.as_deref().is_none_or(is_certificate),
+                    "specification.provider.command_certificate_authority",
+                    "must be a PEM certificate",
+                );
+                error.check(
+                    is_management_url(command_endpoint),
+                    "specification.provider.command_endpoint",
+                    "must be an HTTP URL",
+                );
+                error.check(
+                    is_plain_word(command_user) && is_secret(command_key),
+                    "specification.provider.command_user",
+                    "the command credentials must be printable",
+                );
                 error.check(
                     !monitors.is_empty(),
                     "specification.provider.monitors",
@@ -235,6 +263,10 @@ mod tests {
                 management: String::from("ftp://ceph"),
                 management_user: String::from("admin"),
                 management_password: String::from("secret"),
+                command_endpoint: String::from("https://ceph:8003"),
+                command_user: String::from("amafu"),
+                command_key: String::from("secret"),
+                command_certificate_authority: None,
             },
         };
         assert!(ceph.validate().is_err());

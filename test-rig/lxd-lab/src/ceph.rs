@@ -1,7 +1,8 @@
-use std::net::SocketAddrV4;
+use std::net::{IpAddr, SocketAddrV4};
 use std::time::Duration;
 
 use amafu_domain::kinds::storage_backend::StorageProviderSpecification;
+use amafu_scenario::{CertificateAuthority, TlsIdentity};
 
 use crate::lxd::LxdClient;
 use crate::machines::{
@@ -13,6 +14,9 @@ const READY_MARKER: &str = "/var/lib/amafu-ceph-ready";
 const FAILED_MARKER: &str = "/var/lib/amafu-ceph-failed";
 const SETUP_LOG: &str = "/var/log/amafu-ceph-setup.log";
 const KEY_FILE: &str = "/root/amafu-client.key";
+const COMMAND_KEY_FILE: &str = "/root/amafu-command.key";
+const COMMAND_PORT: u16 = 8003;
+const COMMAND_USER: &str = "amafu";
 const READY_TIMEOUT: Duration = Duration::from_secs(1800);
 const MONITOR_PORT: u16 = 6789;
 const DASHBOARD_PORT: u16 = 8080;
@@ -21,10 +25,27 @@ const CLIENT: &str = "amafu";
 const DASHBOARD_USER: &str = "amafu";
 const CHANNEL: &str = "squid/stable";
 
-fn user_data(settings: &LabSettings, address: &str, password: &str) -> String {
+fn indented(text: &str) -> String {
+    text.lines().map(|line| format!("      {line}")).collect::<Vec<_>>().join("\n")
+}
+
+fn user_data(
+    settings: &LabSettings,
+    address: &str,
+    password: &str,
+    command_identity: &TlsIdentity,
+) -> String {
     format!(
         r#"#cloud-config
 write_files:
+  - path: /root/command.crt
+    permissions: "0600"
+    content: |
+{certificate}
+  - path: /root/command.key
+    permissions: "0600"
+    content: |
+{private_key}
   - path: /usr/local/bin/amafu-ceph-setup
     permissions: "0755"
     content: |
@@ -50,11 +71,20 @@ write_files:
       $ceph dashboard ac-user-create {DASHBOARD_USER} -i /root/dashboard-password administrator
       $ceph mgr module disable dashboard
       $ceph mgr module enable dashboard
+      $ceph config-key set mgr/restful/crt -i /root/command.crt
+      $ceph config-key set mgr/restful/key -i /root/command.key
+      $ceph config set mgr mgr/restful/server_addr {address}
+      $ceph config set mgr mgr/restful/server_port {COMMAND_PORT}
+      $ceph mgr module disable restful
+      $ceph mgr module enable restful
+      $ceph restful create-key {COMMAND_USER} > {COMMAND_KEY_FILE}
       touch {READY_MARKER}
 runcmd:
   - [sh, -c, "/usr/local/bin/amafu-ceph-setup > {SETUP_LOG} 2>&1 || touch {FAILED_MARKER}"]
 "#,
         network = settings.underlay,
+        certificate = indented(&command_identity.certificate_pem),
+        private_key = indented(&command_identity.private_key_pem),
     )
 }
 
@@ -63,10 +93,12 @@ pub async fn create(
     settings: &LabSettings,
     topology: &LabTopology,
     password: &str,
+    authority: &CertificateAuthority,
 ) -> anyhow::Result<()> {
     let machine = &topology.ceph;
     let size = MachineSize { cpu_count: 2, memory_mebibytes: 4096, disk_gibibytes: 30 };
-    let user_data = user_data(settings, &machine.underlay_address.to_string(), password);
+    let command_identity = authority.issue_server(&machine.name, &[IpAddr::V4(machine.underlay_address)])?;
+    let user_data = user_data(settings, &machine.underlay_address.to_string(), password, &command_identity);
     create_machine(lxd, definition(settings, machine, &size, &MachineSource::Ubuntu, &user_data)).await
 }
 
@@ -74,10 +106,12 @@ pub async fn wait_until_serving(
     lxd: &LxdClient,
     topology: &LabTopology,
     password: &str,
+    authority: &CertificateAuthority,
 ) -> anyhow::Result<StorageProviderSpecification> {
     let machine = &topology.ceph;
     wait_for_outcome(lxd, &machine.name, READY_MARKER, FAILED_MARKER, SETUP_LOG, READY_TIMEOUT).await?;
     let key = read_file(lxd, &machine.name, KEY_FILE).await?.trim().to_owned();
+    let command_key = read_file(lxd, &machine.name, COMMAND_KEY_FILE).await?.trim().to_owned();
     Ok(StorageProviderSpecification::CephRbd {
         monitors: vec![SocketAddrV4::new(machine.underlay_address, MONITOR_PORT)],
         pool: POOL.to_owned(),
@@ -86,5 +120,9 @@ pub async fn wait_until_serving(
         management: format!("http://{}:{DASHBOARD_PORT}", machine.underlay_address),
         management_user: DASHBOARD_USER.to_owned(),
         management_password: password.to_owned(),
+        command_endpoint: format!("https://{}:{COMMAND_PORT}", machine.underlay_address),
+        command_user: COMMAND_USER.to_owned(),
+        command_key,
+        command_certificate_authority: Some(authority.certificate_pem.clone()),
     })
 }
