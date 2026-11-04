@@ -10,13 +10,14 @@ use amafu_api::{
     ApiState, ClientIdentity, HttpTransport, NodeApiState, NodeAuthenticator, NodeClient, TokenAuthenticator,
     Transport, node_router, router,
 };
+use amafu_audit_export::BuiltInAuditSinks;
 use amafu_controllers::node_lease::{LeaseKeeper, LeaseKeeperSettings, feed_while_leased};
 use amafu_controllers::{
-    BootSlotsController, BootSlotsServices, BootSlotsSettings, CertificateRevocationController,
-    ComputeController, ComputeServices, ExternalNetworkController, FloatingIpController, ImageController,
-    LocalVolumeController, NetworkController, NodeController, NodeHealthController, NodeIdentity,
-    NodeNetworkController, OperationSteps, OperationsController, SchedulerController,
-    SecurityGroupController, StorageBackendController, VolumeController,
+    AuditExportController, BootSlotsController, BootSlotsServices, BootSlotsSettings,
+    CertificateRevocationController, ComputeController, ComputeServices, ExternalNetworkController,
+    FloatingIpController, ImageController, LocalVolumeController, NetworkController, NodeController,
+    NodeHealthController, NodeIdentity, NodeNetworkController, OperationSteps, OperationsController,
+    SchedulerController, SecurityGroupController, StorageBackendController, VolumeController,
 };
 use amafu_domain::NodeName;
 use amafu_domain::ObjectId;
@@ -28,8 +29,8 @@ use amafu_hypervisor::{
 };
 use amafu_interfaces::{
     AuditEntry, AuditLog, BootSlots, Clock, CoreConnection, Datapath, Fence, GuestAgents, Hypervisor,
-    ImageStore, Leases, LocalServices, NodeLeaseAuthority, NodeLeaseState, RandomIdentifiers, Storage, Store,
-    StoreError, Watchdog,
+    ImageStore, Leases, LocalServices, NodeLeaseAuthority, NodeLeaseState, RandomIdentifiers,
+    SequencedAuditEntry, Storage, Store, StoreError, Watchdog,
 };
 use amafu_network::{KernelDatapath, LocalServicesServer};
 use amafu_reconciler::{Controller, ReconcilerSettings, StepRegistry, run_controller, run_singleton};
@@ -82,6 +83,10 @@ impl AuditLog for AuditKeptByTheCore {
 
     async fn find(&self, _request_id: uuid::Uuid) -> Result<Option<AuditEntry>, StoreError> {
         Ok(None)
+    }
+
+    async fn entries_from(&self, _first: u64, _limit: usize) -> Result<Vec<SequencedAuditEntry>, StoreError> {
+        Ok(Vec::new())
     }
 
     async fn recent(&self, _limit: usize) -> Result<Vec<AuditEntry>, StoreError> {
@@ -369,6 +374,21 @@ fn recovery_roles(
     );
     let (operations_store, operations_clock, operations_steps) =
         (Arc::clone(&services.store), Arc::clone(&services.clock), Arc::new(steps) as Arc<dyn StepRegistry>);
+    let (export_store, export_audit) = (Arc::clone(&services.store), Arc::clone(&services.audit));
+    singleton_role(
+        roles,
+        "audit-export",
+        move |fence| {
+            AuditExportController::new(
+                Arc::clone(&export_store),
+                Arc::clone(&export_audit),
+                Arc::new(BuiltInAuditSinks),
+                fence,
+            )
+        },
+        services,
+        settings,
+    );
     singleton_role(
         roles,
         "operations",
@@ -572,7 +592,7 @@ fn subscribed_services(configuration: &NodeConfiguration) -> anyhow::Result<(Ser
         )?));
     }
     let cache = LocalStateCache::on_disk(&configuration.directories.data.join(STATE_CACHE_FILE));
-    let client = Arc::new(NodeClient::new(core_members));
+    let client = Arc::new(NodeClient::spreading(core_members, &configuration.node.name));
     let store = SubscribedStore::new(
         configuration.node.name.clone(),
         Arc::clone(&client) as Arc<dyn CoreConnection>,

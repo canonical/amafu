@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use amafu_domain::access::{Role, Verb};
+use amafu_domain::kinds::audit_sink::AuditSinkSpecification;
 use amafu_domain::{ObjectName, ProjectName};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -38,6 +41,21 @@ pub struct AuditEntry {
     pub outcome: AuditOutcome,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SequencedAuditEntry {
+    pub sequence: u64,
+    pub entry: AuditEntry,
+}
+
+#[async_trait::async_trait]
+pub trait AuditSinkDelivery: Send + Sync {
+    async fn deliver(&self, entries: &[SequencedAuditEntry]) -> Result<(), String>;
+}
+
+pub trait AuditSinks: Send + Sync {
+    fn sink(&self, specification: &AuditSinkSpecification) -> Result<Arc<dyn AuditSinkDelivery>, String>;
+}
+
 #[async_trait::async_trait]
 pub trait AuditLog: Send + Sync {
     async fn record(&self, entry: AuditEntry) -> Result<(), StoreError>;
@@ -47,6 +65,8 @@ pub trait AuditLog: Send + Sync {
     }
 
     async fn find(&self, request_id: Uuid) -> Result<Option<AuditEntry>, StoreError>;
+
+    async fn entries_from(&self, first: u64, limit: usize) -> Result<Vec<SequencedAuditEntry>, StoreError>;
 
     async fn recent(&self, limit: usize) -> Result<Vec<AuditEntry>, StoreError>;
 }

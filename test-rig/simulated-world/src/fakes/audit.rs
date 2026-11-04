@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 
-use amafu_interfaces::{AuditEntry, AuditLog, StoreError};
+use amafu_interfaces::{AuditEntry, AuditLog, SequencedAuditEntry, StoreError};
 use uuid::Uuid;
 
 use crate::lock::lock;
@@ -27,6 +27,15 @@ impl AuditLog for MemoryAuditLog {
     async fn record(&self, entry: AuditEntry) -> Result<(), StoreError> {
         lock(&self.entries).push(entry);
         Ok(())
+    }
+
+    async fn entries_from(&self, first: u64, limit: usize) -> Result<Vec<SequencedAuditEntry>, StoreError> {
+        let entries = lock(&self.entries);
+        Ok((first..)
+            .zip(entries.iter().skip(usize::try_from(first).unwrap_or(usize::MAX)))
+            .take(limit)
+            .map(|(sequence, entry)| SequencedAuditEntry { sequence, entry: entry.clone() })
+            .collect())
     }
 
     async fn find(&self, request_id: Uuid) -> Result<Option<AuditEntry>, StoreError> {

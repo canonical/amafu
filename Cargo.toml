@@ -22,7 +22,9 @@ amafu-guest-agent = { path = "crates/guest-agent" }
 amafu-hypervisor = { path = "crates/hypervisor" }
 amafu-installer = { path = "crates/installer" }
 amafu-api = { path = "crates/api" }
+amafu-audit-export = { path = "crates/audit-export" }
 amafu-boot-slots = { path = "crates/boot-slots" }
+amafu-dashboard = { path = "crates/dashboard" }
 amafu-system = { path = "crates/system" }
 amafu-network = { path = "crates/network" }
 amafu-node = { path = "crates/node" }

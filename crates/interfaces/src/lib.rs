@@ -19,7 +19,7 @@ pub mod subscription;
 pub mod tools;
 pub mod watchdog;
 
-pub use audit::{AuditEntry, AuditLog, AuditOutcome};
+pub use audit::{AuditEntry, AuditLog, AuditOutcome, AuditSinkDelivery, AuditSinks, SequencedAuditEntry};
 pub use boot_slots::{BootSlotError, BootSlots};
 pub use clock::Clock;
 pub use error::ActionError;

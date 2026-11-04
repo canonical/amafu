@@ -72,7 +72,7 @@ fn node_parts(
             .map(|transport| Arc::new(transport) as Arc<dyn Transport>)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let client = Arc::new(NodeClient::new(transports));
+    let client = Arc::new(NodeClient::spreading(transports, &name));
     let store = SubscribedStore::new(
         name.clone(),
         Arc::clone(&client) as Arc<dyn CoreConnection>,

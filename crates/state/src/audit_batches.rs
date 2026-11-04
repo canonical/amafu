@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use amafu_interfaces::{AuditEntry, AuditLog, StoreError};
+use amafu_interfaces::{AuditEntry, AuditLog, SequencedAuditEntry, StoreError};
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
@@ -67,6 +67,10 @@ impl AuditLog for BatchedAuditLog {
 
     async fn find(&self, request_id: Uuid) -> Result<Option<AuditEntry>, StoreError> {
         self.log.find(request_id).await
+    }
+
+    async fn entries_from(&self, first: u64, limit: usize) -> Result<Vec<SequencedAuditEntry>, StoreError> {
+        self.log.entries_from(first, limit).await
     }
 
     async fn recent(&self, limit: usize) -> Result<Vec<AuditEntry>, StoreError> {

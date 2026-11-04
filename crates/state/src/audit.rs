@@ -1,4 +1,4 @@
-use amafu_interfaces::{AuditEntry, AuditLog, StoreError};
+use amafu_interfaces::{AuditEntry, AuditLog, SequencedAuditEntry, StoreError};
 use quorium::Quorium;
 use uuid::Uuid;
 
@@ -67,6 +67,25 @@ impl AuditLog for QuoriumAuditLog {
             .append(sequence, bytes)
             .await
             .map_err(store_error)
+    }
+
+    async fn entries_from(&self, first: u64, limit: usize) -> Result<Vec<SequencedAuditEntry>, StoreError> {
+        let allocated = self.node.global::<AuditCursor>().allocated().await.map_err(store_error)?;
+        let mut found = Vec::new();
+        let mut segment = first / AUDIT_SEGMENT_CAPACITY;
+        while found.len() < limit && segment * AUDIT_SEGMENT_CAPACITY < allocated {
+            let mut entries =
+                self.node.entity::<AuditSegment>(segment).entries().await.map_err(store_error)?;
+            entries.sort_by_key(|(sequence, _)| *sequence);
+            for (sequence, bytes) in entries.into_iter().filter(|(sequence, _)| *sequence >= first) {
+                let entry =
+                    serde_json::from_slice(&bytes).map_err(|error| StoreError::Corrupt(error.to_string()))?;
+                found.push(SequencedAuditEntry { sequence, entry });
+            }
+            segment += 1;
+        }
+        found.truncate(limit);
+        Ok(found)
     }
 
     async fn find(&self, request_id: Uuid) -> Result<Option<AuditEntry>, StoreError> {

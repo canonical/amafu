@@ -91,6 +91,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "amafu-audit-export"
+version = "0.1.0"
+dependencies = [
+ "amafu-domain",
+ "amafu-interfaces",
+ "async-trait",
+ "hex",
+ "reqwest",
+ "ring",
+ "rustls",
+ "rustls-pemfile",
+ "serde_json",
+ "sha2",
+ "time",
+ "tokio",
+ "tokio-rustls",
+ "uuid",
+ "webpki-roots",
+]
+
+[[package]]
 name = "amafu-boot-slots"
 version = "0.1.0"
 dependencies = [
@@ -129,6 +150,7 @@ name = "amafu-command-line"
 version = "0.1.0"
 dependencies = [
  "amafu-api",
+ "amafu-dashboard",
  "amafu-domain",
  "amafu-installer",
  "amafu-interfaces",
@@ -155,6 +177,33 @@ dependencies = [
  "async-trait",
  "proptest",
  "time",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "amafu-dashboard"
+version = "0.1.0"
+dependencies = [
+ "amafu-api",
+ "amafu-domain",
+ "amafu-interfaces",
+ "amafu-simulated-world",
+ "async-trait",
+ "axum",
+ "base64",
+ "bytes",
+ "futures",
+ "hex",
+ "http",
+ "http-body-util",
+ "ring",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "time",
+ "tokio",
+ "tower",
  "tracing",
  "uuid",
 ]
@@ -324,6 +373,7 @@ name = "amafu-node"
 version = "0.1.0"
 dependencies = [
  "amafu-api",
+ "amafu-audit-export",
  "amafu-boot-slots",
  "amafu-controllers",
  "amafu-domain",

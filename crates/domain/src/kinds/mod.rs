@@ -1,3 +1,4 @@
+pub mod audit_sink;
 pub mod certificate_revocation;
 pub mod cluster_version;
 pub mod external_network;

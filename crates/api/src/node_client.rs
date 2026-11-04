@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use amafu_domain::kinds::node_lease::LeaseTerms;
-use amafu_domain::{ObjectReference, ProjectName};
+use amafu_domain::{NodeName, ObjectReference, ProjectName};
 use amafu_interfaces::{
     CoreConnection, NodeLeaseAuthority, NodeLeaseError, NodeLeaseGrant, SliceChange, SliceChanges,
     StoreError, StoredRecord,
@@ -63,6 +63,17 @@ impl NodeClient {
     #[must_use]
     pub fn new(core_members: Vec<Arc<dyn Transport>>) -> Self {
         Self { core_members, preferred: AtomicUsize::new(0), last_request_id: Mutex::new(None) }
+    }
+
+    #[must_use]
+    pub fn spreading(core_members: Vec<Arc<dyn Transport>>, node: &NodeName) -> Self {
+        let client = Self::new(core_members);
+        let spread = node
+            .as_str()
+            .bytes()
+            .fold(0_usize, |hash, byte| hash.wrapping_mul(31).wrapping_add(usize::from(byte)));
+        client.preferred.store(spread % client.core_members.len().max(1), Ordering::Relaxed);
+        client
     }
 
     #[must_use]

@@ -45,6 +45,14 @@ mod resuming {
             Ok(None)
         }
 
+        async fn entries_from(
+            &self,
+            _first: u64,
+            _limit: usize,
+        ) -> Result<Vec<amafu_interfaces::SequencedAuditEntry>, StoreError> {
+            Ok(Vec::new())
+        }
+
         async fn recent(&self, _limit: usize) -> Result<Vec<AuditEntry>, StoreError> {
             Ok(Vec::new())
         }
