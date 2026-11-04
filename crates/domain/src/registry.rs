@@ -11,6 +11,7 @@ use crate::kinds::image::Image;
 use crate::kinds::network::Network;
 use crate::kinds::network_endpoint::NetworkEndpoint;
 use crate::kinds::node::Node;
+use crate::kinds::operation::Operation;
 use crate::kinds::security_group::SecurityGroup;
 use crate::kinds::storage_backend::StorageBackend;
 use crate::kinds::vm::Vm;
@@ -91,12 +92,13 @@ impl KindDescriptor {
 }
 
 #[must_use]
-pub fn kinds() -> [KindDescriptor; 11] {
+pub fn kinds() -> [KindDescriptor; 12] {
     [
         KindDescriptor::of::<Node>(),
         KindDescriptor::of::<StorageBackend>(),
         KindDescriptor::of::<ExternalNetwork>(),
         KindDescriptor::of::<CertificateRevocation>(),
+        KindDescriptor::of::<Operation>(),
         KindDescriptor::of::<Vm>(),
         KindDescriptor::of::<Image>(),
         KindDescriptor::of::<Volume>(),
