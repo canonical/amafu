@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Amafu</title>
+<link rel="stylesheet" href="/style.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header class="banner">
+  <span class="brand">Amafu</span>
+  <nav id="navigation" hidden>
+    <button data-view="nodes">Nodes</button>
+    <button data-view="vms">VMs</button>
+    <button data-view="operations">Operations</button>
+    <button data-view="upgrade">Upgrade</button>
+    <button id="sign-out" class="secondary">Sign out</button>
+  </nav>
+</header>
+<main>
+  <form id="sign-in" class="card" hidden>
+    <h1>Sign in</h1>
+    <label>Token <input name="token" type="password" autocomplete="off" required></label>
+    <label>Project <input name="project" placeholder="optional"></label>
+    <button type="submit">Sign in</button>
+    <p id="sign-in-error" class="error" role="alert"></p>
+  </form>
+  <section id="view" hidden>
+    <h1 id="view-title"></h1>
+    <p id="view-error" class="error" role="alert"></p>
+    <table id="view-table"><thead></thead><tbody></tbody></table>
+  </section>
+</main>
+</body>
+</html>

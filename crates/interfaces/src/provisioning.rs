@@ -22,6 +22,7 @@ pub enum MachineState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Installation {
     pub user_data: String,
+    pub is_in_memory: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

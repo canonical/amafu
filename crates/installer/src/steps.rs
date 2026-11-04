@@ -90,6 +90,7 @@ impl DeployMachine {
                 &manifest,
                 configuration.as_bytes(),
             ),
+            is_in_memory: true,
         })
     }
 }

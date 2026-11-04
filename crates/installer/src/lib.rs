@@ -3,6 +3,7 @@ pub mod configuration;
 pub mod description;
 pub mod journal;
 pub mod maas;
+pub mod management;
 pub mod run;
 pub mod steps;
 pub mod user_data;

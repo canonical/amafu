@@ -1,0 +1,19 @@
+:root { --ink: #111; --muted: #666; --line: #d9d9d9; --accent: #0066cc; --danger: #c7162b; --paper: #fff; --page: #f7f7f7; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: Ubuntu, "Segoe UI", sans-serif; color: var(--ink); background: var(--page); }
+.banner { display: flex; align-items: center; gap: 2rem; padding: 0.75rem 1.5rem; background: #262626; color: #fff; }
+.brand { font-weight: 600; font-size: 1.1rem; }
+nav { display: flex; gap: 0.5rem; flex: 1; }
+nav button { background: transparent; color: #fff; border: 0; padding: 0.4rem 0.8rem; cursor: pointer; }
+nav button[aria-current="page"] { border-bottom: 2px solid #fff; }
+nav #sign-out { margin-left: auto; }
+main { max-width: 72rem; margin: 2rem auto; padding: 0 1.5rem; }
+.card { background: var(--paper); border: 1px solid var(--line); padding: 1.5rem; max-width: 26rem; }
+label { display: block; margin: 0.75rem 0; color: var(--muted); }
+input { display: block; width: 100%; padding: 0.5rem; margin-top: 0.25rem; border: 1px solid var(--line); font: inherit; }
+button { font: inherit; padding: 0.45rem 1rem; border: 1px solid var(--accent); background: var(--accent); color: #fff; cursor: pointer; }
+button.secondary, td button { background: var(--paper); color: var(--ink); border-color: var(--line); }
+table { width: 100%; border-collapse: collapse; background: var(--paper); border: 1px solid var(--line); }
+th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 400; }
+.error { color: var(--danger); min-height: 1.2em; }

@@ -187,7 +187,10 @@ impl MachineProvisioner for MaasClient {
         let user_data = base64::engine::general_purpose::STANDARD.encode(&installation.user_data);
         self.post(
             &format!("/machines/{}/?op=deploy", found.system_id),
-            &[("user_data", &user_data), ("ephemeral_deploy", "true")],
+            &[
+                ("user_data", &user_data),
+                ("ephemeral_deploy", if installation.is_in_memory { "true" } else { "false" }),
+            ],
         )
         .await?;
         Ok(())

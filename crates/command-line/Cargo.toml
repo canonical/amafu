@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 amafu-api.workspace = true
+amafu-dashboard.workspace = true
 amafu-domain.workspace = true
 amafu-installer.workspace = true
 amafu-interfaces.workspace = true

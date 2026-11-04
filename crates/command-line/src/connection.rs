@@ -19,6 +19,11 @@ pub struct ConnectionArguments {
 }
 
 impl ConnectionArguments {
+    #[must_use]
+    pub fn certificate_authority(&self) -> Option<&PathBuf> {
+        self.certificate_authority.as_ref()
+    }
+
     pub fn client(&self) -> anyhow::Result<ApiClient> {
         let certificate_authority = self
             .certificate_authority

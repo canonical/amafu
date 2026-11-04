@@ -1,5 +1,6 @@
 mod connection;
 mod container;
+mod dashboard;
 mod floating_ip;
 mod image;
 mod install;
@@ -66,12 +67,17 @@ enum Command {
     Install(install::InstallArguments),
     #[command(subcommand, about = "Create signing keys and sign node images")]
     Release(release::ReleaseCommand),
+    #[command(subcommand, about = "Serve or deploy the web dashboard")]
+    Dashboard(dashboard::DashboardCommand),
 }
 
 async fn run(arguments: Arguments) -> anyhow::Result<()> {
     let command = match arguments.command {
         Command::Install(install) => return install::run(install).await,
         Command::Release(command) => return release::run(command),
+        Command::Dashboard(command) => {
+            return dashboard::run(command, arguments.connection.certificate_authority()).await;
+        }
         command => command,
     };
     let client = arguments.connection.client()?;
@@ -90,7 +96,7 @@ async fn run(arguments: Arguments) -> anyhow::Result<()> {
         Command::Node(command) => node::run(&client, command, arguments.output).await,
         Command::Operation(command) => operation::run(&client, command, arguments.output).await,
         Command::Upgrade(command) => upgrade::run(&client, command, arguments.output).await,
-        Command::Install(_) | Command::Release(_) => Ok(()),
+        Command::Install(_) | Command::Release(_) | Command::Dashboard(_) => Ok(()),
     }
 }
 
