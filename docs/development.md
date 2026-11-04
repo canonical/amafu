@@ -61,7 +61,9 @@ cargo +nightly fuzz run dhcp_message -- -max_total_time=60
 `image/build test` builds the test image in `image/output/test`, and `image/build release` the release image. It
 needs `apt-get download` access to the Ubuntu archive and GitHub (for the pinned VM firmware), plus `cpio`, `zstd`
 and `depmod`, and the build machine's `nftables` and `erofs-utils` packages, which it copies onto the boot partition
-(decision 0010). Assembling a lab disk with
+(decision 0010). The first build also compiles the container guest kernel from the pinned kernel.org source in a
+temporary directory (`make`, `gcc`, `flex`, `bison`, `bc` and `libelf-dev`, about a minute on 14 cores) and keeps
+the result in `image/output/cache`. Assembling a lab disk with
 `image/assemble-disk` also needs `sfdisk`, `mkfs.vfat`, `mtools`, `mkfs.ext4` and `qemu-img`.
 
 ## The virtual lab
@@ -79,6 +81,7 @@ image/build test
 cargo rig lab up          # creates the project, the switch, the storage targets and boots the four nodes
 cargo rig lab contract    # the hypervisor contract against the real Cloud Hypervisor adapter
 cargo rig lab run         # every scenario at the virtual-lab level
+cargo rig lab soak --forced-stops 50   # force nodes off again and again; each time their VMs must run elsewhere within 30 s
 cargo rig lab instances   # VM processes on each node, with their console and VM process log
 cargo rig lab inspect network      # ports and the nftables ruleset on each node
 cargo rig lab inspect attachments  # volumes attached on each node
@@ -93,6 +96,9 @@ export AMAFU_ENDPOINT=https://10.0.10.13:17443 AMAFU_PROJECT=project-a
 export AMAFU_CERTIFICATE_AUTHORITY=<the certificate_authority from lab.json, saved to a file>
 export AMAFU_TOKEN=<a token from lab.json, for example operator@project-a>
 amafu vm create web-1 --cpus 1 --memory 256 --kernel test-guest --wait
+amafu vm migrate web-1 --wait          # live migration to a node the scheduler chooses
+amafu node evacuate node-2 --wait      # cordon and move every VM off a node
+amafu operation list                   # migrations, evacuations and recoveries with their progress
 amafu vm list
 amafu vm delete web-1 --wait
 ```

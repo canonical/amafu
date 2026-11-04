@@ -9,6 +9,10 @@ readonly variant="${1:-}"
 readonly firmware_release="ch-97eeb7b09"
 readonly firmware_sha256="dc2fc8f0e43b96712d9fccc52a3a590769606412b3e1bc911d217addd3bef624"
 readonly node_tools=(/usr/sbin/nft /usr/bin/mkfs.erofs)
+readonly guest_kernel_version="6.18.60"
+readonly guest_kernel_sha256="3c2f44ef6acc021a7ad444d9a2e6ec1ef488ff09368793d0004a6080f69d621e"
+readonly guest_kernel_configuration="${image_directory}/container-kernel.config"
+readonly kernel_build_tools=(make gcc flex bison bc)
 
 usage() {
     echo "usage: image/build test|release [path to amafu-node]" >&2
@@ -153,7 +157,6 @@ build_container_initramfs() {
     install -m 0755 "${guest_agent}" "${root}/usr/bin/amafu-guest-agent"
     ln -s usr/bin/amafu-guest-agent "${root}/init"
     stage_libraries "${guest_agent}" "${root}"
-    stage_modules "${image_directory}/container-modules" "${root}"
     pack_initramfs "${root}" "${boot_staging}/container-initramfs"
     rm -rf "${root}"
 }
@@ -201,21 +204,52 @@ stage_root() {
     fi
 }
 
-extract_guest_kernel() {
-    python3 -I - "${cache}/extracted/boot/vmlinuz-${kernel_release}" "$1" <<'PYTHON'
-import subprocess
-import sys
-from pathlib import Path
+download_guest_kernel_source() {
+    local source="${cache}/linux-${guest_kernel_version}.tar.xz"
+    if [[ ! -f "${source}" ]]; then
+        curl --fail --silent --show-error --location --output "${source}.partial" \
+            "https://cdn.kernel.org/pub/linux/kernel/v${guest_kernel_version%%.*}.x/linux-${guest_kernel_version}.tar.xz"
+        mv "${source}.partial" "${source}"
+    fi
+    echo "${guest_kernel_sha256}  ${source}" | sha256sum --check --quiet
+}
 
-compressed = Path(sys.argv[1]).read_bytes()
-start = compressed.find(b"\x28\xb5\x2f\xfd")
-if start < 0:
-    sys.exit("the kernel image holds no zstd payload")
-decompressed = subprocess.run(["zstd", "--decompress", "--stdout"], input=compressed[start:], capture_output=True, check=False).stdout
-if not decompressed.startswith(b"\x7fELF"):
-    sys.exit("the kernel payload is not an ELF image")
-Path(sys.argv[2]).write_bytes(decompressed)
-PYTHON
+check_kernel_options() {
+    local configuration="$1"
+    local missing=0
+    while read -r option; do
+        if ! grep -qx "${option}" "${configuration}"; then
+            echo "the guest kernel lacks ${option}" >&2
+            missing=1
+        fi
+    done < <(grep '=y$' "${guest_kernel_configuration}")
+    return "${missing}"
+}
+
+build_guest_kernel() {
+    local fingerprint
+    fingerprint="$(sha256sum "${guest_kernel_configuration}" | cut -c1-16)"
+    guest_kernel="${cache}/guest-vmlinux-${guest_kernel_version}-${fingerprint}"
+    if [[ -f "${guest_kernel}" ]]; then
+        return
+    fi
+    for tool in "${kernel_build_tools[@]}"; do
+        command -v "${tool}" >/dev/null || { echo "${tool} is missing; install make gcc flex bison bc libelf-dev" >&2; exit 1; }
+    done
+    download_guest_kernel_source
+    local workspace
+    workspace="$(mktemp -d)"
+    tar --extract --file "${cache}/linux-${guest_kernel_version}.tar.xz" --directory "${workspace}"
+    local tree="${workspace}/linux-${guest_kernel_version}"
+    make --silent -C "${tree}" allnoconfig KCONFIG_ALLCONFIG="${guest_kernel_configuration}"
+    if ! check_kernel_options "${tree}/.config"; then
+        rm -rf "${workspace}"
+        exit 1
+    fi
+    make --silent -C "${tree}" -j"$(nproc)" vmlinux >/dev/null
+    cp "${tree}/vmlinux" "${guest_kernel}.partial"
+    mv "${guest_kernel}.partial" "${guest_kernel}"
+    rm -rf "${workspace}"
 }
 
 pack() {
@@ -223,7 +257,7 @@ pack() {
     mkdir -p "${output}/esp/EFI/BOOT" "${output}/esp/EFI/ubuntu" "${output}/esp/amafu"
     pack_initramfs "${staging}" "${output}/esp/amafu/initramfs"
     cp "${cache}/extracted/boot/vmlinuz-${kernel_release}" "${output}/esp/amafu/vmlinuz"
-    extract_guest_kernel "${output}/esp/amafu/vmlinux"
+    cp "${guest_kernel}" "${output}/esp/amafu/vmlinux"
     cp -r "${boot_staging}"/. "${output}/esp/amafu/"
     cp "${cache}/extracted/usr/lib/shim/shimx64.efi.signed.latest" "${output}/esp/EFI/BOOT/BOOTX64.EFI"
     cp "${cache}/extracted/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed" "${output}/esp/EFI/BOOT/grubx64.efi"
@@ -236,6 +270,7 @@ check_node_tools
 build_binaries
 download_packages
 download_firmware
+build_guest_kernel
 extract_packages
 stage_root
 pack

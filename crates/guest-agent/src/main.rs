@@ -12,8 +12,6 @@ use rustix::system::RebootCommand;
 
 use crate::workload::Workload;
 
-const MODULES_DIRECTORY: &str = "/usr/lib/amafu/modules";
-const MODULE_LIST: &str = "/usr/lib/amafu/modules/load-order";
 const ROOT_DEVICE: &str = "/dev/vda";
 const REAP_INTERVAL: Duration = Duration::from_millis(200);
 
@@ -21,7 +19,6 @@ async fn run() -> anyhow::Result<()> {
     amafu_system::mount_essential_filesystems()?;
     let uptime = amafu_system::host::uptime_seconds(Path::new("/proc"));
     tracing::info!(?uptime, "the guest agent is starting");
-    amafu_system::modules::load_listed_modules(Path::new(MODULES_DIRECTORY), Path::new(MODULE_LIST))?;
     root::prepare(Path::new(ROOT_DEVICE))?;
     match dhcp_client::configure(None).await {
         Ok(configured) => {

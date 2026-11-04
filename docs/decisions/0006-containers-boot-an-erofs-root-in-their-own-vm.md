@@ -14,8 +14,11 @@ the image cache is the thing a hostile guest attacks.
   whiteouts applied) and attaches it to the container VM as a read-only virtio block device.
 - The writable layer is a tmpfs inside the guest, joined to the erofs root with overlayfs. A container's writes
   vanish when its VM stops; persistent data belongs on a volume.
-- The guest runs the node's own kernel, uncompressed (`vmlinux`, booted through its PVH entry), with a 2.5 MB
-  initramfs whose init is `amafu-guest-agent`. The agent mounts the root, takes a DHCP lease, writes
+- The guest runs a kernel built for it (milestone 4): Linux 6.18 long-term, configured from `allnoconfig` with only
+  what a container needs (`image/container-kernel.config`: virtio, vsock, erofs, overlay, tmpfs, packet sockets),
+  everything built in and booted uncompressed through its PVH entry. It is 17.6 MB instead of the node kernel's 71
+  MB, and the build refuses a configuration that loses a requested option. The initramfs's init is
+  `amafu-guest-agent`, which loads no modules. The agent mounts the root, takes a DHCP lease, writes
   `resolv.conf`, chroots into the container and waits on vsock port 1024 for the node to start the workload.
 - The node talks to the agent over Cloud Hypervisor's hybrid vsock: a Unix socket in the VM's directory, `CONNECT
   1024`, then versioned JSON lines (`amafu_guest_agent::protocol`, fuzzed by `crates/guest-agent/fuzz`).
