@@ -5,8 +5,10 @@ use amafu_domain::kinds::image::{Image, ImageSource, ImageSpecification};
 use amafu_domain::kinds::storage_backend::{
     StorageBackend, StorageBackendSpecification, StorageProviderSpecification,
 };
-use amafu_domain::kinds::vm::{Vm, VmPhase};
-use amafu_domain::{Object, ObjectId, ObjectName, OciReference, ProjectName, Resource, Sha256Digest};
+use amafu_domain::kinds::vm::{Vm, VmPhase, VmSpecification};
+use amafu_domain::{
+    NodeName, Object, ObjectId, ObjectName, OciReference, ProjectName, Resource, Sha256Digest,
+};
 use amafu_scenario::cluster::DEFAULT_PROJECT;
 use amafu_scenario::{Cluster, Level, ObservedInstance, ScenarioError, ScenarioResult, ensure, eventually};
 
@@ -187,4 +189,44 @@ where
         }
     })
     .await
+}
+
+pub async fn running_nodes(
+    cluster: &dyn Cluster,
+    vm_ids: &[ObjectId],
+) -> Result<Vec<NodeName>, ScenarioError> {
+    let mut nodes = Vec::new();
+    for vm_id in vm_ids {
+        nodes.push(instance(cluster, *vm_id).await?.node);
+    }
+    Ok(nodes)
+}
+
+pub async fn create_running(
+    member: &ApiClient,
+    cluster: &dyn Cluster,
+    names: &[String],
+    specification: &VmSpecification,
+) -> Result<Vec<ObjectId>, ScenarioError> {
+    let mut vm_ids = Vec::new();
+    for vm_name in names {
+        vm_ids.push(member.create::<Vm>(&name(vm_name)?, specification).await?.id());
+    }
+    for vm_name in names {
+        vm_in_phase(member, cluster, vm_name, VmPhase::Running, START_TIMEOUT).await?;
+    }
+    Ok(vm_ids)
+}
+
+pub async fn delete_all(member: &ApiClient, cluster: &dyn Cluster, names: &[String]) -> ScenarioResult {
+    for vm_name in names {
+        member.delete::<Vm>(vm_name).await?;
+    }
+    for vm_name in names {
+        delete_and_wait::<Vm>(member, cluster, vm_name).await.or_else(|error| match error {
+            ScenarioError::Client(api) if api.is_not_found() => Ok(()),
+            other => Err(other),
+        })?;
+    }
+    Ok(())
 }

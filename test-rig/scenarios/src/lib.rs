@@ -2,6 +2,7 @@ pub mod containers;
 pub mod networking;
 pub mod overlay;
 pub mod placement;
+pub mod recovery;
 pub mod rogue_nodes;
 pub mod sandbox;
 pub mod security;
@@ -36,6 +37,8 @@ pub fn all() -> Vec<ScenarioDefinition> {
         overlay::OVERLAY_CONNECTS_NODES,
         overlay::FLOATING_IP_MOVES,
         store_history::STORE_HISTORY_IS_LINEARIZABLE,
+        recovery::POWERED_OFF_NODE_IS_RECOVERED,
+        recovery::CUT_OFF_NODE_IS_FENCED,
     ]
 }
 

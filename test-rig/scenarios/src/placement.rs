@@ -2,17 +2,19 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use amafu_api::ApiClient;
+use amafu_domain::NodeName;
 use amafu_domain::access::Role;
 use amafu_domain::kinds::node::{Node, NodeSpecification};
 use amafu_domain::kinds::vm::{Vm, VmPhase, VmSpecification};
-use amafu_domain::{NodeName, ObjectId};
 use amafu_scenario::cluster::client;
 use amafu_scenario::{
     Cluster, Fault, Level, ScenarioDefinition, ScenarioError, ScenarioResult, ensure, eventually,
 };
 use futures::FutureExt;
 
-use crate::support::{START_TIMEOUT, delete_and_wait, every_node_ready, instance, name, vm_in_phase};
+use crate::support::{
+    START_TIMEOUT, create_running, delete_all, every_node_ready, instance, name, running_nodes,
+};
 
 pub const ANTI_AFFINITY_SPREADS_VMS: ScenarioDefinition = ScenarioDefinition {
     name: "members of an anti-affinity group run on different nodes",
@@ -40,43 +42,6 @@ const CUT_OFF: Duration = Duration::from_secs(5);
 
 fn grouped() -> Result<VmSpecification, ScenarioError> {
     Ok(VmSpecification { anti_affinity_group: Some(name(GROUP)?), ..VmSpecification::small() })
-}
-
-async fn running_nodes(cluster: &dyn Cluster, vm_ids: &[ObjectId]) -> Result<Vec<NodeName>, ScenarioError> {
-    let mut nodes = Vec::new();
-    for vm_id in vm_ids {
-        nodes.push(instance(cluster, *vm_id).await?.node);
-    }
-    Ok(nodes)
-}
-
-async fn create_running(
-    member: &ApiClient,
-    cluster: &dyn Cluster,
-    names: &[String],
-    specification: &VmSpecification,
-) -> Result<Vec<ObjectId>, ScenarioError> {
-    let mut vm_ids = Vec::new();
-    for vm_name in names {
-        vm_ids.push(member.create::<Vm>(&name(vm_name)?, specification).await?.id());
-    }
-    for vm_name in names {
-        vm_in_phase(member, cluster, vm_name, VmPhase::Running, START_TIMEOUT).await?;
-    }
-    Ok(vm_ids)
-}
-
-async fn delete_all(member: &ApiClient, cluster: &dyn Cluster, names: &[String]) -> ScenarioResult {
-    for vm_name in names {
-        member.delete::<Vm>(vm_name).await?;
-    }
-    for vm_name in names {
-        delete_and_wait::<Vm>(member, cluster, vm_name).await.or_else(|error| match error {
-            ScenarioError::Client(api) if api.is_not_found() => Ok(()),
-            other => Err(other),
-        })?;
-    }
-    Ok(())
 }
 
 async fn members_of_an_anti_affinity_group_run_on_different_nodes(cluster: &dyn Cluster) -> ScenarioResult {
