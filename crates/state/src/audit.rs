@@ -36,6 +36,27 @@ impl QuoriumAuditLog {
     }
 }
 
+impl QuoriumAuditLog {
+    pub async fn record_many(&self, entries: &[AuditEntry]) -> Result<(), StoreError> {
+        let encoded = entries
+            .iter()
+            .map(|entry| serde_json::to_vec(entry).map_err(|error| StoreError::Corrupt(error.to_string())))
+            .collect::<Result<Vec<_>, _>>()?;
+        let count = u64::try_from(encoded.len()).unwrap_or(u64::MAX);
+        let first = self.node.global::<AuditCursor>().allocate_many(count).await.map_err(store_error)?;
+        let mut by_segment: std::collections::BTreeMap<u64, Vec<(u64, Vec<u8>)>> =
+            std::collections::BTreeMap::new();
+        for (offset, bytes) in (0..).zip(encoded) {
+            let sequence = first + offset;
+            by_segment.entry(sequence / AUDIT_SEGMENT_CAPACITY).or_default().push((sequence, bytes));
+        }
+        for (segment, entries) in by_segment {
+            self.node.entity::<AuditSegment>(segment).append_many(entries).await.map_err(store_error)?;
+        }
+        Ok(())
+    }
+}
+
 #[async_trait::async_trait]
 impl AuditLog for QuoriumAuditLog {
     async fn record(&self, entry: AuditEntry) -> Result<(), StoreError> {

@@ -56,6 +56,7 @@ fn audit_failure(request_id: Uuid) -> Response {
 
 pub async fn request_chain(State(state): State<ApiState>, mut request: Request, next: Next) -> Response {
     let request_id = state.identifiers.generate();
+    let is_read = request.method() == axum::http::Method::GET;
     let method = request.method().to_string();
     let path = request.uri().path().to_owned();
     let authenticated = state.authenticator.authenticate(request.headers(), state.clock.now());
@@ -81,7 +82,12 @@ pub async fn request_chain(State(state): State<ApiState>, mut request: Request, 
         path,
         outcome: outcome_of(response.status(), &details),
     };
-    if let Err(error) = state.audit.record(entry).await {
+    let recorded = if is_read {
+        state.audit.record_without_waiting(entry).await
+    } else {
+        state.audit.record(entry).await
+    };
+    if let Err(error) = recorded {
         tracing::error!(%request_id, %error, "recording the audit entry failed");
         response = audit_failure(request_id);
     }

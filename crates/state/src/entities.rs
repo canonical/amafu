@@ -170,6 +170,13 @@ impl AuditCursor {
         sequence
     }
 
+    #[quorium(id = 2)]
+    pub fn allocate_many(&mut self, count: u64) -> u64 {
+        let first = self.next_sequence;
+        self.next_sequence += count;
+        first
+    }
+
     #[must_use]
     pub fn allocated(&self) -> u64 {
         self.next_sequence
@@ -188,6 +195,13 @@ impl AuditSegment {
     pub fn append(&mut self, sequence: u64, entry: Vec<u8>) {
         if !self.entries.iter().any(|(existing, _)| *existing == sequence) {
             self.entries.push((sequence, entry));
+        }
+    }
+
+    #[quorium(id = 2)]
+    pub fn append_many(&mut self, entries: Vec<(u64, Vec<u8>)>) {
+        for (sequence, entry) in entries {
+            self.append(sequence, entry);
         }
     }
 

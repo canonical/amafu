@@ -42,6 +42,10 @@ pub struct AuditEntry {
 pub trait AuditLog: Send + Sync {
     async fn record(&self, entry: AuditEntry) -> Result<(), StoreError>;
 
+    async fn record_without_waiting(&self, entry: AuditEntry) -> Result<(), StoreError> {
+        self.record(entry).await
+    }
+
     async fn find(&self, request_id: Uuid) -> Result<Option<AuditEntry>, StoreError>;
 
     async fn recent(&self, limit: usize) -> Result<Vec<AuditEntry>, StoreError>;
