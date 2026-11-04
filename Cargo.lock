@@ -185,6 +185,8 @@ dependencies = [
  "amafu-domain",
  "async-trait",
  "futures",
+ "hex",
+ "ring",
  "serde",
  "serde_json",
  "thiserror",

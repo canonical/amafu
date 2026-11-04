@@ -48,6 +48,7 @@ crc32fast = "1.5"
 quorium = { git = "https://github.com/canonical/quorium", rev = "b0a97b08a9bffebf0c977692f5ac5dd64dd9fd7a", default-features = false }
 rand = "0.10.3"
 rand_chacha = "0.10.0"
+ring = "0.17.14"
 rcgen = { version = "0.14.10", features = ["x509-parser"] }
 landlock = "0.4.7"
 rtnetlink = "0.23.0"
