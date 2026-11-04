@@ -405,7 +405,7 @@ mod tests {
     #[test]
     fn a_migration_destination_hosts_the_vm_but_reports_only_the_migration() {
         let incoming = migrating("web-1", "node-2", "node-2", "node-1", "preparing");
-        let slice = slice_with(&[incoming.clone()]);
+        let slice = slice_with(std::slice::from_ref(&incoming));
         assert!(slice.hosts_vm("project-a", "web-1"));
         assert!(slice.includes("Vm", &incoming));
         assert!(slice.includes(
