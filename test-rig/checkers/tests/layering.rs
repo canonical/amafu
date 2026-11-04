@@ -14,11 +14,25 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ("amafu-guest-agent", &["amafu-domain", "amafu-interfaces", "amafu-network", "amafu-system"]),
     ("amafu-system", &[]),
     ("amafu-api", &["amafu-domain", "amafu-interfaces"]),
-    ("amafu-command-line", &["amafu-api", "amafu-domain"]),
+    ("amafu-boot-slots", &["amafu-domain", "amafu-interfaces"]),
+    (
+        "amafu-installer",
+        &[
+            "amafu-api",
+            "amafu-controllers",
+            "amafu-domain",
+            "amafu-interfaces",
+            "amafu-network",
+            "amafu-node",
+            "amafu-reconciler",
+        ],
+    ),
+    ("amafu-command-line", &["amafu-api", "amafu-domain", "amafu-installer", "amafu-interfaces"]),
     (
         "amafu-node",
         &[
             "amafu-api",
+            "amafu-boot-slots",
             "amafu-controllers",
             "amafu-domain",
             "amafu-hypervisor",
