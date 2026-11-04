@@ -1,4 +1,5 @@
 pub mod address_allocation;
+pub mod boot_slots;
 pub mod compute;
 pub mod floating_ip;
 pub mod image;
@@ -17,6 +18,7 @@ pub mod storage_backend;
 mod testing;
 pub mod volume;
 
+pub use boot_slots::{BootSlotsController, BootSlotsServices, BootSlotsSettings};
 pub use compute::{ComputeAction, ComputeController, ComputeKey, ComputeObservation, ComputeServices};
 pub use floating_ip::FloatingIpController;
 pub use image::ImageController;
