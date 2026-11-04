@@ -177,7 +177,10 @@ mod tests {
         let (headers, body) = read_response(&mut client).await.unwrap();
         assert!(headers.starts_with("HTTP/1.1 204"));
         assert_eq!(body, "");
-        server.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nbroke").await.unwrap();
+        server
+            .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nbroke")
+            .await
+            .unwrap();
         let (_, body) = read_response(&mut client).await.unwrap();
         assert_eq!(body, "broke");
         drop(server);
