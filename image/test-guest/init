@@ -28,4 +28,7 @@ case "${seed}" in
         fi
         ;;
 esac
-while true; do sleep 3600; done
+while true; do
+    echo "amafu-guest-boot $(cat /proc/sys/kernel/random/boot_id)"
+    sleep 10
+done

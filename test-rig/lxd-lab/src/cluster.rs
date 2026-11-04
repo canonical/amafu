@@ -15,9 +15,9 @@ use amafu_domain::kinds::storage_backend::StorageProviderSpecification;
 use amafu_domain::{NodeName, ProjectName};
 use amafu_interfaces::Clock;
 use amafu_scenario::{
-    CertificateAuthority, Cluster, ClusterObservation, Fault, FaultHandle, Level, NfsExport,
-    ObservedAttachment, ObservedFloatingAddress, ObservedInstance, ObservedPort, ObservedRemoteEndpoint,
-    ScenarioError, TlsIdentity,
+    CertificateAuthority, Cluster, ClusterObservation, Fault, FaultHandle, GUEST_BOOT_MARKER, Level,
+    NfsExport, NodeImages, ObservedAttachment, ObservedFloatingAddress, ObservedInstance, ObservedPort,
+    ObservedRemoteEndpoint, ScenarioError, TlsIdentity,
 };
 use futures::future::BoxFuture;
 use http::Method;
@@ -57,6 +57,15 @@ pub struct VirtualLab {
     diagnostics: reqwest::Client,
     probes: reqwest::Client,
     clock: WallClock,
+}
+
+fn guest_boot_in(console: &str) -> Option<String> {
+    console
+        .lines()
+        .rev()
+        .find_map(|line| line.split(GUEST_BOOT_MARKER).nth(1))
+        .and_then(|rest| rest.split_whitespace().next())
+        .map(str::to_owned)
 }
 
 fn lab_failure(error: impl std::fmt::Display) -> ScenarioError {
@@ -142,6 +151,7 @@ impl VirtualLab {
                 .iter()
                 .filter_map(|mac| network.ports.iter().find(|port| port.mac == *mac).map(|port| port.address))
                 .collect();
+            let guest_boot = guest_boot_in(&instance.console_tail);
             observation.instances.push(ObservedInstance {
                 node: name.clone(),
                 vm_id: instance.vm_id,
@@ -151,6 +161,7 @@ impl VirtualLab {
                 offered_addresses,
                 console: instance.console_tail,
                 is_receiving: instance.is_receiving,
+                guest_boot,
             });
         }
         observation.attachments.extend(attachments.into_iter().map(|attachment| ObservedAttachment {
@@ -328,6 +339,10 @@ impl Cluster for VirtualLab {
             404 => Ok(false),
             status => Err(ScenarioError::Lab(format!("the audit lookup answered {status}"))),
         }
+    }
+
+    fn node_images(&self) -> Option<NodeImages> {
+        self.state.node_images.clone()
     }
 
     fn clock(&self) -> &dyn Clock {

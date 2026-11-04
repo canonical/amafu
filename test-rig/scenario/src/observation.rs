@@ -6,6 +6,8 @@ use amafu_interfaces::{InstanceState, WorkloadState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub const GUEST_BOOT_MARKER: &str = "amafu-guest-boot ";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ObservedInstance {
     pub node: NodeName,
@@ -21,6 +23,8 @@ pub struct ObservedInstance {
     pub console: String,
     #[serde(default)]
     pub is_receiving: bool,
+    #[serde(default)]
+    pub guest_boot: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

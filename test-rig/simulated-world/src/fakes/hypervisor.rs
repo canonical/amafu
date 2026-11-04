@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -33,6 +34,7 @@ pub struct FakeInstance {
     pub workload: Option<WorkloadSpecification>,
     pub exit_code: Option<i32>,
     pub migration: Option<FakeMigration>,
+    pub guest_boot: u64,
 }
 
 type Instances = Arc<Mutex<BTreeMap<ObjectId, FakeInstance>>>;
@@ -40,6 +42,7 @@ type Instances = Arc<Mutex<BTreeMap<ObjectId, FakeInstance>>>;
 #[derive(Default)]
 pub struct MigrationFabric {
     hosts: Mutex<BTreeMap<Ipv4Addr, (Instances, Arc<NodeLink>)>>,
+    guest_boots: AtomicU64,
 }
 
 impl MigrationFabric {
@@ -54,6 +57,10 @@ impl MigrationFabric {
 
     fn host(&self, address: Ipv4Addr) -> Option<(Instances, Arc<NodeLink>)> {
         lock(&self.hosts).get(&address).cloned()
+    }
+
+    fn next_guest_boot(&self) -> u64 {
+        self.guest_boots.fetch_add(1, Ordering::Relaxed) + 1
     }
 }
 
@@ -155,6 +162,7 @@ impl FakeHypervisor {
         incoming.started_at = now - self.boot_duration;
         incoming.workload = source.workload;
         incoming.exit_code = source.exit_code;
+        incoming.guest_boot = source.guest_boot;
         let total_bytes = source.launch.memory_mebibytes * MEBIBYTE;
         FakeMigration::Sent {
             attempt,
@@ -215,12 +223,14 @@ impl FakeHypervisor {
 
     fn insert(&self, launch: &VmLaunchSpecification, migration: Option<FakeMigration>) {
         let started_at = self.clock.now();
+        let guest_boot = if migration.is_some() { 0 } else { self.fabric.next_guest_boot() };
         lock(&self.instances).entry(launch.vm_id).or_insert(FakeInstance {
             launch: launch.clone(),
             started_at,
             workload: None,
             exit_code: None,
             migration,
+            guest_boot,
         });
     }
 }
