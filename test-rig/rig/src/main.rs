@@ -8,6 +8,7 @@ use amafu_api::diagnostics::{
 };
 use amafu_lxd_lab::{LabSettings, VirtualLab, down, load_state, up};
 use amafu_scenario::{Level, ScenarioDefinition};
+use amafu_scenarios::recovery::{ForcedStop, soak_forced_stops};
 use amafu_simulated_world::{SimulationSettings, run_scenario};
 use anyhow::{Context, bail};
 use clap::{Parser, Subcommand};
@@ -61,6 +62,11 @@ enum LabCommand {
     Run {
         #[arg(long)]
         scenario: Option<String>,
+    },
+    #[command(about = "Power nodes off without warning, again and again, and check their VMs recover")]
+    Soak {
+        #[arg(long, default_value_t = 50)]
+        forced_stops: u32,
     },
     #[command(about = "Run the hypervisor contract against the real adapter on every node")]
     Contract,
@@ -130,6 +136,25 @@ fn simulate(seeds: std::ops::Range<u64>, name: Option<&str>, crash_roles: bool) 
     Ok(())
 }
 
+async fn soak(repository: &std::path::Path, forced_stops: u32) -> anyhow::Result<()> {
+    let lab = VirtualLab::connect(load_state(repository)?)?;
+    let report = |outcome: &Result<ForcedStop, amafu_scenario::ScenarioError>| match outcome {
+        Ok(stop) => println!(
+            "round {}: {} stopped, its VMs ran elsewhere after {:.1} s",
+            stop.round,
+            stop.node,
+            stop.recovered_after.as_secs_f64()
+        ),
+        Err(error) => println!("FAILED: {error}"),
+    };
+    let failures = soak_forced_stops(&lab, forced_stops, &report).await?;
+    println!("{} of {forced_stops} forced stops recovered", forced_stops - failures);
+    if failures > 0 {
+        bail!("{failures} forced stops did not recover in time");
+    }
+    Ok(())
+}
+
 async fn lab(command: LabCommand) -> anyhow::Result<()> {
     let repository = repository()?;
     match command {
@@ -153,6 +178,7 @@ async fn lab(command: LabCommand) -> anyhow::Result<()> {
             Ok(())
         }
         LabCommand::Down => down(&repository, &LabSettings::default()).await,
+        LabCommand::Soak { forced_stops } => soak(&repository, forced_stops).await,
         LabCommand::Run { scenario } => {
             let lab = VirtualLab::connect(load_state(&repository)?)?;
             let mut failures = 0;

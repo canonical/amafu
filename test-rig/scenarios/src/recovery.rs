@@ -149,3 +149,68 @@ async fn a_node_cut_off_past_its_lease_is_fenced(cluster: &dyn Cluster) -> Scena
     always_during(cluster, QUIET_PERIOD, at_most_one_running_instance_per_vm).await?;
     delete_all(&member, cluster, &names).await
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForcedStop {
+    pub round: u32,
+    pub node: NodeName,
+    pub recovered_after: Duration,
+}
+
+const SOAK_VM_COUNT: usize = 6;
+
+async fn force_stop_once(
+    cluster: &dyn Cluster,
+    vm_ids: &[ObjectId],
+    round: u32,
+) -> Result<ForcedStop, ScenarioError> {
+    let nodes = cluster.nodes().await;
+    let placed: BTreeMap<ObjectId, NodeName> =
+        vm_ids.iter().copied().zip(running_nodes(cluster, vm_ids).await?).collect();
+    let candidates: Vec<&NodeName> =
+        nodes.iter().skip(1).filter(|node| placed.values().any(|placed_on| placed_on == *node)).collect();
+    let stopped = candidates
+        .get(usize::try_from(round).unwrap_or_default() % candidates.len().max(1))
+        .map(|node| (*node).clone())
+        .ok_or_else(|| ScenarioError::Expectation(String::from("no VM runs beside the first node")))?;
+    let stranded = lost_vms(&placed, &stopped);
+    let clock = cluster.clock();
+    let stopped_at = clock.now();
+    let fault = cluster.inject(Fault::PowerOff { node: stopped.clone() }).await?;
+    eventually(cluster, RECOVERY_TIMEOUT, "the stopped node's VMs run on other nodes", async || {
+        run_elsewhere(cluster, &stranded, &stopped).await
+    })
+    .await?;
+    let recovered_after = Duration::try_from(clock.now() - stopped_at).unwrap_or_default();
+    cluster.heal(fault).await?;
+    eventually(cluster, RETURN_TIMEOUT, "the stopped node is ready again", async || {
+        is_ready(cluster, &stopped).await
+    })
+    .await?;
+    ensure(recovered_after <= RECOVERY_BUDGET, || {
+        format!("round {round}: the VMs of {stopped} ran elsewhere after {recovered_after:?}, over 30 s")
+    })?;
+    Ok(ForcedStop { round, node: stopped, recovered_after })
+}
+
+pub async fn soak_forced_stops(
+    cluster: &dyn Cluster,
+    rounds: u32,
+    report: &dyn Fn(&Result<ForcedStop, ScenarioError>),
+) -> Result<u32, ScenarioError> {
+    every_node_ready(cluster).await?;
+    let member = client(cluster, Role::Member).await;
+    let names: Vec<String> = (0..SOAK_VM_COUNT).map(|index| format!("soak-{index}")).collect();
+    let vm_ids = create_running(&member, cluster, &names, &VmSpecification::small()).await?;
+    let mut failures = 0;
+    for round in 1..=rounds {
+        let outcome = force_stop_once(cluster, &vm_ids, round).await;
+        if outcome.is_err() {
+            failures += 1;
+        }
+        report(&outcome);
+        every_node_ready(cluster).await?;
+    }
+    delete_all(&member, cluster, &names).await?;
+    Ok(failures)
+}
