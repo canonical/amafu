@@ -216,6 +216,13 @@ impl Operation {
     }
 }
 
+const LOCAL_CONSISTENCY: &str = "consistency=local";
+
+fn requested_consistency(target: &Uri) -> Consistency {
+    let is_local = target.query().is_some_and(|query| query.split('&').any(|pair| pair == LOCAL_CONSISTENCY));
+    if is_local { Consistency::Stale } else { Consistency::Linearizable }
+}
+
 pub async fn list_objects(
     kind: KindDescriptor,
     state: ApiState,
@@ -226,7 +233,7 @@ pub async fn list_objects(
     operation.authorize()?;
     let records = state
         .store
-        .list(kind.kind, operation.project.as_ref(), Consistency::Linearizable)
+        .list(kind.kind, operation.project.as_ref(), requested_consistency(&target))
         .await
         .map_err(|error| operation.store_error(error.into()))?;
     let items = records.into_iter().map(|record| record.object).collect();
@@ -245,7 +252,7 @@ pub async fn get_object(
     let reference = operation.reference()?;
     let record = state
         .store
-        .read(&reference, Consistency::Linearizable)
+        .read(&reference, requested_consistency(&target))
         .await
         .map_err(|error| operation.store_error(error.into()))?
         .ok_or_else(|| operation.store_error(ChangeError::NotFound.into()))?;

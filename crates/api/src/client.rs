@@ -329,6 +329,12 @@ impl ApiClient {
         self.call(Method::GET, &self.object_path::<R>(name, ""), None).await
     }
 
+    pub async fn get_local<R: Resource>(&self, name: &str) -> Result<Object<R>, ClientError> {
+        let path = self.object_path::<R>(name, "");
+        let separator = if path.contains('?') { '&' } else { '?' };
+        self.call(Method::GET, &format!("{path}{separator}consistency=local"), None).await
+    }
+
     pub async fn list_in_every_project<R: Resource>(&self) -> Result<Vec<Object<R>>, ClientError> {
         let path = format!("/v1/{}?all-projects=true", R::PLURAL_NAME);
         let response: ListResponse = self.call(Method::GET, &path, None).await?;
