@@ -66,6 +66,28 @@ temporary directory (`make`, `gcc`, `flex`, `bison`, `bc` and `libelf-dev`, abou
 the result in `image/output/cache`. Assembling a lab disk with
 `image/assemble-disk` also needs `sfdisk`, `mkfs.vfat`, `mtools`, `mkfs.ext4` and `qemu-img`.
 
+The build leaves `esp/` (shim, GRUB and its configuration), `slot/` (what one boot slot holds), `node-image.tar` (the
+slot as a bundle) and `boot-loader.tar` (the `esp/` files). `image/assemble-disk` installs the bundle into slot `a`
+with its signed manifest (decision 0021). Images are signed with Ed25519:
+
+```sh
+amafu release create-key --private-key release.key        # prints the public key for upgrade.image_keys
+amafu release sign --private-key release.key --bundle image/output/release/node-image.tar \
+    --version 0.2.0 --feature-level 1 --url https://images.example/0.2.0/node-image.tar > node-image.json
+```
+
+## Upgrades
+
+```sh
+amafu upgrade start --image node-image.json --dry-run   # the waves and steps, without starting them
+amafu upgrade start --image node-image.json --wait 7200
+amafu upgrade status                                    # the image, slot and confirmation of every node
+amafu upgrade rollback --wait 7200                       # the same waves backwards, to the previous image
+amafu upgrade finalize                                  # enable the new features; rollback is refused after this
+```
+
+An upgrade is an operation, so `amafu operation show`, `pause`, `resume` and `cancel` apply to it.
+
 ## The virtual lab
 
 The lab runs on an LXD server reachable as the `amafu-lab` remote of the snap's `lxc` client (its client
@@ -88,6 +110,10 @@ cargo rig lab inspect attachments  # volumes attached on each node
 cargo rig lab inspect sandbox      # run the VM process sandbox probes
 cargo rig lab down        # deletes the project
 ```
+
+`lab up` signs three variants of the built bundle with a key it keeps in `target/rig/lab.json`: the installed image,
+an upgrade that differs only in its release file, and a broken one whose initramfs is empty. The NFS VM serves them
+on port 8080 for the upgrade scenarios.
 
 `target/rig/lab.json` holds the lab's CA and tokens. To use the command line against the lab:
 
@@ -134,3 +160,19 @@ amafu node list
 ```
 
 `lab.json` holds the block backends the lab created (`block_backends`), with their credentials.
+
+## The MAAS lab
+
+The MAAS lab (decision 0022) installs nodes as customers will. It runs beside the virtual lab, on its own bridge
+`amafu-maas0` (`10.217.0.0/24`) and in its own project: a MAAS VM, which also serves the images, and empty machines
+that MAAS commissions through its LXD power driver. `amafu install` runs inside the MAAS VM, which reaches MAAS and
+the nodes.
+
+```sh
+image/build test
+cargo build --release -p amafu-command-line
+cargo rig lab maas up --nodes 3   # MAAS, its DHCP, and three commissioned machines
+cargo rig lab maas install        # amafu install, timed
+cargo rig lab maas down
+```
+
