@@ -28,6 +28,8 @@ pub struct NodeInstance {
     pub mac_addresses: Vec<MacAddress>,
     #[serde(default)]
     pub workload: Option<WorkloadState>,
+    #[serde(default)]
+    pub is_receiving: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

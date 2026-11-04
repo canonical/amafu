@@ -19,6 +19,8 @@ pub struct ObservedInstance {
     pub offered_addresses: Vec<Ipv4Addr>,
     #[serde(default)]
     pub console: String,
+    #[serde(default)]
+    pub is_receiving: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,7 +79,9 @@ pub struct ClusterObservation {
 
 impl ClusterObservation {
     pub fn running_instances(&self) -> impl Iterator<Item = &ObservedInstance> {
-        self.instances.iter().filter(|instance| instance.state != InstanceState::Exited)
+        self.instances
+            .iter()
+            .filter(|instance| instance.state != InstanceState::Exited && !instance.is_receiving)
     }
 
     #[must_use]

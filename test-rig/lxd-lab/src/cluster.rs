@@ -150,6 +150,7 @@ impl VirtualLab {
                 disks: instance.disks,
                 offered_addresses,
                 console: instance.console_tail,
+                is_receiving: instance.is_receiving,
             });
         }
         observation.attachments.extend(attachments.into_iter().map(|attachment| ObservedAttachment {

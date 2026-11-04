@@ -156,11 +156,8 @@ mod test_channel {
         }
     }
 
-    async fn observed_instance(
-        state: &ChannelState,
-        vm_id: ObjectId,
-        instance_state: InstanceState,
-    ) -> NodeInstance {
+    async fn observed_instance(state: &ChannelState, running: RunningInstance) -> NodeInstance {
+        let (vm_id, instance_state) = (running.vm_id, running.state);
         let directory = state.runtime.vm(&vm_id).path().to_path_buf();
         let plan: Option<VmProcessPlan> = std::fs::read(directory.join(PLAN_FILE))
             .ok()
@@ -186,6 +183,7 @@ mod test_channel {
                 .flat_map(|launch| launch.network_interfaces.iter().map(|interface| interface.mac))
                 .collect(),
             workload,
+            is_receiving: running.migration == Some(InstanceMigration::Receiving),
         }
     }
 
@@ -193,7 +191,7 @@ mod test_channel {
         let hypervisor = Arc::clone(&state.hypervisor) as Arc<dyn Hypervisor>;
         let mut instances = Vec::new();
         for running in hypervisor.running().await.unwrap_or_default() {
-            instances.push(observed_instance(&state, running.vm_id, running.state).await);
+            instances.push(observed_instance(&state, running).await);
         }
         Json(instances)
     }
