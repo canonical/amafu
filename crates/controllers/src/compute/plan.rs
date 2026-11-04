@@ -340,6 +340,7 @@ pub fn plan_arriving(context: &VmContext) -> Vec<ComputeAction> {
 fn migration_target(migration: &VmMigration) -> MigrationTarget {
     MigrationTarget {
         attempt: migration.attempt,
+        node: migration.destination.clone(),
         node_address: migration.destination_address,
         downtime_milliseconds: migration.downtime_milliseconds,
     }

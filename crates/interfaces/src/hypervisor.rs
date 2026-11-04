@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use amafu_domain::kinds::vm::MigrationReport;
-use amafu_domain::{MacAddress, ObjectId, ObjectName};
+use amafu_domain::{MacAddress, NodeName, ObjectId, ObjectName};
 use serde::{Deserialize, Serialize};
 
 use crate::error::ActionError;
@@ -92,6 +92,7 @@ impl InstanceMigration {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MigrationTarget {
     pub attempt: ObjectId,
+    pub node: NodeName,
     pub node_address: Ipv4Addr,
     pub downtime_milliseconds: u64,
 }

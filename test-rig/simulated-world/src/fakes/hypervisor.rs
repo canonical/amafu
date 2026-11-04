@@ -350,6 +350,7 @@ mod tests {
         futures::executor::block_on(destination.receive(&launch)).unwrap();
         let target = MigrationTarget {
             attempt: ObjectId::from_uuid(uuid::Uuid::new_v4()),
+            node: amafu_domain::NodeName::new("node-11").unwrap(),
             node_address: Ipv4Addr::new(192, 0, 2, 11),
             downtime_milliseconds: 100,
         };
