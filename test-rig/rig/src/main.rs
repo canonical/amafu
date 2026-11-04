@@ -47,6 +47,59 @@ enum Command {
     Lab(LabCommand),
     #[command(about = "List the scenarios and the levels they run at")]
     Scenarios,
+    #[command(
+        about = "Run real core members on this machine against many simulated nodes and check the budgets"
+    )]
+    Scale {
+        #[arg(long, default_value_t = 1_000)]
+        nodes: usize,
+        #[arg(long, default_value_t = 2_000)]
+        vms: usize,
+        #[arg(long, default_value_t = 2_000)]
+        read_rate: u32,
+        #[arg(long, default_value_t = 30)]
+        read_seconds: u64,
+        #[arg(long, help = "Keep the core members' state on tmpfs, to tell disk stalls from Amafu's own")]
+        state_in_memory: bool,
+    },
+}
+
+fn scale(
+    nodes: usize,
+    vms: usize,
+    read_rate: u32,
+    read_seconds: u64,
+    state_in_memory: bool,
+) -> anyhow::Result<()> {
+    let repository = repository()?;
+    let node_binary = repository.join("target/release/amafu-node");
+    if !node_binary.is_file() {
+        bail!("build the node first: cargo build --release -p amafu-node");
+    }
+    let settings = amafu_scale::ScaleSettings {
+        node_binary,
+        work: amafu_scale::cores::work_directory(&repository),
+        state: if state_in_memory {
+            std::path::PathBuf::from("/dev/shm/amafu-scale")
+        } else {
+            amafu_scale::cores::work_directory(&repository).join("state")
+        },
+        core_members: 3,
+        nodes,
+        vms,
+        read_rate,
+        read_duration: Duration::from_secs(read_seconds),
+    };
+    let budgets = amafu_scale::ScaleBudgets { read_rate, ..amafu_scale::ScaleBudgets::default() };
+    let report = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(amafu_scale::run(&settings, budgets))?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    if !report.violations.is_empty() {
+        bail!("the scale scenario missed its budgets: {}", report.violations.join("; "));
+    }
+    Ok(())
 }
 
 #[derive(Subcommand)]
@@ -304,6 +357,9 @@ fn run(arguments: Arguments) -> anyhow::Result<()> {
                 println!("{} [{}]", definition.name, levels.join(", "));
             }
             Ok(())
+        }
+        Command::Scale { nodes, vms, read_rate, read_seconds, state_in_memory } => {
+            scale(nodes, vms, read_rate, read_seconds, state_in_memory)
         }
         Command::Lab(command) => {
             tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(lab(command))

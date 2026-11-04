@@ -373,6 +373,7 @@ version = "0.1.0"
 dependencies = [
  "amafu-api",
  "amafu-lxd-lab",
+ "amafu-scale",
  "amafu-scenario",
  "amafu-scenarios",
  "amafu-simulated-world",
@@ -384,6 +385,30 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "amafu-scale"
+version = "0.1.0"
+dependencies = [
+ "amafu-api",
+ "amafu-controllers",
+ "amafu-domain",
+ "amafu-installer",
+ "amafu-interfaces",
+ "amafu-node",
+ "amafu-reconciler",
+ "amafu-simulated-world",
+ "amafu-state",
+ "anyhow",
+ "futures",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

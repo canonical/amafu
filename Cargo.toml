@@ -31,6 +31,7 @@ amafu-simulated-world = { path = "test-rig/simulated-world" }
 amafu-checkers = { path = "test-rig/checkers" }
 amafu-lxd-lab = { path = "test-rig/lxd-lab" }
 amafu-scenarios = { path = "test-rig/scenarios" }
+amafu-scale = { path = "test-rig/scale" }
 
 anyhow = "1.0.104"
 base64 = "0.23.1"
