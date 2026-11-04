@@ -5,10 +5,13 @@ use std::time::Duration;
 use amafu_domain::access::Verb;
 use amafu_domain::registry::{self, KindDescriptor};
 use amafu_domain::slice::NodeSlice;
-use amafu_domain::{NodeName, ObjectName, ObjectReference, ProjectName};
+use amafu_domain::{NodeName, ObjectId, ObjectName, ObjectReference, ProjectName};
+use amafu_interfaces::node_lease::{
+    acquire_node_lease, admit_node_write, lease_reference, node_fence, renew_node_lease,
+};
 use amafu_interfaces::{
-    AuditEntry, AuditLog, AuditOutcome, Clock, Consistency, Identifiers, SliceChange, SliceRecord, Store,
-    StoreError, StoredRecord, WatchEvent,
+    AuditEntry, AuditLog, AuditOutcome, Clock, Consistency, Identifiers, NodeLeaseError, NodeLeaseGrant,
+    ObjectStoreError, SliceChange, SliceRecord, Store, StoreError, StoredRecord, WatchEvent,
 };
 use axum::body::{Body, Bytes};
 use axum::extract::{DefaultBodyLimit, Extension, Request, State};
@@ -24,8 +27,9 @@ use uuid::Uuid;
 
 use crate::node_identity::{NodeAuthenticator, NodeCredentials, PeerCertificate, node_identity_of};
 use crate::node_wire::{
-    NODE_LIST_PATH, NODE_READ_PATH, NODE_SUBSCRIPTION_PATH, NODE_SWAP_PATH, NodeListRequest,
-    NodeListResponse, NodeReadRequest, NodeReadResponse, NodeSwapRequest, NodeSwapResponse,
+    NODE_LEASE_ACQUIRE_PATH, NODE_LEASE_RENEW_PATH, NODE_LIST_PATH, NODE_READ_PATH, NODE_SUBSCRIPTION_PATH,
+    NODE_SWAP_PATH, NodeLeaseAcquireRequest, NodeLeaseRenewRequest, NodeListRequest, NodeListResponse,
+    NodeReadRequest, NodeReadResponse, NodeSwapRequest, NodeSwapResponse,
 };
 use crate::wire::{ErrorBody, ErrorCode, MAXIMUM_BODY_BYTES, REQUEST_ID_HEADER};
 
@@ -59,6 +63,8 @@ pub fn node_router(state: NodeApiState) -> Router {
         .route(NODE_LIST_PATH, post(list))
         .route(NODE_SWAP_PATH, post(compare_and_swap))
         .route(NODE_SUBSCRIPTION_PATH, get(subscribe))
+        .route(NODE_LEASE_ACQUIRE_PATH, post(acquire_lease))
+        .route(NODE_LEASE_RENEW_PATH, post(renew_lease))
         .layer(DefaultBodyLimit::max(MAXIMUM_BODY_BYTES))
         .layer(middleware::from_fn_with_state(state.clone(), node_chain))
         .with_state(state)
@@ -276,13 +282,88 @@ async fn compare_and_swap(
     if !slice.may_write(&context.credentials.roles, kind.kind, current_object, request.replacement.as_ref()) {
         return refused(&context, verb, reference, "a node may not make this change");
     }
-    let mut response =
-        match store.compare_and_swap(&reference, request.expected_revision, request.replacement).await {
-            Ok(revision) => Json(NodeSwapResponse { revision }).into_response(),
-            Err(error) => store_failure(&error, context.request_id),
-        };
+    let node = &context.credentials.name;
+    match admit_node_write(store, node, request.epoch).await {
+        Ok(()) => {}
+        Err(error) if error.is_refusal() => return refused(&context, verb, reference, &error.to_string()),
+        Err(error) => return lease_failure(&error, context.request_id),
+    }
+    let fence = node_fence(node, request.epoch);
+    let swapped = store
+        .compare_and_swap_fenced(&reference, request.expected_revision, request.replacement, &fence)
+        .await;
+    let mut response = match swapped {
+        Ok(revision) => Json(NodeSwapResponse { revision }).into_response(),
+        Err(error) => store_failure(&error, context.request_id),
+    };
     response.extensions_mut().insert(NodeAudit { verb, reference, is_denied: false });
     response
+}
+
+fn lease_failure(error: &NodeLeaseError, request_id: Uuid) -> Response {
+    match error {
+        NodeLeaseError::Store(ObjectStoreError::Store(store_error)) => store_failure(store_error, request_id),
+        other => error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorCode::Unavailable,
+            other.to_string(),
+            request_id,
+        ),
+    }
+}
+
+fn lease_answer(
+    context: &NodeContext,
+    outcome: Result<NodeLeaseGrant, NodeLeaseError>,
+    is_audited_on_success: bool,
+) -> Response {
+    let reference = lease_reference(&context.credentials.name);
+    match outcome {
+        Ok(grant) => {
+            let mut response = Json(grant).into_response();
+            if is_audited_on_success {
+                response.extensions_mut().insert(NodeAudit {
+                    verb: Verb::Update,
+                    reference,
+                    is_denied: false,
+                });
+            }
+            response
+        }
+        Err(error) if error.is_refusal() => refused(context, Verb::Update, reference, &error.to_string()),
+        Err(error) => lease_failure(&error, context.request_id),
+    }
+}
+
+async fn acquire_lease(
+    State(state): State<NodeApiState>,
+    Extension(context): Extension<NodeContext>,
+    Json(request): Json<NodeLeaseAcquireRequest>,
+) -> Response {
+    let id = ObjectId::from_uuid(state.identifiers.generate());
+    let outcome = acquire_node_lease(
+        state.store.as_ref(),
+        &context.credentials.name,
+        id,
+        request.terms,
+        state.clock.now(),
+    )
+    .await;
+    if let Ok(grant) = &outcome {
+        tracing::info!(node = %context.credentials.name, epoch = grant.epoch, "a node acquired its lease");
+    }
+    lease_answer(&context, outcome, true)
+}
+
+async fn renew_lease(
+    State(state): State<NodeApiState>,
+    Extension(context): Extension<NodeContext>,
+    Json(request): Json<NodeLeaseRenewRequest>,
+) -> Response {
+    let outcome =
+        renew_node_lease(state.store.as_ref(), &context.credentials.name, request.epoch, state.clock.now())
+            .await;
+    lease_answer(&context, outcome, false)
 }
 
 struct Subscription {

@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use amafu_domain::{ObjectReference, ProjectName};
+use amafu_domain::kinds::node_lease::node_fence_name;
+use amafu_domain::{NodeName, ObjectReference, ProjectName};
 use amafu_interfaces::{
     Consistency, CoreConnection, Fence, SliceChange, SliceRecord, Store, StoreError, StoredRecord, WatchEvent,
 };
@@ -99,6 +100,7 @@ type Watchers = Vec<(String, UnboundedSender<WatchEvent>)>;
 
 #[derive(Clone)]
 pub struct SubscribedStore {
+    node: NodeName,
     core: Arc<dyn CoreConnection>,
     cache: Arc<Mutex<LocalStateCache>>,
     watchers: Arc<Mutex<Watchers>>,
@@ -111,8 +113,9 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl SubscribedStore {
     #[must_use]
-    pub fn new(core: Arc<dyn CoreConnection>, cache: LocalStateCache) -> Self {
+    pub fn new(node: NodeName, core: Arc<dyn CoreConnection>, cache: LocalStateCache) -> Self {
         Self {
+            node,
             core,
             cache: Arc::new(Mutex::new(cache)),
             watchers: Arc::new(Mutex::new(Vec::new())),
@@ -206,21 +209,26 @@ impl Store for SubscribedStore {
 
     async fn compare_and_swap(
         &self,
-        reference: &ObjectReference,
-        expected_revision: Option<u64>,
-        replacement: Option<Value>,
+        _reference: &ObjectReference,
+        _expected_revision: Option<u64>,
+        _replacement: Option<Value>,
     ) -> Result<u64, StoreError> {
-        self.core.compare_and_swap(reference, expected_revision, replacement).await
+        Err(StoreError::Refused(String::from("a node outside the core writes only under its lease epoch")))
     }
 
     async fn compare_and_swap_fenced(
         &self,
-        _reference: &ObjectReference,
-        _expected_revision: Option<u64>,
-        _replacement: Option<Value>,
-        _fence: &Fence,
+        reference: &ObjectReference,
+        expected_revision: Option<u64>,
+        replacement: Option<Value>,
+        fence: &Fence,
     ) -> Result<u64, StoreError> {
-        Err(StoreError::Refused(String::from("only core members hold leases and write with fencing tokens")))
+        if fence.name != node_fence_name(&self.node) {
+            return Err(StoreError::Refused(String::from(
+                "a node outside the core fences only with its own lease",
+            )));
+        }
+        self.core.compare_and_swap(reference, expected_revision, replacement, fence.token).await
     }
 
     fn watch(&self, kind: &str) -> BoxStream<'static, WatchEvent> {
@@ -249,8 +257,14 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
     struct ScriptedCore {
         changes: Mutex<Option<Vec<SliceChange>>>,
+        epochs: Mutex<Vec<u64>>,
+    }
+
+    fn node() -> NodeName {
+        NodeName::new("node-1").unwrap()
     }
 
     #[async_trait::async_trait]
@@ -272,8 +286,10 @@ mod tests {
             _reference: &ObjectReference,
             _expected_revision: Option<u64>,
             _replacement: Option<Value>,
+            epoch: u64,
         ) -> Result<u64, StoreError> {
-            Err(StoreError::Unavailable(String::from("the core is unreachable")))
+            lock(&self.epochs).push(epoch);
+            Ok(1)
         }
 
         async fn subscribe(&self) -> Result<SliceChanges, StoreError> {
@@ -287,6 +303,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("state-cache.json");
         let core = Arc::new(ScriptedCore {
+            epochs: Mutex::new(Vec::new()),
             changes: Mutex::new(Some(vec![
                 SliceChange::Snapshot { records: vec![record("web-1", 1), record("web-2", 2)] },
                 SliceChange::Upserted { record: record("web-1", 3) },
@@ -294,7 +311,7 @@ mod tests {
                 SliceChange::Heartbeat,
             ])),
         });
-        let store = SubscribedStore::new(core.clone(), LocalStateCache::on_disk(&path));
+        let store = SubscribedStore::new(node(), core.clone(), LocalStateCache::on_disk(&path));
         let mut events = store.watch("Vm");
         let ended = futures::executor::block_on(store.follow());
         assert!(matches!(ended, StoreError::Unavailable(_)));
@@ -305,24 +322,29 @@ mod tests {
         );
         assert_eq!(futures::executor::block_on(events.next()), Some(WatchEvent::Resynchronize));
         assert!(store.has_synchronized());
-        let reopened = SubscribedStore::new(core, LocalStateCache::on_disk(&path));
+        let reopened = SubscribedStore::new(node(), core, LocalStateCache::on_disk(&path));
         assert_eq!(reopened.cached_object_count(), 1);
         assert!(!reopened.has_synchronized());
     }
 
     #[test]
-    fn nodes_outside_the_core_cannot_fence() {
-        let store = SubscribedStore::new(
-            Arc::new(ScriptedCore { changes: Mutex::new(None) }),
-            LocalStateCache::in_memory(),
-        );
-        let fence = Fence { name: String::from("scheduler"), token: 1 };
-        let refused = futures::executor::block_on(store.compare_and_swap_fenced(
+    fn a_node_outside_the_core_writes_only_under_its_own_lease() {
+        let core = Arc::new(ScriptedCore::default());
+        let store = SubscribedStore::new(node(), core.clone(), LocalStateCache::in_memory());
+        let unfenced = futures::executor::block_on(store.compare_and_swap(&reference("web-1"), None, None));
+        assert!(matches!(unfenced, Err(StoreError::Refused(_))));
+        let scheduler = Fence { name: String::from("scheduler"), token: 1 };
+        let borrowed = futures::executor::block_on(store.compare_and_swap_fenced(
             &reference("web-1"),
             None,
             None,
-            &fence,
+            &scheduler,
         ));
-        assert!(matches!(refused, Err(StoreError::Refused(_))));
+        assert!(matches!(borrowed, Err(StoreError::Refused(_))));
+        let own = Fence { name: node_fence_name(&node()), token: 4 };
+        let written =
+            futures::executor::block_on(store.compare_and_swap_fenced(&reference("web-1"), None, None, &own));
+        assert_eq!(written, Ok(1));
+        assert_eq!(*lock(&core.epochs), vec![4]);
     }
 }

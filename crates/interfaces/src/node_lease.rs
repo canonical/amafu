@@ -29,7 +29,11 @@ pub enum NodeLeaseError {
 impl NodeLeaseError {
     #[must_use]
     pub fn is_refusal(&self) -> bool {
-        matches!(self, Self::Refused(_) | Self::Store(ObjectStoreError::Store(StoreError::Fenced { .. })))
+        matches!(
+            self,
+            Self::Refused(_)
+                | Self::Store(ObjectStoreError::Store(StoreError::Fenced { .. } | StoreError::Refused(_)))
+        )
     }
 }
 
@@ -51,17 +55,16 @@ pub fn node_fence(node: &NodeName, epoch: u64) -> Fence {
     Fence { name: node_fence_name(node), token: epoch }
 }
 
-pub fn lease_reference(node: &NodeName) -> Result<ObjectReference, NodeLeaseError> {
-    let name = ObjectName::new(node.as_str())
-        .map_err(|error| NodeLeaseError::Store(ObjectStoreError::Malformed(error.to_string())))?;
-    Ok(ObjectReference::of::<NodeLease>(None, name))
+#[must_use]
+pub fn lease_reference(node: &NodeName) -> ObjectReference {
+    ObjectReference::of::<NodeLease>(None, ObjectName::from(node))
 }
 
 pub async fn read_node_lease(
     store: &dyn Store,
     node: &NodeName,
 ) -> Result<Option<(u64, Object<NodeLease>)>, NodeLeaseError> {
-    let Some(record) = store.read(&lease_reference(node)?, Consistency::Linearizable).await? else {
+    let Some(record) = store.read(&lease_reference(node), Consistency::Linearizable).await? else {
         return Ok(None);
     };
     let lease = serde_json::from_value(record.object)
@@ -77,7 +80,7 @@ pub async fn change_node_lease(
     + Send
     + Sync,
 ) -> Result<NodeLeaseSpecification, NodeLeaseError> {
-    let reference = lease_reference(node)?;
+    let reference = lease_reference(node);
     for _ in 0..CONTENDED_ATTEMPTS {
         let current = read_node_lease(store, node).await?;
         let specification = compute(current.as_ref().map(|(_, lease)| &lease.specification))?;

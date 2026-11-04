@@ -1,8 +1,12 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
+use amafu_domain::kinds::node_lease::LeaseTerms;
 use amafu_domain::{ObjectReference, ProjectName};
-use amafu_interfaces::{CoreConnection, SliceChange, SliceChanges, StoreError, StoredRecord};
+use amafu_interfaces::{
+    CoreConnection, NodeLeaseAuthority, NodeLeaseError, NodeLeaseGrant, SliceChange, SliceChanges,
+    StoreError, StoredRecord,
+};
 use bytes::{Bytes, BytesMut};
 use futures::StreamExt;
 use http::header::CONTENT_TYPE;
@@ -14,8 +18,9 @@ use uuid::Uuid;
 
 use crate::client::{ClientError, ResponseBody, Transport, collect, decode, refusal};
 use crate::node_wire::{
-    NODE_LIST_PATH, NODE_READ_PATH, NODE_SUBSCRIPTION_PATH, NODE_SWAP_PATH, NodeListRequest,
-    NodeListResponse, NodeReadRequest, NodeReadResponse, NodeSwapRequest, NodeSwapResponse,
+    NODE_LEASE_ACQUIRE_PATH, NODE_LEASE_RENEW_PATH, NODE_LIST_PATH, NODE_READ_PATH, NODE_SUBSCRIPTION_PATH,
+    NODE_SWAP_PATH, NodeLeaseAcquireRequest, NodeLeaseRenewRequest, NodeListRequest, NodeListResponse,
+    NodeReadRequest, NodeReadResponse, NodeSwapRequest, NodeSwapResponse,
 };
 use crate::wire::REQUEST_ID_HEADER;
 
@@ -163,8 +168,9 @@ impl CoreConnection for NodeClient {
         reference: &ObjectReference,
         expected_revision: Option<u64>,
         replacement: Option<Value>,
+        epoch: u64,
     ) -> Result<u64, StoreError> {
-        let request = NodeSwapRequest { reference: reference.clone(), expected_revision, replacement };
+        let request = NodeSwapRequest { reference: reference.clone(), expected_revision, replacement, epoch };
         let response: NodeSwapResponse = self.post(NODE_SWAP_PATH, &request).await?;
         Ok(response.revision)
     }
@@ -172,5 +178,16 @@ impl CoreConnection for NodeClient {
     async fn subscribe(&self) -> Result<SliceChanges, StoreError> {
         let body = self.send(Method::GET, NODE_SUBSCRIPTION_PATH, None).await?;
         Ok(slice_changes(body))
+    }
+}
+
+#[async_trait::async_trait]
+impl NodeLeaseAuthority for NodeClient {
+    async fn acquire(&self, terms: LeaseTerms) -> Result<NodeLeaseGrant, NodeLeaseError> {
+        Ok(self.post(NODE_LEASE_ACQUIRE_PATH, &NodeLeaseAcquireRequest { terms }).await?)
+    }
+
+    async fn renew(&self, epoch: u64) -> Result<NodeLeaseGrant, NodeLeaseError> {
+        Ok(self.post(NODE_LEASE_RENEW_PATH, &NodeLeaseRenewRequest { epoch }).await?)
     }
 }

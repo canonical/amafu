@@ -95,6 +95,12 @@ label_name!(ProjectName);
 label_name!(NodeName);
 label_name!(ZoneName);
 
+impl From<&NodeName> for ObjectName {
+    fn from(node: &NodeName) -> Self {
+        Self(node.0.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use proptest::prelude::*;

@@ -65,6 +65,8 @@ async fn ensure_refused_and_audited<T: std::fmt::Debug>(
     ensure(cluster.audit_contains(request_id).await?, || format!("{context}: the refusal is not audited"))
 }
 
+const UNHELD_EPOCH: u64 = 1;
+
 async fn ensure_shut_out(
     cluster: &dyn Cluster,
     connection: &NodeClient,
@@ -73,8 +75,9 @@ async fn ensure_shut_out(
     let subscription = connection.subscribe().await.map(|_| ());
     ensure_refused_and_audited(cluster, connection, subscription, &format!("{description} subscribing"))
         .await?;
-    let joined =
-        connection.compare_and_swap(&node_reference("node-3")?, None, Some(registration("node-3"))).await;
+    let joined = connection
+        .compare_and_swap(&node_reference("node-3")?, None, Some(registration("node-3")), UNHELD_EPOCH)
+        .await;
     ensure_refused_and_audited(cluster, connection, joined, &format!("{description} registering a node"))
         .await?;
     let listed = connection.list("Vm", None).await;
@@ -118,15 +121,17 @@ async fn a_node_writes_only_its_share(cluster: &dyn Cluster) -> ScenarioResult {
     ensure(others.is_empty(), || format!("an unregistered node sees other nodes: {others:?}"))?;
     let other_node = connection.read(&node_reference("node-0")?).await;
     ensure_refused_and_audited(cluster, &connection, other_node, "reading another node").await?;
-    let hijack =
-        connection.compare_and_swap(&node_reference("node-0")?, None, Some(registration("node-0"))).await;
+    let hijack = connection
+        .compare_and_swap(&node_reference("node-0")?, None, Some(registration("node-0")), UNHELD_EPOCH)
+        .await;
     ensure_refused_and_audited(cluster, &connection, hijack, "registering as another node").await?;
     let elevated = json!({
         "metadata": {"name": "node-8", "id": "00000000-0000-4000-8000-000000000008", "version": 1, "generation": 1, "observed_generation": 0},
         "specification": {"roles": ["core", "compute"]},
         "status": {},
     });
-    let promoted = connection.compare_and_swap(&node_reference("node-8")?, None, Some(elevated)).await;
+    let promoted =
+        connection.compare_and_swap(&node_reference("node-8")?, None, Some(elevated), UNHELD_EPOCH).await;
     ensure_refused_and_audited(cluster, &connection, promoted, "claiming a role the certificate lacks")
         .await?;
     let vm = ObjectReference {
@@ -139,6 +144,7 @@ async fn a_node_writes_only_its_share(cluster: &dyn Cluster) -> ScenarioResult {
             &vm,
             None,
             Some(json!({"metadata": {"name": "smuggled", "project": "project-a"}, "specification": {}})),
+            UNHELD_EPOCH,
         )
         .await;
     ensure_refused_and_audited(cluster, &connection, smuggled, "creating a VM").await

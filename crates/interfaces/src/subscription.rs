@@ -33,6 +33,7 @@ pub trait CoreConnection: Send + Sync {
         reference: &ObjectReference,
         expected_revision: Option<u64>,
         replacement: Option<Value>,
+        epoch: u64,
     ) -> Result<u64, StoreError>;
 
     async fn subscribe(&self) -> Result<SliceChanges, StoreError>;

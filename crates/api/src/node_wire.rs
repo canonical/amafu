@@ -1,3 +1,4 @@
+use amafu_domain::kinds::node_lease::LeaseTerms;
 use amafu_domain::{ObjectReference, ProjectName};
 use amafu_interfaces::StoredRecord;
 use serde::{Deserialize, Serialize};
@@ -7,6 +8,8 @@ pub const NODE_READ_PATH: &str = "/v1/node/read";
 pub const NODE_LIST_PATH: &str = "/v1/node/list";
 pub const NODE_SWAP_PATH: &str = "/v1/node/compare-and-swap";
 pub const NODE_SUBSCRIPTION_PATH: &str = "/v1/node/subscription";
+pub const NODE_LEASE_ACQUIRE_PATH: &str = "/v1/node/lease/acquire";
+pub const NODE_LEASE_RENEW_PATH: &str = "/v1/node/lease/renew";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -38,9 +41,22 @@ pub struct NodeSwapRequest {
     pub reference: ObjectReference,
     pub expected_revision: Option<u64>,
     pub replacement: Option<Value>,
+    pub epoch: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeSwapResponse {
     pub revision: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeLeaseAcquireRequest {
+    pub terms: LeaseTerms,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeLeaseRenewRequest {
+    pub epoch: u64,
 }
