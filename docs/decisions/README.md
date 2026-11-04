@@ -8,7 +8,7 @@ Each record states a decision that is hard to reverse, why it was taken, and wha
 | [0002](0002-state-on-a-single-voter-quorium.md) | Store state on a single-voter Quorium node behind the `Store` trait (milestone 1 spike) |
 | [0003](0003-boot-chain-and-root-file-system-in-the-lab.md) | Boot the lab through the distribution's signed chain, with the whole system in the initramfs |
 | [0004](0004-roles-and-authorization.md) | What the four fixed roles may do |
-| [0005](0005-stand-ins.md) | Stand-ins used in milestones 1 to 4, and what replaces them |
+| [0005](0005-stand-ins.md) | Stand-ins used in milestones 1 to 5, and what replaces them |
 | [0006](0006-containers-boot-an-erofs-root-in-their-own-vm.md) | Containers boot an erofs root file system in their own VM, instead of virtio-fs |
 | [0007](0007-the-vm-process-sandbox.md) | The VM process sandbox: identity, cgroup, descriptor hand-over, Landlock and seccomp |
 | [0008](0008-private-networks.md) | Private networks: addresses at placement, bridges, nftables and local services |
@@ -24,3 +24,5 @@ Each record states a decision that is hard to reverse, why it was taken, and wha
 | [0018](0018-node-leases-fencing-and-the-watchdog.md) | Node leases fence a node's writes; storage fencing and the watchdog come before any restart |
 | [0019](0019-live-migration-and-evacuation.md) | Live migration and evacuation as operations, relayed between nodes over mutual TLS |
 | [0020](0020-init-and-control.md) | A small init supervises one control process with fewer capabilities |
+| [0021](0021-boot-slots-and-upgrades.md) | Two boot slots chosen through grubenv, and upgrades and rollbacks as operations |
+| [0022](0022-install-from-maas.md) | Install from MAAS through an in-memory Ubuntu, with a local journal |

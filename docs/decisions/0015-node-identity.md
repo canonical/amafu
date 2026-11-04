@@ -6,8 +6,8 @@ Status: accepted for milestone 3
 
 - **A node certificate names its node and roles** as URIs in its subject alternative names
   (`urn:amafu:node:<name>`, `urn:amafu:role:<role>`), with client and server use, and `amafu-state` as a DNS name for
-  Quorium. Until install exists (milestone 5) the rig issues them from the lab's certificate authority and writes
-  them into the node configuration's `identity` section.
+  Quorium. The installer issues them from the cluster's authority into each node's configuration (0022); the
+  virtual lab, which is not installed through MAAS, has the rig issue them the same way.
 - **The API's TLS listener accepts any client certificate, or none**, and proves only that the client holds the key.
   The node API then verifies the chain against the cluster authority, reads the node's name and roles, and checks the
   certificate's SHA-256 fingerprint against `CertificateRevocation` objects, on every request and again on every
