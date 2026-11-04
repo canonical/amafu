@@ -6,13 +6,13 @@ use std::time::Duration;
 
 use amafu_domain::kinds::image::Image;
 use amafu_domain::kinds::storage_backend::StorageBackend;
-use amafu_domain::kinds::vm::{Vm, VmPhase, VmStatus};
+use amafu_domain::kinds::vm::{Vm, VmMigration, VmPhase, VmStatus};
 use amafu_domain::kinds::volume::Volume;
 use amafu_domain::{Change, NodeName, Object, ObjectId, ObjectReference};
-use amafu_interfaces::objects::{apply, get, list, remove};
+use amafu_interfaces::objects::{apply, get, list, remove, update_status};
 use amafu_interfaces::{
     ActionError, AttachTarget, Clock, Consistency, Datapath, GuestAgents, Hypervisor, ImageStore,
-    InstanceState, LaunchDisk, NodeLeaseState, RunningInstance, Storage, Store,
+    InstanceState, LaunchDisk, NodeLeaseState, RunningInstance, Storage, Store, VmLaunchSpecification,
 };
 use amafu_reconciler::{Controller, KeyMapping, WatchedKind};
 pub use plan::{ComputeAction, ObservedImage, ObservedVolume, StartPlan, VmContext, VolumeAttachment};
@@ -60,6 +60,8 @@ pub enum ComputeKey {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ComputeObservation {
     Hosted(Box<VmContext>),
+    Arriving(Box<VmContext>),
+    Departed(Box<VmContext>),
     Elsewhere { instance: Option<RunningInstance> },
     Orphans { instances: Vec<RunningInstance>, assigned: BTreeSet<ObjectId> },
 }
@@ -68,6 +70,8 @@ pub enum ComputeObservation {
 pub fn plan_compute(observation: &ComputeObservation) -> Vec<ComputeAction> {
     match observation {
         ComputeObservation::Hosted(context) => plan::plan_vm(context),
+        ComputeObservation::Arriving(context) => plan::plan_arriving(context),
+        ComputeObservation::Departed(context) => plan::plan_departed(context),
         ComputeObservation::Elsewhere { instance } => plan::plan_stray(instance.as_ref()),
         ComputeObservation::Orphans { instances, assigned } => plan::plan_orphans(instances, assigned),
     }
@@ -84,7 +88,27 @@ impl ComputeController {
 
     async fn vms_assigned_here(&self) -> Result<Vec<Object<Vm>>, ActionError> {
         let vms = list::<Vm>(self.store(), None, Consistency::Linearizable).await?;
-        Ok(vms.into_iter().filter(|vm| vm.status.node.as_ref() == Some(&self.node)).collect())
+        Ok(vms.into_iter().filter(|vm| self.is_involved(vm)).collect())
+    }
+
+    fn is_involved(&self, vm: &Object<Vm>) -> bool {
+        vm.status.node.as_ref() == Some(&self.node)
+            || vm.status.active_migration().is_some_and(|migration| migration.involves(&self.node))
+    }
+
+    async fn report_migration(&self, key: &ComputeKey, migration: VmMigration) -> Result<(), ActionError> {
+        update_status::<Vm>(self.store(), vm_reference(key)?, |vm| {
+            let current = vm.status.active_migration()?;
+            let is_same = current.attempt == migration.attempt && current.phase < migration.phase;
+            is_same.then(|| VmStatus { migration: Some(migration.clone()), ..vm.status.clone() })
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn receive(&self, plan: StartPlan) -> Result<(), ActionError> {
+        let launch = self.attach_and_launch(plan).await?;
+        self.services.hypervisor.receive(&launch).await
     }
 
     async fn observe_volumes(&self, vm: &Object<Vm>) -> Result<Vec<ObservedVolume>, ActionError> {
@@ -151,6 +175,11 @@ impl ComputeController {
     }
 
     async fn start(&self, plan: StartPlan) -> Result<(), ActionError> {
+        let launch = self.attach_and_launch(plan).await?;
+        self.services.hypervisor.start(&launch).await
+    }
+
+    async fn attach_and_launch(&self, plan: StartPlan) -> Result<VmLaunchSpecification, ActionError> {
         let mut launch = plan.launch;
         if let Some(root) = plan.root_disk {
             launch.disks.push(LaunchDisk { path: root, is_read_only: true });
@@ -160,7 +189,7 @@ impl ComputeController {
             let path = self.services.storage.attacher(target.protocol())?.attach(&target).await?;
             launch.disks.push(LaunchDisk { path, is_read_only: false });
         }
-        self.services.hypervisor.start(&launch).await
+        Ok(launch)
     }
 
     async fn release(&self, attachments: &[VolumeAttachment]) -> Result<(), ActionError> {
@@ -228,6 +257,18 @@ impl Controller for ComputeController {
                     Some(vm) if vm.status.node.as_ref() == Some(&self.node) => {
                         Ok(ComputeObservation::Hosted(Box::new(self.observe_hosted(vm).await?)))
                     }
+                    Some(vm) if self.is_involved(&vm) => {
+                        let is_arriving = vm
+                            .status
+                            .active_migration()
+                            .is_some_and(|migration| migration.destination == self.node);
+                        let context = Box::new(self.observe_hosted(vm).await?);
+                        Ok(if is_arriving {
+                            ComputeObservation::Arriving(context)
+                        } else {
+                            ComputeObservation::Departed(context)
+                        })
+                    }
                     Some(vm) => Ok(ComputeObservation::Elsewhere {
                         instance: self.instance_of(vm.metadata.id).await?,
                     }),
@@ -247,7 +288,10 @@ impl Controller for ComputeController {
     }
 
     fn revisit_after(&self, observation: &ComputeObservation) -> Option<std::time::Duration> {
-        let ComputeObservation::Hosted(context) = observation else {
+        let (ComputeObservation::Hosted(context)
+        | ComputeObservation::Arriving(context)
+        | ComputeObservation::Departed(context)) = observation
+        else {
             return None;
         };
         plan::is_in_transition(context).then_some(TRANSITION_REVISIT)
@@ -265,6 +309,12 @@ impl Controller for ComputeController {
                 }
                 outcome => outcome,
             },
+            ComputeAction::ReceiveVm(_) | ComputeAction::SendVm { .. } if !self.holds_lease() => {
+                Err(ActionError::retryable("the node holds no valid lease, so it moves no VM"))
+            }
+            ComputeAction::ReceiveVm(plan) => self.receive(*plan).await,
+            ComputeAction::SendVm { vm_id, target } => self.services.hypervisor.send(&vm_id, &target).await,
+            ComputeAction::ReportMigration(migration) => self.report_migration(key, *migration).await,
             ComputeAction::StartWorkload { vm_id, workload } => {
                 self.services.agents.start_workload(&vm_id, &workload).await
             }

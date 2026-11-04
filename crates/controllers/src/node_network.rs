@@ -75,8 +75,17 @@ fn segment_key(project: Option<&ProjectName>, network: &ObjectName) -> SegmentKe
     SegmentKey::of(&project_key(project), network.as_str())
 }
 
-fn hosted(view: &NetworkView) -> impl Iterator<Item = &Object<Vm>> {
+fn owned(view: &NetworkView) -> impl Iterator<Item = &Object<Vm>> {
     view.vms.iter().filter(|vm| vm.status.node.as_ref() == Some(&view.node))
+}
+
+fn is_arriving(vm: &Object<Vm>, node: &NodeName) -> bool {
+    vm.status.active_migration().is_some_and(|migration| &migration.destination == node)
+        && vm.status.node.as_ref() != Some(node)
+}
+
+fn with_ports(view: &NetworkView) -> impl Iterator<Item = &Object<Vm>> {
+    view.vms.iter().filter(|vm| vm.status.node.as_ref() == Some(&view.node) || is_arriving(vm, &view.node))
 }
 
 fn group_member_addresses(
@@ -90,7 +99,7 @@ fn group_member_addresses(
         .filter(|endpoint| endpoint.metadata.project.as_ref() == project)
         .filter(|endpoint| endpoint.specification.security_groups.contains(group))
         .map(|endpoint| endpoint.specification.address);
-    let from_hosted = hosted(view).filter(|vm| vm.metadata.project.as_ref() == project).flat_map(|vm| {
+    let from_hosted = owned(view).filter(|vm| vm.metadata.project.as_ref() == project).flat_map(|vm| {
         vm.specification
             .network_interfaces
             .iter()
@@ -155,7 +164,7 @@ fn add_segment(state: &mut NodeNetworkState, network: &Object<Network>) -> Segme
 pub fn desired_network_state(view: &NetworkView) -> NodeNetworkState {
     let mut state =
         NodeNetworkState { underlay_address: view.underlay_address, ..NodeNetworkState::default() };
-    for vm in hosted(view) {
+    for vm in with_ports(view) {
         let project = vm.metadata.project.as_ref();
         for (index, (interface, allocated)) in
             vm.specification.network_interfaces.iter().zip(&vm.status.interfaces).enumerate()
@@ -222,7 +231,7 @@ pub fn wanted_endpoints(view: &NetworkView) -> BTreeMap<ObjectReference, Network
         return BTreeMap::new();
     };
     let mut wanted = BTreeMap::new();
-    for vm in hosted(view) {
+    for vm in owned(view) {
         for (index, (interface, allocated)) in
             vm.specification.network_interfaces.iter().zip(&vm.status.interfaces).enumerate()
         {

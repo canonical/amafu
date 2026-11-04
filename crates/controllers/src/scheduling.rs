@@ -148,6 +148,47 @@ fn workload(vm: &Object<Vm>, requirements: Requirements) -> PendingWorkload {
     workload
 }
 
+fn occupies(vm: &Object<Vm>, node: &NodeName) -> bool {
+    let is_arriving = vm.status.active_migration().is_some_and(|migration| &migration.destination == node);
+    vm.status.node.as_ref() == Some(node) || is_arriving
+}
+
+pub fn choose_destination(
+    observation: &SchedulingObservation,
+    vm: &Object<Vm>,
+    settings: SchedulingSettings,
+) -> Result<NodeName, String> {
+    let requirements = storage_requirements(vm, observation)?;
+    if requirements.node.is_some() {
+        return Err(String::from("a VM with a local disk volume cannot move to another node"));
+    }
+    let source = vm.status.node.clone();
+    let mut elsewhere = observation.clone();
+    for node in &mut elsewhere.nodes {
+        if source.as_ref().is_some_and(|source| node.metadata.name.as_str() == source.as_str()) {
+            node.specification.is_cordoned = true;
+        }
+    }
+    let cluster = cluster_capacity(&elsewhere, settings);
+    match place(&Scheduler::standard(), cluster, vec![workload(vm, requirements)]).into_iter().next() {
+        Some(PlacementDecision::Place(_, node)) => Ok(node),
+        Some(PlacementDecision::Unschedulable(_, reason)) => Err(reason),
+        None => Err(String::from("no placement was decided")),
+    }
+}
+
+pub async fn observe_cluster(store: &dyn Store) -> Result<SchedulingObservation, ActionError> {
+    let consistency = Consistency::Linearizable;
+    Ok(SchedulingObservation {
+        vms: list::<Vm>(store, None, consistency).await?,
+        nodes: list::<Node>(store, None, consistency).await?,
+        networks: list::<Network>(store, None, consistency).await?,
+        volumes: list::<Volume>(store, None, consistency).await?,
+        images: list::<Image>(store, None, consistency).await?,
+        backends: list::<StorageBackend>(store, None, consistency).await?,
+    })
+}
+
 fn cluster_capacity(observation: &SchedulingObservation, settings: SchedulingSettings) -> ClusterCapacity {
     let candidates = observation
         .nodes
@@ -174,7 +215,7 @@ fn cluster_capacity(observation: &SchedulingObservation, settings: SchedulingSet
                 .filter(|image| image.status.is_ready() && image.status.cached_on.contains(&name))
                 .map(|image| image.metadata.id)
                 .collect();
-            for vm in observation.vms.iter().filter(|vm| vm.status.node.as_ref() == Some(&name)) {
+            for vm in observation.vms.iter().filter(|vm| occupies(vm, &name)) {
                 candidate.allocated_cpu_count += u32::from(vm.specification.cpu_count);
                 candidate.allocated_memory_mebibytes += vm.specification.memory_mebibytes;
                 candidate.anti_affinity_groups.extend(anti_affinity_key(vm));
@@ -281,16 +322,7 @@ impl Controller for SchedulerController {
     }
 
     async fn observe(&self, _key: &PendingWorkloads) -> Result<SchedulingObservation, ActionError> {
-        let store = self.store.as_ref();
-        let consistency = Consistency::Linearizable;
-        Ok(SchedulingObservation {
-            vms: list::<Vm>(store, None, consistency).await?,
-            nodes: list::<Node>(store, None, consistency).await?,
-            networks: list::<Network>(store, None, consistency).await?,
-            volumes: list::<Volume>(store, None, consistency).await?,
-            images: list::<Image>(store, None, consistency).await?,
-            backends: list::<StorageBackend>(store, None, consistency).await?,
-        })
+        observe_cluster(self.store.as_ref()).await
     }
 
     fn plan(&self, observation: &SchedulingObservation) -> Vec<SchedulingAction> {

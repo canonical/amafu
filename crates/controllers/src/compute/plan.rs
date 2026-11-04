@@ -3,12 +3,12 @@ use std::path::PathBuf;
 
 use amafu_domain::kinds::image::Image;
 use amafu_domain::kinds::storage_backend::StorageProviderSpecification;
-use amafu_domain::kinds::vm::{BootSource, Vm, VmPhase, VmStatus};
+use amafu_domain::kinds::vm::{BootSource, MigrationPhase, Vm, VmMigration, VmPhase, VmStatus};
 use amafu_domain::kinds::volume::{ProvisionedVolume, Volume};
 use amafu_domain::{NodeName, Object, ObjectId, ObjectName};
 use amafu_interfaces::{
-    CachedImage, InstanceState, LaunchInterface, Payload, PortKey, RunningInstance, VmLaunchSpecification,
-    WorkloadSpecification, WorkloadState,
+    CachedImage, InstanceMigration, InstanceState, LaunchInterface, MigrationTarget, Payload, PortKey,
+    RunningInstance, VmLaunchSpecification, WorkloadSpecification, WorkloadState,
 };
 
 pub const METADATA_SEED: &str = "ds=nocloud;s=http://169.254.169.254/";
@@ -53,6 +53,9 @@ pub struct StartPlan {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ComputeAction {
     StartVm(Box<StartPlan>),
+    ReceiveVm(Box<StartPlan>),
+    SendVm { vm_id: ObjectId, target: MigrationTarget },
+    ReportMigration(Box<VmMigration>),
     StartWorkload { vm_id: ObjectId, workload: Box<WorkloadSpecification> },
     StopVm(ObjectId),
     ReleaseVolumes(Vec<VolumeAttachment>),
@@ -233,6 +236,9 @@ fn plan_stopped(context: &VmContext) -> Vec<ComputeAction> {
 
 #[must_use]
 pub fn is_in_transition(context: &VmContext) -> bool {
+    if context.vm.status.is_migrating() {
+        return true;
+    }
     let should_run = context.vm.specification.should_run() && !context.vm.metadata.is_deleting;
     match context.instance.as_ref().map(|instance| instance.state) {
         None => should_run && !has_settled_at_this_generation(&context.vm),
@@ -246,6 +252,11 @@ pub fn is_in_transition(context: &VmContext) -> bool {
 #[must_use]
 pub fn plan_vm(context: &VmContext) -> Vec<ComputeAction> {
     let (vm, node) = (&context.vm, &context.node);
+    if let Some(migration) = vm.status.active_migration().filter(|migration| &migration.source == node)
+        && matches!(migration.phase, MigrationPhase::Copying | MigrationPhase::Copied)
+    {
+        return plan_sending(context, migration);
+    }
     let should_run = vm.specification.should_run() && !vm.metadata.is_deleting;
     match (should_run, context.instance.as_ref().map(|instance| instance.state)) {
         (true, None) if has_settled_at_this_generation(vm) => Vec::new(),
@@ -289,6 +300,98 @@ fn plan_exited(context: &VmContext) -> Vec<ComputeAction> {
         _ => Vec::new(),
     };
     actions.push(ComputeAction::StopVm(vm.metadata.id));
+    actions
+}
+
+fn report_migration(
+    migration: &VmMigration,
+    phase: MigrationPhase,
+    message: Option<String>,
+) -> ComputeAction {
+    ComputeAction::ReportMigration(Box::new(VmMigration { phase, message, ..migration.clone() }))
+}
+
+#[must_use]
+pub fn plan_arriving(context: &VmContext) -> Vec<ComputeAction> {
+    let Some(migration) = context.vm.status.active_migration() else {
+        return Vec::new();
+    };
+    let instance = context.instance.as_ref();
+    match (migration.phase, instance.map(|instance| (instance.state, instance.migration.as_ref()))) {
+        (MigrationPhase::Preparing, None) => match start_plan(context) {
+            Ok(plan) => vec![ComputeAction::ReceiveVm(Box::new(plan))],
+            Err(_) => Vec::new(),
+        },
+        (MigrationPhase::Preparing, Some((_, Some(InstanceMigration::Receiving)))) => {
+            vec![report_migration(migration, MigrationPhase::DestinationReady, None)]
+        }
+        (_, Some((InstanceState::Exited, _))) | (MigrationPhase::Copying | MigrationPhase::Copied, None) => {
+            let reason = instance.and_then(|instance| instance.failure.clone());
+            vec![report_migration(
+                migration,
+                MigrationPhase::Failed,
+                Some(reason.unwrap_or_else(|| String::from("the receiving VM process ended"))),
+            )]
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn migration_target(migration: &VmMigration) -> MigrationTarget {
+    MigrationTarget {
+        attempt: migration.attempt,
+        node_address: migration.destination_address,
+        downtime_milliseconds: migration.downtime_milliseconds,
+    }
+}
+
+#[must_use]
+pub fn plan_sending(context: &VmContext, migration: &VmMigration) -> Vec<ComputeAction> {
+    let Some(instance) = context.instance.as_ref() else {
+        return match migration.phase {
+            MigrationPhase::Copying => vec![report_migration(
+                migration,
+                MigrationPhase::Failed,
+                Some(String::from("the VM stopped before it was sent")),
+            )],
+            _ => Vec::new(),
+        };
+    };
+    let this_attempt =
+        instance.migration.as_ref().filter(|progress| progress.attempt() == Some(migration.attempt));
+    match (migration.phase, this_attempt) {
+        (MigrationPhase::Copying, None) if instance.state == InstanceState::Running => {
+            vec![ComputeAction::SendVm { vm_id: context.vm.metadata.id, target: migration_target(migration) }]
+        }
+        (MigrationPhase::Copying, Some(InstanceMigration::Sent { report, .. })) => {
+            let copied =
+                VmMigration { phase: MigrationPhase::Copied, report: Some(*report), ..migration.clone() };
+            vec![ComputeAction::ReportMigration(Box::new(copied))]
+        }
+        (MigrationPhase::Copying, Some(InstanceMigration::Failed { reason, .. })) => {
+            vec![report_migration(migration, MigrationPhase::Failed, Some(reason.clone()))]
+        }
+        _ => Vec::new(),
+    }
+}
+
+#[must_use]
+pub fn plan_departed(context: &VmContext) -> Vec<ComputeAction> {
+    let Some(migration) = context.vm.status.active_migration() else {
+        return Vec::new();
+    };
+    if migration.phase != MigrationPhase::SwitchedOver {
+        return Vec::new();
+    }
+    if let Some(instance) = &context.instance {
+        return vec![ComputeAction::StopVm(instance.vm_id)];
+    }
+    let mut actions = Vec::new();
+    let held: Vec<VolumeAttachment> = attachments(context).unwrap_or_default();
+    if !held.is_empty() {
+        actions.push(ComputeAction::ReleaseVolumes(held));
+    }
+    actions.push(report_migration(migration, MigrationPhase::Cleaned, None));
     actions
 }
 
