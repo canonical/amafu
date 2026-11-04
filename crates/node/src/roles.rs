@@ -34,8 +34,8 @@ use amafu_interfaces::{
 use amafu_network::{KernelDatapath, LocalServicesServer};
 use amafu_reconciler::{Controller, ReconcilerSettings, StepRegistry, run_controller, run_singleton};
 use amafu_state::{
-    DEFAULT_HEARTBEAT, LeaseFencedStore, LocalNodeLeases, LocalStateCache, QuoriumAuditLog, QuoriumLeases,
-    QuoriumStore, StateTls, SubscribedStore, VoterSettings, start_voter,
+    BatchedAuditLog, LeaseFencedStore, LocalNodeLeases, LocalStateCache, QuoriumAuditLog, QuoriumLeases,
+    QuoriumStore, ReadReplicaStore, StateTls, SubscribedStore, VoterSettings, start_voter,
 };
 use amafu_storage::plugins::{DownloadedModules, PluginHost, PluginLimits};
 use amafu_storage::{BuiltInStorage, CachedImages};
@@ -54,6 +54,7 @@ const STATE_DIRECTORY: &str = "state";
 const STATE_CACHE_FILE: &str = "state-cache.json";
 const SUBSCRIPTION_REFRESH: Duration = Duration::from_secs(5);
 const RESUBSCRIBE_DELAY: Duration = Duration::from_secs(1);
+const API_WORKER_THREADS: usize = 4;
 const SYNCHRONIZATION_POLL: Duration = Duration::from_millis(100);
 pub const VM_DIRECTORY: &str = "vms";
 
@@ -189,8 +190,9 @@ fn start_api(
     configuration: &NodeConfiguration,
     services: &Services,
 ) -> anyhow::Result<()> {
+    let replicated_kinds = amafu_domain::registry::kinds().iter().map(|descriptor| descriptor.kind).collect();
     let state = ApiState {
-        store: Arc::clone(&services.store),
+        store: Arc::new(ReadReplicaStore::start(Arc::clone(&services.store), &replicated_kinds)),
         authenticator: Arc::new(TokenAuthenticator::new(configuration.api.identities.clone())),
         audit: Arc::clone(&services.audit),
         clock: Arc::clone(&services.clock),
@@ -214,7 +216,7 @@ fn start_api(
             refresh_interval: SUBSCRIPTION_REFRESH,
         }));
     }
-    roles.spawn(supervise("api", move || {
+    let serving = api_runtime()?.spawn(supervise("api", move || {
         let application = application.clone();
         let tls = Arc::clone(&tls);
         async move {
@@ -228,7 +230,25 @@ fn start_api(
             }
         }
     }));
+    roles.spawn(async move {
+        if let Err(error) = serving.await {
+            tracing::error!(%error, "the API runtime stopped");
+        }
+    });
     Ok(())
+}
+
+fn api_runtime() -> std::io::Result<&'static tokio::runtime::Runtime> {
+    static API_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    if let Some(runtime) = API_RUNTIME.get() {
+        return Ok(runtime);
+    }
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(API_WORKER_THREADS)
+        .thread_name("amafu-api")
+        .enable_all()
+        .build()?;
+    Ok(API_RUNTIME.get_or_init(|| runtime))
 }
 
 fn compute_adapters(
@@ -507,7 +527,7 @@ async fn core_member_services(configuration: &NodeConfiguration) -> anyhow::Resu
             certificate_pem: identity.certificate.clone(),
             private_key_pem: identity.private_key.clone(),
         }),
-        heartbeat: DEFAULT_HEARTBEAT,
+        heartbeat: configuration.state.heartbeat(),
     };
     let quorium = start_voter(&configuration.directories.data.join(STATE_DIRECTORY), &settings).await?;
     tracing::info!(voters = settings.voters.len(), "the state store is running");
@@ -521,7 +541,7 @@ async fn core_member_services(configuration: &NodeConfiguration) -> anyhow::Resu
     ));
     Ok(Services {
         store,
-        audit: Arc::new(QuoriumAuditLog::new(quorium.clone())),
+        audit: Arc::new(BatchedAuditLog::start(QuoriumAuditLog::new(quorium.clone()))),
         clock,
         leases: Some(Arc::new(QuoriumLeases::new(quorium))),
         node_leases,
@@ -662,7 +682,11 @@ pub async fn run(configuration: NodeConfiguration, boot: Option<BootServices>) -
     };
     let transport = migration_transport(&configuration)?;
     let hypervisor = Arc::new(cloud_hypervisor(&configuration, transport.clone())?);
-    let underlay = amafu_network::bring_up_underlay(configuration.network.as_ref()).await?;
+    let underlay = if configuration.has_role(NodeRole::Compute) {
+        amafu_network::bring_up_underlay(configuration.network.as_ref()).await?
+    } else {
+        String::new()
+    };
     let adapters = compute_adapters(&configuration, &hypervisor, underlay)?;
     let responsive = ReconcilerSettings {
         periodic_resynchronization: Duration::from_secs(2),
