@@ -11,6 +11,7 @@ use amafu_domain::kinds::operation::{
 };
 use amafu_domain::kinds::vm::{Vm, VmPhase};
 use amafu_domain::node_image::NodeImage;
+use amafu_domain::upgrade::DEFAULT_HEALTH_DEADLINE_SECONDS;
 use amafu_domain::{Change, NodeName, Object, ObjectId, ObjectReference};
 use amafu_interfaces::objects::{apply, get, list};
 use amafu_interfaces::{ActionError, Consistency, Identifiers, Store, TrustedImageKeys};
@@ -18,8 +19,6 @@ use amafu_reconciler::{OperationContext, Step};
 
 use crate::operations::migration::child_name;
 use crate::operations::node_specification::{change_node_specification, node_object, node_reference};
-
-pub const LONGEST_WAIT_FOR_HEALTH: Duration = Duration::from_secs(900);
 
 pub fn planned_image<'context>(
     context: &'context OperationContext<'_>,
@@ -275,12 +274,16 @@ impl Step for AwaitHealthy {
                 return Ok(true);
             }
         }
-        if step_age(context) > LONGEST_WAIT_FOR_HEALTH {
+        let deadline = context
+            .operation
+            .specification
+            .upgrade_plan()
+            .map_or(DEFAULT_HEALTH_DEADLINE_SECONDS, |plan| plan.health_deadline_seconds);
+        if step_age(context) > Duration::from_secs(deadline) {
             return Err(ActionError::invalid(format!(
-                "{} did not run {} healthily within {} seconds",
+                "{} did not run {} healthily within {deadline} seconds",
                 self.node,
-                image.identity(),
-                LONGEST_WAIT_FOR_HEALTH.as_secs()
+                image.identity()
             )));
         }
         Ok(false)

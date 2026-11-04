@@ -2,19 +2,21 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::kinds::node::{Node, NodeRole};
 use crate::kinds::operation::StepSpecification;
 use crate::name::{NodeName, ZoneName};
 use crate::node_image::NodeImage;
+use crate::object::Object;
 use crate::validation::ValidationError;
 
-pub const DEFAULT_HEALTH_WINDOW_SECONDS: u64 = 120;
+pub const DEFAULT_HEALTH_DEADLINE_SECONDS: u64 = 900;
 pub const DEFAULT_SOAK_SECONDS: u64 = 300;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WavePolicy {
     pub canary_count: usize,
-    pub health_window_seconds: u64,
+    pub health_deadline_seconds: u64,
     pub soak_seconds: u64,
 }
 
@@ -22,7 +24,7 @@ impl Default for WavePolicy {
     fn default() -> Self {
         Self {
             canary_count: 1,
-            health_window_seconds: DEFAULT_HEALTH_WINDOW_SECONDS,
+            health_deadline_seconds: DEFAULT_HEALTH_DEADLINE_SECONDS,
             soak_seconds: DEFAULT_SOAK_SECONDS,
         }
     }
@@ -36,6 +38,21 @@ pub struct InventoryNode {
     pub runs_target: bool,
 }
 
+#[must_use]
+pub fn inventory(nodes: &[Object<Node>], target: &NodeImage) -> Vec<InventoryNode> {
+    nodes
+        .iter()
+        .filter_map(|node| {
+            Some(InventoryNode {
+                name: NodeName::new(node.metadata.name.as_str()).ok()?,
+                zone: node.specification.zone.clone(),
+                is_core: node.specification.roles.contains(&NodeRole::Core),
+                runs_target: node.status.runs_confirmed(target) && !node.specification.is_cordoned,
+            })
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpgradeWave {
@@ -47,7 +64,7 @@ pub struct UpgradeWave {
 pub struct UpgradePlan {
     pub image: NodeImage,
     pub waves: Vec<UpgradeWave>,
-    pub health_window_seconds: u64,
+    pub health_deadline_seconds: u64,
     pub soak_seconds: u64,
     #[serde(default)]
     pub is_rollback: bool,
@@ -94,7 +111,7 @@ impl UpgradePlan {
         Self {
             image,
             waves,
-            health_window_seconds: policy.health_window_seconds,
+            health_deadline_seconds: policy.health_deadline_seconds,
             soak_seconds: policy.soak_seconds,
             is_rollback,
         }
