@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::boot::BootFiles;
 
 pub const GUEST_CONTEXT_IDENTIFIER: u32 = 3;
+pub const TAP_DESCRIPTOR_BASE: RawFd = 200;
 const QCOW2_MAGIC: &[u8; 4] = b"QFI\xfb";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

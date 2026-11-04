@@ -1,9 +1,9 @@
-use std::os::fd::{IntoRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, IntoRawFd, OwnedFd, RawFd};
 use std::path::Path;
 use std::sync::mpsc;
 
 use seccompiler::SeccompAction;
-use vmm::api::{ApiAction, ApiRequest, VmBoot, VmCreate};
+use vmm::api::{ApiAction, ApiRequest, VmBoot, VmCreate, VmReceiveMigration, VmReceiveMigrationData};
 use vmm::config::VmParams;
 use vmm::vm_config::VmConfig;
 use vmm_sys_util::eventfd::{EFD_NONBLOCK, EventFd};
@@ -11,7 +11,7 @@ use vmm_sys_util::signal::block_signal;
 
 use crate::boot::BootFiles;
 use crate::control::{self, Work};
-use crate::plan::VmProcessPlan;
+use crate::plan::{TAP_DESCRIPTOR_BASE, VmProcessPlan};
 use crate::probe::{self, Attempt, DENIED_EXIT_CODE, PERMITTED_EXIT_CODE};
 use crate::runtime::VmDirectory;
 use crate::sandbox::{self, SandboxError};
@@ -116,24 +116,68 @@ fn create_and_boot(
     Ok(())
 }
 
-fn boot(
+fn receive_migration(
+    api_event: &EventFd,
+    api_sender: mpsc::Sender<ApiRequest>,
     directory: &VmDirectory,
-    plan: &VmProcessPlan,
-    tap_descriptors: Vec<OwnedFd>,
 ) -> Result<(), VmProcessError> {
-    let tap_descriptors: Vec<RawFd> = tap_descriptors.into_iter().map(IntoRawFd::into_raw_fd).collect();
-    let configuration = configuration(plan, &tap_descriptors)?;
+    let event = api_event.try_clone().map_err(|error| VmProcessError::Vmm(error.to_string()))?;
+    let receiving = VmReceiveMigrationData {
+        receiver_url: format!("unix:{}", directory.incoming_socket().display()),
+        ..VmReceiveMigrationData::default()
+    };
+    VmReceiveMigration
+        .send(event, api_sender, receiving)
+        .map_err(|error| VmProcessError::Boot(debug_message(error)))?;
+    Ok(())
+}
+
+fn place_taps(taps: Vec<OwnedFd>) -> Result<Vec<RawFd>, VmProcessError> {
+    taps.into_iter()
+        .zip(TAP_DESCRIPTOR_BASE..)
+        .map(|(tap, wanted)| {
+            let placed = rustix::io::fcntl_dupfd_cloexec(&tap, wanted)
+                .map_err(|error| VmProcessError::Vmm(format!("placing a tap: {error}")))?;
+            if placed.as_raw_fd() != wanted {
+                return Err(VmProcessError::Vmm(format!(
+                    "descriptor {wanted} is taken, so the tap cannot move there"
+                )));
+            }
+            Ok(placed.into_raw_fd())
+        })
+        .collect()
+}
+
+fn start_event_monitor(directory: &VmDirectory, exit_event: &EventFd) -> Result<(), VmProcessError> {
+    let file = std::fs::File::create(directory.events_file())
+        .map_err(|error| VmProcessError::Vmm(error.to_string()))?;
+    let monitor =
+        event_monitor::set_monitor(Some(file)).map_err(|error| VmProcessError::Vmm(error.to_string()))?;
+    let exit = exit_event.try_clone().map_err(|error| VmProcessError::Vmm(error.to_string()))?;
+    vmm::start_event_monitor_thread(monitor, &SeccompAction::KillProcess, false, exit)
+        .map_err(|error| VmProcessError::Vmm(debug_message(error)))?;
+    Ok(())
+}
+
+enum Start {
+    Boot(Box<VmConfig>),
+    Receive,
+}
+
+fn run(directory: &VmDirectory, plan: &VmProcessPlan, start: Start) -> Result<(), VmProcessError> {
     block_handled_signals();
     let hypervisor =
         cloud_hypervisor_backend::new().map_err(|error| VmProcessError::Hypervisor(debug_message(error)))?;
     let event = || EventFd::new(EFD_NONBLOCK).map_err(|error| VmProcessError::Vmm(error.to_string()));
     let api_event = event()?;
     let exit_event = event()?;
+    start_event_monitor(directory, &exit_event)?;
     let (api_sender, api_receiver) = mpsc::channel();
     let clone = |event: &EventFd| event.try_clone().map_err(|error| VmProcessError::Vmm(error.to_string()));
+    let api_socket = Some(directory.api_socket().to_string_lossy().into_owned());
     let vmm_thread = vmm::start_vmm_thread(
         vmm::VmmVersionInfo::new(env!("CARGO_PKG_VERSION"), env!("CARGO_PKG_VERSION")),
-        &None,
+        &api_socket,
         None,
         clone(&api_event)?,
         api_sender.clone(),
@@ -146,7 +190,10 @@ fn boot(
     )
     .map_err(|error| VmProcessError::Vmm(debug_message(error)))?;
 
-    let booted = create_and_boot(&api_event, api_sender, configuration);
+    let booted = match start {
+        Start::Boot(configuration) => create_and_boot(&api_event, api_sender, *configuration),
+        Start::Receive => receive_migration(&api_event, api_sender, directory),
+    };
     match booted {
         Ok(()) => {
             std::fs::write(directory.booted_file(), b"")
@@ -164,6 +211,20 @@ fn boot(
         Ok(Err(error)) => Err(VmProcessError::Exit(debug_message(error))),
         Err(_) => Err(VmProcessError::Exit(String::from("the VMM thread panicked"))),
     }
+}
+
+fn boot(directory: &VmDirectory, plan: &VmProcessPlan, taps: Vec<OwnedFd>) -> Result<(), VmProcessError> {
+    let tap_descriptors = place_taps(taps)?;
+    let configuration = configuration(plan, &tap_descriptors)?;
+    run(directory, plan, Start::Boot(Box::new(configuration)))
+}
+
+fn receive(directory: &VmDirectory, plan: &VmProcessPlan, taps: Vec<OwnedFd>) -> Result<(), VmProcessError> {
+    place_taps(taps)?;
+    std::fs::write(directory.receiving_file(), b"")
+        .map_err(|error| VmProcessError::Boot(error.to_string()))?;
+    tracing::info!(vm_id = %plan.launch.vm_id, "waiting for the VM to arrive");
+    run(directory, plan, Start::Receive)
 }
 
 fn probe(attempt: &Attempt) -> ! {
@@ -184,5 +245,6 @@ pub fn run_vm_process(path: &Path) -> Result<(), VmProcessError> {
     match instructions.work {
         Work::Probe { attempt } => probe(&attempt),
         Work::Boot { plan } => boot(&directory, &plan, descriptors),
+        Work::Receive { plan } => receive(&directory, &plan, descriptors),
     }
 }

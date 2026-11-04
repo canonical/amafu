@@ -19,6 +19,7 @@ pub const MAXIMUM_DESCRIPTORS: usize = 16;
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum Work {
     Boot { plan: Box<VmProcessPlan> },
+    Receive { plan: Box<VmProcessPlan> },
     Probe { attempt: Attempt },
 }
 

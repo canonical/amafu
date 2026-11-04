@@ -9,6 +9,13 @@ const SERIAL_LOG_FILE: &str = "serial.log";
 const PROCESS_LOG_FILE: &str = "vm-process.log";
 const USER_ID_FILE: &str = "user-id";
 const VSOCK_SOCKET_FILE: &str = "vsock.socket";
+const API_SOCKET_FILE: &str = "api.socket";
+const EVENTS_FILE: &str = "events.json";
+const INCOMING_SOCKET_FILE: &str = "migration-incoming.socket";
+const OUTGOING_SOCKET_FILE: &str = "migration-outgoing.socket";
+const RECEIVING_FILE: &str = "receiving";
+const MIGRATION_FILE: &str = "migration.json";
+const DISKS_DIRECTORY: &str = "disks";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeDirectory {
@@ -93,6 +100,46 @@ impl VmDirectory {
     #[must_use]
     pub fn vsock_socket(&self) -> PathBuf {
         self.path.join(VSOCK_SOCKET_FILE)
+    }
+
+    #[must_use]
+    pub fn api_socket(&self) -> PathBuf {
+        self.path.join(API_SOCKET_FILE)
+    }
+
+    #[must_use]
+    pub fn events_file(&self) -> PathBuf {
+        self.path.join(EVENTS_FILE)
+    }
+
+    #[must_use]
+    pub fn incoming_socket(&self) -> PathBuf {
+        self.path.join(INCOMING_SOCKET_FILE)
+    }
+
+    #[must_use]
+    pub fn outgoing_socket(&self) -> PathBuf {
+        self.path.join(OUTGOING_SOCKET_FILE)
+    }
+
+    #[must_use]
+    pub fn receiving_file(&self) -> PathBuf {
+        self.path.join(RECEIVING_FILE)
+    }
+
+    #[must_use]
+    pub fn migration_file(&self) -> PathBuf {
+        self.path.join(MIGRATION_FILE)
+    }
+
+    #[must_use]
+    pub fn disk_link(&self, index: usize) -> PathBuf {
+        self.path.join(DISKS_DIRECTORY).join(index.to_string())
+    }
+
+    #[must_use]
+    pub fn is_receiving(&self) -> bool {
+        self.receiving_file().is_file() && !self.has_booted()
     }
 
     #[must_use]
