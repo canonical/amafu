@@ -44,6 +44,10 @@ fn write_name_resolution(resolvers: &[std::net::Ipv4Addr]) -> anyhow::Result<()>
 
 pub type ModuleLoading = tokio::task::JoinHandle<()>;
 
+pub fn boot_modules_directory() -> std::path::PathBuf {
+    std::path::PathBuf::from(BOOT_MODULES_DIRECTORY)
+}
+
 fn load_modules_in_background() -> ModuleLoading {
     tokio::task::spawn_blocking(|| {
         match load_listed_modules(Path::new(BOOT_MODULES_DIRECTORY), Path::new(MODULE_LIST)) {

@@ -193,6 +193,7 @@ stage_root() {
     stage_libraries "${binary}" "${staging}"
     stage_modules "${image_directory}/early-modules" "${staging}" early-load-order
     stage_modules "${image_directory}/modules" "${staging}" load-order "${boot_staging}/modules"
+    stage_modules "${image_directory}/watchdog-modules" "${staging}" watchdog-load-order "${boot_staging}/modules"
     stage_node_tools
     build_container_initramfs
     if [[ "${variant}" == test ]]; then

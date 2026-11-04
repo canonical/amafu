@@ -14,6 +14,7 @@ pub mod storage;
 pub mod store;
 pub mod subscription;
 pub mod tools;
+pub mod watchdog;
 
 pub use audit::{AuditEntry, AuditLog, AuditOutcome};
 pub use clock::Clock;
@@ -31,7 +32,10 @@ pub use network::{
 };
 pub use node_lease::{HeldNodeLease, NodeLeaseAuthority, NodeLeaseError, NodeLeaseGrant, NodeLeaseState};
 pub use objects::ObjectStoreError;
-pub use storage::{AttachTarget, Storage, StorageProtocol, StorageProvider, VolumeAttacher, VolumeRequest};
+pub use storage::{
+    AttachTarget, FencedNode, Storage, StorageProtocol, StorageProvider, VolumeAttacher, VolumeRequest,
+};
 pub use store::{Consistency, Fence, Store, StoreError, StoredRecord, WatchEvent};
 pub use subscription::{CoreConnection, SliceChange, SliceChanges, SliceRecord};
 pub use tools::ExternalTool;
+pub use watchdog::Watchdog;

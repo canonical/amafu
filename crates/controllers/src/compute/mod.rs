@@ -11,8 +11,8 @@ use amafu_domain::kinds::volume::Volume;
 use amafu_domain::{Change, NodeName, Object, ObjectId, ObjectReference};
 use amafu_interfaces::objects::{apply, get, list, remove};
 use amafu_interfaces::{
-    ActionError, AttachTarget, Consistency, Datapath, GuestAgents, Hypervisor, ImageStore, InstanceState,
-    LaunchDisk, RunningInstance, Storage, Store,
+    ActionError, AttachTarget, Clock, Consistency, Datapath, GuestAgents, Hypervisor, ImageStore,
+    InstanceState, LaunchDisk, NodeLeaseState, RunningInstance, Storage, Store,
 };
 use amafu_reconciler::{Controller, KeyMapping, WatchedKind};
 pub use plan::{ComputeAction, ObservedImage, ObservedVolume, StartPlan, VmContext, VolumeAttachment};
@@ -31,6 +31,8 @@ pub struct ComputeServices {
     pub images: Arc<dyn ImageStore>,
     pub datapath: Arc<dyn Datapath>,
     pub agents: Arc<dyn GuestAgents>,
+    pub lease: NodeLeaseState,
+    pub clock: Arc<dyn Clock>,
 }
 
 pub struct ComputeController {
@@ -39,6 +41,10 @@ pub struct ComputeController {
 }
 
 impl ComputeController {
+    fn holds_lease(&self) -> bool {
+        self.services.lease.epoch_valid_at(self.services.clock.now()).is_some()
+    }
+
     #[must_use]
     pub fn new(node: NodeName, services: ComputeServices) -> Self {
         Self { node, services }
@@ -248,6 +254,9 @@ impl Controller for ComputeController {
 
     async fn apply(&self, key: &ComputeKey, action: ComputeAction) -> Result<(), ActionError> {
         match action {
+            ComputeAction::StartVm(_) if !self.holds_lease() => {
+                Err(ActionError::retryable("the node holds no valid lease, so it starts no VM"))
+            }
             ComputeAction::StartVm(plan) => match self.start(*plan).await {
                 Err(ActionError::Invalid(reason)) => {
                     self.report_failure(vm_reference(key)?, &reason).await?;

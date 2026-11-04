@@ -2,9 +2,11 @@ mod boot;
 mod clock;
 mod diagnostics;
 mod roles;
+mod watchdog;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
@@ -62,7 +64,11 @@ async fn run_as_process_one() -> anyhow::Result<()> {
             }
         }
     });
-    roles::run(configuration, Some(modules)).await
+    let watchdog = Arc::new(watchdog::KernelWatchdog::new(
+        boot::boot_modules_directory(),
+        configuration.fencing.terms().watchdog_interval(),
+    ));
+    roles::run(configuration, Some(roles::BootServices { modules, watchdog })).await
 }
 
 fn fail_as_process_one(error: &anyhow::Error) -> ExitCode {

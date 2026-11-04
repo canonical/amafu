@@ -10,8 +10,8 @@ use amafu_domain::kinds::node::NodeRole;
 use amafu_domain::kinds::storage_backend::StorageProviderSpecification;
 use amafu_network::{StaticAddress, UnderlayConfiguration};
 use amafu_node::configuration::{
-    ApiSection, ComputeSection, DiagnosticsSection, Directories, IdentitySection, NodeConfiguration,
-    NodeSection, SUPPORTED_VERSION, StateSection,
+    ApiSection, ComputeSection, DiagnosticsSection, Directories, FencingSection, IdentitySection,
+    NodeConfiguration, NodeSection, SUPPORTED_VERSION, StateSection,
 };
 use anyhow::{Context, bail};
 use reqwest::Method;
@@ -132,6 +132,7 @@ fn node_configuration(
         state: StateSection { listen: node.state_address(), voters, core_members },
         directories: Directories::default(),
         compute: ComputeSection { resolvers: vec![settings.gateway], ..ComputeSection::default() },
+        fencing: FencingSection::default(),
         diagnostics: Some(DiagnosticsSection { listen: node_listen(NODE_DIAGNOSTICS_PORT) }),
     })
 }
@@ -313,9 +314,9 @@ pub async fn up(
     let nvme_password = generated_password();
     let nvme = crate::spdk::create(&lxd, &settings, &topology, &nvme_password).await?;
     let ceph_password = generated_password();
-    crate::ceph::create(&lxd, &settings, &topology, &ceph_password).await?;
-    let (tokens, identities) = client_tokens(OffsetDateTime::now_utc())?;
     let authority = CertificateAuthority::generate("Amafu lab certificate authority")?;
+    crate::ceph::create(&lxd, &settings, &topology, &ceph_password, &authority).await?;
+    let (tokens, identities) = client_tokens(OffsetDateTime::now_utc())?;
     let fingerprints = create_nodes(repository, &lxd, &settings, &topology, &authority, &identities).await?;
     let server = ServerCredentials {
         certificate_authority: authority.certificate_pem.clone(),
@@ -345,7 +346,8 @@ pub async fn up(
     tracing::info!(seconds = waited.as_secs(), "the NFS server is serving");
     let waited = crate::spdk::wait_until_serving(&lxd, &state.topology).await?;
     tracing::info!(seconds = waited.as_secs(), "the NVMe/TCP target is serving");
-    let ceph = crate::ceph::wait_until_serving(&lxd, &state.topology, &ceph_password).await?;
+    let ceph =
+        crate::ceph::wait_until_serving(&lxd, &state.topology, &ceph_password, &state.authority).await?;
     tracing::info!("the Ceph cluster is serving");
     state.block_backends.push((String::from("ceph-rbd"), ceph));
     save_state(repository, &state)?;

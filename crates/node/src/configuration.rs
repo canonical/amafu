@@ -1,9 +1,11 @@
 use std::collections::BTreeSet;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use amafu_api::TokenIdentity;
 use amafu_domain::kinds::node::NodeRole;
+use amafu_domain::kinds::node_lease::LeaseTerms;
 use amafu_domain::{NodeName, ZoneName};
 use amafu_interfaces::ExternalTool;
 use amafu_network::UnderlayConfiguration;
@@ -29,6 +31,8 @@ pub struct NodeConfiguration {
     pub directories: Directories,
     #[serde(default)]
     pub compute: ComputeSection,
+    #[serde(default)]
+    pub fencing: FencingSection,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diagnostics: Option<DiagnosticsSection>,
 }
@@ -112,6 +116,26 @@ pub struct StateSection {
     pub core_members: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FencingSection {
+    pub lease_seconds: u64,
+    pub watchdog_seconds: u64,
+}
+
+impl Default for FencingSection {
+    fn default() -> Self {
+        Self { lease_seconds: 8, watchdog_seconds: 8 }
+    }
+}
+
+impl FencingSection {
+    #[must_use]
+    pub fn terms(&self) -> LeaseTerms {
+        LeaseTerms::new(Duration::from_secs(self.lease_seconds), Duration::from_secs(self.watchdog_seconds))
+    }
+}
+
 impl Default for StateSection {
     fn default() -> Self {
         Self {
@@ -175,6 +199,8 @@ pub enum ConfigurationError {
     NoWayToTheCore,
     #[error("several voters need an identity to authenticate each other")]
     VotersWithoutIdentity,
+    #[error("the lease and the watchdog interval must each be between 2 and 60 seconds")]
+    FencingOutOfBounds,
 }
 
 impl NodeConfiguration {
@@ -192,6 +218,9 @@ impl NodeConfiguration {
         }
         if is_core && configuration.state.voters.len() > 1 && configuration.identity.is_none() {
             return Err(ConfigurationError::VotersWithoutIdentity);
+        }
+        if !configuration.fencing.terms().is_within_bounds() {
+            return Err(ConfigurationError::FencingOutOfBounds);
         }
         Ok(configuration)
     }
@@ -232,6 +261,13 @@ api:
         assert!(configuration.has_role(NodeRole::Compute));
         assert_eq!(configuration.network, None);
         assert_eq!(configuration.compute, ComputeSection::default());
+        assert_eq!(configuration.fencing.terms().duration(), Duration::from_secs(8));
+    }
+
+    #[test]
+    fn fencing_outside_the_bounds_is_refused() {
+        let hasty = format!("{MINIMAL}fencing:\n  lease_seconds: 1\n  watchdog_seconds: 8\n");
+        assert!(matches!(NodeConfiguration::parse(&hasty), Err(ConfigurationError::FencingOutOfBounds)));
     }
 
     #[test]
