@@ -153,6 +153,21 @@ pub struct StateSection {
     pub voters: Vec<SocketAddr>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub core_members: Vec<String>,
+    #[serde(default = "default_heartbeat_milliseconds")]
+    pub heartbeat_milliseconds: u64,
+}
+
+const DEFAULT_HEARTBEAT_MILLISECONDS: u64 = 500;
+
+fn default_heartbeat_milliseconds() -> u64 {
+    DEFAULT_HEARTBEAT_MILLISECONDS
+}
+
+impl StateSection {
+    #[must_use]
+    pub fn heartbeat(&self) -> Duration {
+        Duration::from_millis(self.heartbeat_milliseconds)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -208,6 +223,7 @@ impl Default for StateSection {
             listen: SocketAddr::from(([127, 0, 0, 1], 7400)),
             voters: Vec::new(),
             core_members: Vec::new(),
+            heartbeat_milliseconds: DEFAULT_HEARTBEAT_MILLISECONDS,
         }
     }
 }

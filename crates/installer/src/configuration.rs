@@ -120,7 +120,12 @@ pub fn node_configuration(
             private_key: server.private_key_pem,
             identities: vec![credentials.admin_identity()?],
         },
-        state: StateSection { listen: state_address(machine), voters, core_members },
+        state: StateSection {
+            listen: state_address(machine),
+            voters,
+            core_members,
+            ..StateSection::default()
+        },
         directories: Directories::default(),
         compute: ComputeSection { resolvers: cluster.resolvers.clone(), ..ComputeSection::default() },
         fencing: FencingSection::default(),

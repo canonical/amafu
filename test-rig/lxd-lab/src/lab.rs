@@ -147,7 +147,7 @@ fn node_configuration(
             private_key: credentials.server.private_key_pem.clone(),
             identities,
         },
-        state: StateSection { listen: node.state_address(), voters, core_members },
+        state: StateSection { listen: node.state_address(), voters, core_members, ..StateSection::default() },
         directories: Directories::default(),
         compute: ComputeSection { resolvers: vec![settings.gateway], ..ComputeSection::default() },
         fencing: FencingSection::default(),
