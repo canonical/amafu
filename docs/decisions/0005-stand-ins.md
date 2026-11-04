@@ -1,6 +1,6 @@
 # 0005: Stand-ins, and what replaces them
 
-Status: accepted for milestones 1 to 3
+Status: accepted for milestones 1 to 4
 
 Milestone 1 builds every layer thinly. Where the plan's full design belongs to a later milestone, milestone 1 uses
 a simpler stand-in behind the same interface, so that replacing it does not ripple through the other crates.
@@ -37,6 +37,15 @@ node and single-node networks and local volumes (0013, 0014). It adds:
 | One MicroCeph VM with one replica, no MAAS lab, no FRR router | The lab server has 24 GiB of memory | Three MicroCeph VMs, the MAAS lab with bonded underlays and BGP for floating IPs, on a larger lab |
 | The rig drives the lab switch and storage targets through LXD exec | Fewer moving parts than an agent | Keep, unless faults need to be faster than an exec call |
 | Containers boot Ubuntu's 71 MB guest `vmlinux`. In the nested lab a node's first container after boot runs in about 4 seconds, over the 3-second budget, and later ones in 1.6 to 2 seconds | Loading the kernel takes 3.8 seconds cold, about 0.6 seconds after the boot-time read-ahead (0010) and 2 milliseconds warm; the nested guest boot adds the rest. Accepted as a known gap of milestone 3 | A small purpose-built container kernel (milestone 4) |
+
+Milestone 4 replaces the single process (0020) and the heartbeats (0018). It adds:
+
+| Stand-in | Why | Replaced by |
+|---|---|---|
+| Nodes are powered off by forced LXD stops, and the soak runs 50 of them | There is no MAAS lab, and 500 stops take most of a day | 500 forced stops weekly and 50 power-offs through MAAS in the MAAS lab |
+| Every simulator run covers 1,000 seeds | 10,000 seeds take hours on one machine | 10,000 seeds nightly |
+| The kernel's software watchdog (`softdog`) | LXD exposes no emulated watchdog device | A hardware watchdog on real nodes |
+| Migrations use one connection and send zero pages | Cloud Hypervisor's receiver supports nothing else through a unix socket | Parallel TLS streams and zero-page skipping, contributed upstream |
 
 None of these stand-ins weakens a guarantee the plan says must not be simplified: generations on every object,
 audit of every request including denials, at most one running instance of each VM, and signed images. Each of

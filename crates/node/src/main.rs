@@ -1,12 +1,13 @@
 mod boot;
 mod clock;
+mod control;
 mod diagnostics;
+mod init;
 mod roles;
 mod watchdog;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
@@ -25,6 +26,10 @@ struct Arguments {
 #[derive(Subcommand)]
 enum Command {
     Run {
+        #[arg(long)]
+        configuration: PathBuf,
+    },
+    Control {
         #[arg(long)]
         configuration: PathBuf,
     },
@@ -48,8 +53,7 @@ fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_multi_thread().enable_all().build()
 }
 
-async fn run_as_process_one() -> anyhow::Result<()> {
-    let (configuration, modules) = boot::early_boot().await?;
+pub fn reap_orphans_forever() {
     tokio::spawn(async {
         let mut interval = tokio::time::interval(Duration::from_secs(1));
         loop {
@@ -64,11 +68,6 @@ async fn run_as_process_one() -> anyhow::Result<()> {
             }
         }
     });
-    let watchdog = Arc::new(watchdog::KernelWatchdog::new(
-        boot::boot_modules_directory(),
-        configuration.fencing.terms().watchdog_interval(),
-    ));
-    roles::run(configuration, Some(roles::BootServices { modules, watchdog })).await
 }
 
 fn fail_as_process_one(error: &anyhow::Error) -> ExitCode {
@@ -89,11 +88,15 @@ fn main() -> ExitCode {
         Some(Command::VmProcess { directory }) => {
             amafu_hypervisor::run_vm_process(&directory).map_err(anyhow::Error::from)
         }
+        Some(Command::Control { configuration }) => control::drop_capabilities()
+            .and_then(|()| runtime())
+            .map_err(anyhow::Error::from)
+            .and_then(|runtime| runtime.block_on(control::run(&configuration))),
         Some(Command::Run { configuration }) => runtime().map_err(anyhow::Error::from).and_then(|runtime| {
             runtime.block_on(async { roles::run(NodeConfiguration::load(&configuration)?, None).await })
         }),
         None if amafu_system::is_process_one() => match runtime() {
-            Ok(runtime) => match runtime.block_on(run_as_process_one()) {
+            Ok(runtime) => match runtime.block_on(init::run_as_process_one()) {
                 Ok(()) => Ok(()),
                 Err(error) => return fail_as_process_one(&error),
             },

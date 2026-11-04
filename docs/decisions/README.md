@@ -8,7 +8,7 @@ Each record states a decision that is hard to reverse, why it was taken, and wha
 | [0002](0002-state-on-a-single-voter-quorium.md) | Store state on a single-voter Quorium node behind the `Store` trait (milestone 1 spike) |
 | [0003](0003-boot-chain-and-root-file-system-in-the-lab.md) | Boot the lab through the distribution's signed chain, with the whole system in the initramfs |
 | [0004](0004-roles-and-authorization.md) | What the four fixed roles may do |
-| [0005](0005-stand-ins.md) | Stand-ins used in milestones 1 to 3, and what replaces them |
+| [0005](0005-stand-ins.md) | Stand-ins used in milestones 1 to 4, and what replaces them |
 | [0006](0006-containers-boot-an-erofs-root-in-their-own-vm.md) | Containers boot an erofs root file system in their own VM, instead of virtio-fs |
 | [0007](0007-the-vm-process-sandbox.md) | The VM process sandbox: identity, cgroup, descriptor hand-over, Landlock and seccomp |
 | [0008](0008-private-networks.md) | Private networks: addresses at placement, bridges, nftables and local services |
@@ -20,3 +20,7 @@ Each record states a decision that is hard to reverse, why it was taken, and wha
 | [0014](0014-volumes-over-the-network.md) | NVMe/TCP and Ceph RBD volumes, local volumes on their node, images on every node |
 | [0015](0015-node-identity.md) | Node certificates, revocations, and refusing rogue nodes |
 | [0016](0016-the-virtual-lab-topology.md) | Four nodes, a lab switch and storage targets on the underlay |
+| [0017](0017-the-operations-runner.md) | Operations run as recorded, idempotent steps |
+| [0018](0018-node-leases-fencing-and-the-watchdog.md) | Node leases fence a node's writes; storage fencing and the watchdog come before any restart |
+| [0019](0019-live-migration-and-evacuation.md) | Live migration and evacuation as operations, relayed between nodes over mutual TLS |
+| [0020](0020-init-and-control.md) | A small init supervises one control process with fewer capabilities |

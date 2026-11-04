@@ -1,4 +1,5 @@
 pub mod boot_media;
+pub mod capabilities;
 pub mod early_boot;
 pub mod files;
 pub mod firmware;

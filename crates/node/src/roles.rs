@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -41,7 +42,6 @@ use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
-use crate::boot::ModuleLoading;
 use crate::clock::SystemClock;
 use amafu_node::configuration::NodeConfiguration;
 
@@ -65,7 +65,7 @@ pub struct Services {
 }
 
 pub struct BootServices {
-    pub modules: ModuleLoading,
+    pub modules: Pin<Box<dyn Future<Output = ()> + Send>>,
     pub watchdog: Arc<dyn Watchdog>,
 }
 
@@ -664,7 +664,7 @@ pub async fn run(configuration: NodeConfiguration, boot: Option<BootServices>) -
     };
     controller_role(&mut roles, "node", node, &node_services, heartbeat);
     if let Some(modules) = modules {
-        modules.await?;
+        modules.await;
     }
     if configuration.has_role(NodeRole::Compute) {
         if let Err(error) = prepare_kvm_access() {
