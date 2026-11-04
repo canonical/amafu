@@ -4,10 +4,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use amafu_domain::{ObjectReference, ProjectName};
-use amafu_system::files::write_durably;
 use amafu_interfaces::{
     Consistency, CoreConnection, Fence, SliceChange, SliceRecord, Store, StoreError, StoredRecord, WatchEvent,
 };
+use amafu_system::files::write_durably;
 use futures::channel::mpsc::{UnboundedSender, unbounded};
 use futures::stream::BoxStream;
 use futures::{FutureExt, StreamExt};

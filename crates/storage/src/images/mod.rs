@@ -184,7 +184,9 @@ impl CachedImages {
     async fn record(&self, image_id: &ObjectId) -> Result<Option<CachedImage>, ActionError> {
         match tokio::fs::read(self.directory(image_id).join(RECORD_FILE)).await {
             Ok(bytes) => Ok(serde_json::from_slice(&bytes)
-                .inspect_err(|error| tracing::warn!(%image_id, %error, "an unreadable image record is ignored"))
+                .inspect_err(
+                    |error| tracing::warn!(%image_id, %error, "an unreadable image record is ignored"),
+                )
                 .ok()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(retryable("reading the image record")(error)),
@@ -235,7 +237,8 @@ mod tests {
     #[tokio::test]
     async fn an_image_whose_record_was_cut_short_counts_as_not_cached() {
         let root = tempfile::tempdir().unwrap();
-        let images = CachedImages::new(root.path().to_path_buf(), ExternalTool::installed("mkfs.erofs")).unwrap();
+        let images =
+            CachedImages::new(root.path().to_path_buf(), ExternalTool::installed("mkfs.erofs")).unwrap();
         let image_id = ObjectId::from_uuid(uuid::Uuid::new_v4());
         std::fs::create_dir_all(images.directory(&image_id)).unwrap();
         std::fs::write(images.directory(&image_id).join(RECORD_FILE), b"").unwrap();

@@ -102,8 +102,8 @@ pub async fn every_node_ready(cluster: &dyn Cluster) -> ScenarioResult {
 }
 
 pub async fn every_core_member_answers(cluster: &dyn Cluster) -> ScenarioResult {
-    let project = ProjectName::new(DEFAULT_PROJECT)
-        .map_err(|error| ScenarioError::Expectation(error.to_string()))?;
+    let project =
+        ProjectName::new(DEFAULT_PROJECT).map_err(|error| ScenarioError::Expectation(error.to_string()))?;
     let clients = cluster.core_member_clients(amafu_domain::access::Role::Member, &project).await;
     eventually(cluster, START_TIMEOUT, "every core member answers", async || {
         for client in &clients {
