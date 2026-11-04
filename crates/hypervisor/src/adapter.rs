@@ -1,20 +1,24 @@
+use std::collections::BTreeSet;
 use std::fs::{self, File};
 use std::os::fd::{AsFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use amafu_domain::ObjectId;
 use amafu_interfaces::{
-    ActionError, Hypervisor, InstanceState, MigrationTarget, RunningInstance, VmLaunchSpecification,
+    ActionError, Hypervisor, InstanceMigration, InstanceState, LaunchDisk, MigrationTarget, RunningInstance,
+    VmLaunchSpecification,
 };
 use rustix::fs::{Mode, chmod};
 use rustix::process::Signal;
 
 use crate::boot::{BootError, BootSources};
 use crate::control::{self, ControlChannel, Instructions, Work};
+use crate::migration::{MigrationRecord, MigrationTransport};
 use crate::plan::{DiskFormat, VmProcessPlan};
 use crate::probe::{Attempt, ProbeOutcome, outcome_of};
 use crate::process::{is_running_vm_process, send_signal};
@@ -23,6 +27,7 @@ use crate::sandbox::{
     FIRST_VM_USER_ID, Restrictions, VM_GROUP_ID, allocate_user_id, create_cgroup, distinct_paths, give_to,
     place_in_cgroup, remove_cgroup,
 };
+use crate::sending::{self, SendJob};
 
 const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const KILL_TIMEOUT: Duration = Duration::from_secs(5);
@@ -46,6 +51,14 @@ pub struct CloudHypervisorSettings {
 pub struct CloudHypervisor {
     settings: CloudHypervisorSettings,
     probes: AtomicU64,
+    migration: Option<Arc<MigrationTransport>>,
+    sending: Arc<Mutex<BTreeSet<ObjectId>>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Arrival {
+    Boot,
+    Receive,
 }
 
 struct SandboxedLaunch<'launch> {
@@ -127,7 +140,13 @@ fn prepare_directory(directory: &VmDirectory, user_id: u32) -> std::io::Result<(
 impl CloudHypervisor {
     #[must_use]
     pub fn new(settings: CloudHypervisorSettings) -> Self {
-        Self { settings, probes: AtomicU64::new(0) }
+        Self { settings, probes: AtomicU64::new(0), migration: None, sending: Arc::default() }
+    }
+
+    #[must_use]
+    pub fn with_migration(mut self, transport: Arc<MigrationTransport>) -> Self {
+        self.migration = Some(transport);
+        self
     }
 
     fn launch_sandboxed(&self, launch: SandboxedLaunch<'_>) -> Result<Child, ActionError> {
@@ -179,13 +198,17 @@ impl CloudHypervisor {
         }
     }
 
-    fn spawn(&self, directory: &VmDirectory, plan: VmProcessPlan) -> Result<(), ActionError> {
+    fn spawn(
+        &self,
+        directory: &VmDirectory,
+        mut plan: VmProcessPlan,
+        arrival: Arrival,
+    ) -> Result<(), ActionError> {
+        let restrictions = self.restrictions(&plan, directory);
         let launch = &plan.launch;
         let user_id = allocate_user_id(&self.settings.runtime, &launch.vm_id)
             .map_err(io_failure("allocating a VM identity"))?;
         prepare_directory(directory, user_id).map_err(io_failure("preparing the VM directory"))?;
-        let plan_json = serde_json::to_vec_pretty(&plan).map_err(ActionError::fatal)?;
-        fs::write(directory.plan_file(), plan_json).map_err(io_failure("writing the VM plan"))?;
         for disk in launch.disks.iter().filter(|disk| !disk.is_read_only) {
             give_to(&disk.path, user_id).map_err(io_failure("handing a disk to the VM"))?;
             chmod(&disk.path, Mode::from_raw_mode(PRIVATE_FILE_MODE))
@@ -201,12 +224,18 @@ impl CloudHypervisor {
             .map_err(io_failure("creating the VM cgroup"))?;
         let log = File::create(directory.process_log()).map_err(io_failure("creating the VM process log"))?;
         let error_log = log.try_clone().map_err(io_failure("sharing the VM process log"))?;
-        let restrictions = self.restrictions(&plan, directory);
+        link_disks(directory, &mut plan.launch.disks).map_err(io_failure("linking the VM disks"))?;
+        let plan_json = serde_json::to_vec_pretty(&plan).map_err(ActionError::fatal)?;
+        fs::write(directory.plan_file(), plan_json).map_err(io_failure("writing the VM plan"))?;
+        let work = match arrival {
+            Arrival::Boot => Work::Boot { plan: Box::new(plan) },
+            Arrival::Receive => Work::Receive { plan: Box::new(plan) },
+        };
         let child = self.launch_sandboxed(SandboxedLaunch {
             directory,
             user_id,
             cgroup: &cgroup,
-            instructions: Instructions { restrictions, work: Work::Boot { plan: Box::new(plan) } },
+            instructions: Instructions { restrictions, work },
             descriptors: taps,
             output: Stdio::from(log),
             error_output: Stdio::from(error_log),
@@ -250,9 +279,43 @@ impl CloudHypervisor {
     }
 }
 
-#[async_trait::async_trait]
-impl Hypervisor for CloudHypervisor {
-    async fn start(&self, launch: &VmLaunchSpecification) -> Result<(), ActionError> {
+fn link_disks(directory: &VmDirectory, disks: &mut [LaunchDisk]) -> std::io::Result<()> {
+    for (index, disk) in disks.iter_mut().enumerate() {
+        let link = directory.disk_link(index);
+        if let Some(parent) = link.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        std::os::unix::fs::symlink(&disk.path, &link)?;
+        disk.path = link;
+    }
+    Ok(())
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn directory_plan(directory: &VmDirectory) -> Option<VmProcessPlan> {
+    serde_json::from_slice(&fs::read(directory.plan_file()).ok()?).ok()
+}
+
+fn reported_migration(directory: &VmDirectory, is_sending: bool) -> Option<InstanceMigration> {
+    if directory.is_receiving() {
+        return Some(InstanceMigration::Receiving);
+    }
+    Some(match MigrationRecord::read(directory)? {
+        MigrationRecord::Sending { attempt } if is_sending => InstanceMigration::Sending { attempt },
+        MigrationRecord::Sending { attempt } => InstanceMigration::Failed {
+            attempt,
+            reason: String::from("the node restarted while it was sending the VM"),
+        },
+        MigrationRecord::Sent { attempt, report } => InstanceMigration::Sent { attempt, report },
+        MigrationRecord::Failed { attempt, reason } => InstanceMigration::Failed { attempt, reason },
+    })
+}
+
+impl CloudHypervisor {
+    fn arrive(&self, launch: &VmLaunchSpecification, arrival: Arrival) -> Result<(), ActionError> {
         let boot = self.settings.boot.resolve(&launch.payload).map_err(boot_failure)?;
         let directory = self.settings.runtime.vm(&launch.vm_id);
         if is_alive(&directory) {
@@ -271,8 +334,64 @@ impl Hypervisor for CloudHypervisor {
             serial_log: directory.serial_log(),
             vsock_socket: directory.vsock_socket(),
         };
-        self.spawn(&directory, plan)?;
+        self.spawn(&directory, plan, arrival)
+    }
+}
+
+#[async_trait::async_trait]
+impl Hypervisor for CloudHypervisor {
+    async fn start(&self, launch: &VmLaunchSpecification) -> Result<(), ActionError> {
+        self.arrive(launch, Arrival::Boot)?;
         tracing::info!(vm_id = %launch.vm_id, "started a VM process");
+        Ok(())
+    }
+
+    async fn receive(&self, launch: &VmLaunchSpecification) -> Result<(), ActionError> {
+        if self.migration.is_none() {
+            return Err(ActionError::invalid("this node has no identity to receive migrations with"));
+        }
+        self.arrive(launch, Arrival::Receive)?;
+        tracing::info!(vm_id = %launch.vm_id, "waiting for a VM to arrive");
+        Ok(())
+    }
+
+    async fn send(&self, vm_id: &ObjectId, target: &MigrationTarget) -> Result<(), ActionError> {
+        let transport = self
+            .migration
+            .clone()
+            .ok_or_else(|| ActionError::invalid("this node has no identity to send migrations with"))?;
+        let directory = self.settings.runtime.vm(vm_id);
+        if MigrationRecord::read(&directory).is_some_and(|record| {
+            record.attempt() == target.attempt && !matches!(record, MigrationRecord::Failed { .. })
+        }) {
+            return Ok(());
+        }
+        if !is_alive(&directory) {
+            return Err(ActionError::retryable("the VM process is not running"));
+        }
+        let cpu_count = directory_plan(&directory).map_or(1, |plan| plan.launch.cpu_count);
+        MigrationRecord::Sending { attempt: target.attempt }
+            .write(&directory)
+            .map_err(io_failure("recording the migration"))?;
+        lock(&self.sending).insert(*vm_id);
+        let (in_flight, sent) = (Arc::clone(&self.sending), *vm_id);
+        let job = SendJob {
+            directory,
+            transport,
+            vm_id: *vm_id,
+            attempt: target.attempt,
+            node: target.node.clone(),
+            node_address: target.node_address,
+            downtime_milliseconds: target.downtime_milliseconds,
+            cgroup: vm_cgroup(vm_id),
+            cpu_count,
+            is_alive,
+        };
+        tokio::spawn(async move {
+            sending::run(job).await;
+            lock(&in_flight).remove(&sent);
+        });
+        tracing::info!(%vm_id, destination = %target.node, "sending a VM");
         Ok(())
     }
 
@@ -298,6 +417,7 @@ impl Hypervisor for CloudHypervisor {
 
     async fn running(&self) -> Result<Vec<RunningInstance>, ActionError> {
         let vms = self.settings.runtime.vms().map_err(io_failure("listing VM directories"))?;
+        let sending = lock(&self.sending).clone();
         Ok(vms
             .iter()
             .map(|(vm_id, directory)| {
@@ -306,17 +426,9 @@ impl Hypervisor for CloudHypervisor {
                     vm_id: *vm_id,
                     state,
                     failure: (state == InstanceState::Exited).then(|| failure_of(directory)).flatten(),
-                    migration: None,
+                    migration: reported_migration(directory, sending.contains(vm_id)),
                 }
             })
             .collect())
-    }
-
-    async fn receive(&self, _launch: &VmLaunchSpecification) -> Result<(), ActionError> {
-        Err(ActionError::invalid("this node cannot receive a live migration yet"))
-    }
-
-    async fn send(&self, _vm_id: &ObjectId, _target: &MigrationTarget) -> Result<(), ActionError> {
-        Err(ActionError::invalid("this node cannot send a live migration yet"))
     }
 }

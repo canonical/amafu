@@ -101,6 +101,14 @@ pub fn place_in_cgroup(cgroup: &Path, process_id: u32) -> io::Result<()> {
     std::fs::write(cgroup.join("cgroup.procs"), process_id.to_string())
 }
 
+const SMALLEST_QUOTA_MICROSECONDS: u64 = 1_000;
+
+pub fn limit_cpu_share(name: &str, cpu_count: u16, share_percent: u64) -> io::Result<()> {
+    let quota = (u64::from(cpu_count) * CPU_PERIOD_MICROSECONDS * share_percent / 100)
+        .max(SMALLEST_QUOTA_MICROSECONDS);
+    std::fs::write(cgroup_of(name).join("cpu.max"), format!("{quota} {CPU_PERIOD_MICROSECONDS}"))
+}
+
 pub fn remove_cgroup(name: &str) -> io::Result<()> {
     match std::fs::remove_dir(cgroup_of(name)) {
         Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
