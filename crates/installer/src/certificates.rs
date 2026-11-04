@@ -9,8 +9,6 @@ use rcgen::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::error::ScenarioError;
-
 pub const STATE_SERVER_NAME: &str = "amafu-state";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,9 +24,13 @@ pub struct CertificateAuthority {
     pub private_key_pem: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("issuing a certificate failed: {0}")]
+pub struct IssuanceError(String);
+
 #[allow(clippy::needless_pass_by_value)]
-fn failure(error: rcgen::Error) -> ScenarioError {
-    ScenarioError::Lab(format!("issuing a certificate failed: {error}"))
+fn failure(error: rcgen::Error) -> IssuanceError {
+    IssuanceError(error.to_string())
 }
 
 fn role_name(role: NodeRole) -> &'static str {
@@ -39,7 +41,7 @@ fn role_name(role: NodeRole) -> &'static str {
 }
 
 impl CertificateAuthority {
-    pub fn generate(name: &str) -> Result<Self, ScenarioError> {
+    pub fn generate(name: &str) -> Result<Self, IssuanceError> {
         let key = KeyPair::generate().map_err(failure)?;
         let mut parameters = CertificateParams::new(Vec::<String>::new()).map_err(failure)?;
         parameters.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
@@ -51,7 +53,7 @@ impl CertificateAuthority {
         Ok(Self { certificate_pem: certificate.pem(), private_key_pem: key.serialize_pem() })
     }
 
-    fn issue(&self, parameters: &CertificateParams) -> Result<TlsIdentity, ScenarioError> {
+    fn issue(&self, parameters: &CertificateParams) -> Result<TlsIdentity, IssuanceError> {
         let authority_key = KeyPair::from_pem(&self.private_key_pem).map_err(failure)?;
         let issuer = Issuer::from_ca_cert_pem(&self.certificate_pem, authority_key).map_err(failure)?;
         let key = KeyPair::generate().map_err(failure)?;
@@ -63,7 +65,7 @@ impl CertificateAuthority {
         })
     }
 
-    pub fn issue_node(&self, node: &NodeName, roles: &[NodeRole]) -> Result<TlsIdentity, ScenarioError> {
+    pub fn issue_node(&self, node: &NodeName, roles: &[NodeRole]) -> Result<TlsIdentity, IssuanceError> {
         let mut parameters =
             CertificateParams::new(vec![node.to_string(), STATE_SERVER_NAME.to_owned()]).map_err(failure)?;
         let uri =
@@ -80,7 +82,7 @@ impl CertificateAuthority {
         self.issue(&parameters)
     }
 
-    pub fn issue_server(&self, name: &str, addresses: &[IpAddr]) -> Result<TlsIdentity, ScenarioError> {
+    pub fn issue_server(&self, name: &str, addresses: &[IpAddr]) -> Result<TlsIdentity, IssuanceError> {
         let mut parameters = CertificateParams::new(vec![name.to_owned()]).map_err(failure)?;
         parameters.subject_alt_names.extend(addresses.iter().copied().map(SanType::IpAddress));
         parameters.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];

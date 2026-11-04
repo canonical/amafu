@@ -14,9 +14,9 @@ use amafu_domain::{NodeName, ProjectName};
 use amafu_interfaces::Clock;
 use uuid::Uuid;
 
-use crate::certificates::{CertificateAuthority, TlsIdentity};
 use crate::error::ScenarioError;
 use crate::observation::ClusterObservation;
+use amafu_installer::certificates::{CertificateAuthority, TlsIdentity};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Level {

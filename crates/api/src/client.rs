@@ -45,6 +45,11 @@ impl ClientError {
     pub fn is_not_found(&self) -> bool {
         self.status() == Some(StatusCode::NOT_FOUND.as_u16())
     }
+
+    #[must_use]
+    pub fn is_conflict(&self) -> bool {
+        self.status() == Some(StatusCode::CONFLICT.as_u16())
+    }
 }
 
 #[async_trait::async_trait]

@@ -20,6 +20,7 @@ amafu-state = { path = "crates/state" }
 amafu-storage = { path = "crates/storage" }
 amafu-guest-agent = { path = "crates/guest-agent" }
 amafu-hypervisor = { path = "crates/hypervisor" }
+amafu-installer = { path = "crates/installer" }
 amafu-api = { path = "crates/api" }
 amafu-boot-slots = { path = "crates/boot-slots" }
 amafu-system = { path = "crates/system" }
@@ -32,6 +33,7 @@ amafu-lxd-lab = { path = "test-rig/lxd-lab" }
 amafu-scenarios = { path = "test-rig/scenarios" }
 
 anyhow = "1.0.104"
+base64 = "0.23.1"
 async-trait = "0.1.92"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "http2", "json", "query", "tokio", "matched-path"] }
 bytes = "1.12.1"

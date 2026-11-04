@@ -201,6 +201,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "amafu-installer"
+version = "0.1.0"
+dependencies = [
+ "amafu-api",
+ "amafu-controllers",
+ "amafu-domain",
+ "amafu-interfaces",
+ "amafu-network",
+ "amafu-node",
+ "amafu-reconciler",
+ "async-trait",
+ "base64",
+ "futures",
+ "rcgen",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "tempfile",
+ "thiserror",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+ "webpki-roots",
+]
+
+[[package]]
 name = "amafu-interfaces"
 version = "0.1.0"
 dependencies = [
@@ -229,6 +258,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "futures",
+ "hex",
  "http",
  "rcgen",
  "reqwest",
@@ -237,6 +267,9 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "sha2",
+ "tar",
+ "tempfile",
  "thiserror",
  "time",
  "tokio",
@@ -338,10 +371,10 @@ version = "0.1.0"
 dependencies = [
  "amafu-api",
  "amafu-domain",
+ "amafu-installer",
  "amafu-interfaces",
  "async-trait",
  "futures",
- "rcgen",
  "serde",
  "serde_json",
  "thiserror",

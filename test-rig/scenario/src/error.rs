@@ -53,3 +53,9 @@ impl From<Violation> for ScenarioError {
 }
 
 pub type ScenarioResult = Result<(), ScenarioError>;
+
+impl From<amafu_installer::certificates::IssuanceError> for ScenarioError {
+    fn from(error: amafu_installer::certificates::IssuanceError) -> Self {
+        Self::Lab(error.to_string())
+    }
+}
