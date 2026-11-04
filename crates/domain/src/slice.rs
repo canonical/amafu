@@ -8,6 +8,25 @@ use crate::name::NodeName;
 const CLUSTER_WIDE_KINDS: &[&str] =
     &["Image", "StorageBackend", "Network", "SecurityGroup", "ExternalNetwork"];
 
+pub const SUBSCRIBED_KINDS: &[&str] = &[
+    "Image",
+    "StorageBackend",
+    "Network",
+    "SecurityGroup",
+    "ExternalNetwork",
+    "Node",
+    "Vm",
+    "Volume",
+    "NetworkEndpoint",
+    "FloatingIp",
+    "CertificateRevocation",
+];
+
+#[must_use]
+pub fn depends_on_hosted_vms(kind: &str) -> bool {
+    matches!(kind, "Volume" | "NetworkEndpoint")
+}
+
 type ProjectAndName = (String, String);
 
 fn text<'object>(object: &'object Value, pointer: &str) -> Option<&'object str> {
@@ -115,6 +134,16 @@ impl NodeSlice {
             self.hosted_projects.insert(project.clone());
             self.hosted_vms.insert((project, name));
         }
+    }
+
+    #[must_use]
+    pub fn accounts_for(&self, vm: &Value) -> bool {
+        let (project, name) = project_and_name(vm);
+        let volumes = vm.pointer("/specification/volumes").and_then(Value::as_array).into_iter().flatten();
+        self.hosts_vm(&project, &name)
+            && volumes
+                .filter_map(Value::as_str)
+                .all(|volume| self.used_volumes.contains(&(project.clone(), volume.to_owned())))
     }
 
     #[must_use]
@@ -330,6 +359,34 @@ mod tests {
         let mut deleting = hosted;
         deleting["metadata"]["is_deleting"] = json!(true);
         assert!(slice.may_write(&compute(), "Vm", Some(&deleting), None));
+    }
+
+    #[test]
+    fn a_slice_accounts_for_a_vm_only_while_it_knows_every_volume_of_it() {
+        let hosted = json!({
+            "metadata": {"project": "project-a", "name": "web-1"},
+            "specification": {"volumes": ["data"]},
+            "status": {"node": "node-1"},
+        });
+        let slice = slice_with(std::slice::from_ref(&hosted));
+        assert!(slice.accounts_for(&hosted));
+        let mut grown = hosted.clone();
+        grown["specification"]["volumes"] = json!(["data", "scratch"]);
+        assert!(!slice.accounts_for(&grown));
+        let mut other = hosted;
+        other["metadata"]["name"] = json!("web-2");
+        assert!(!slice.accounts_for(&other));
+    }
+
+    #[test]
+    fn every_kind_a_slice_can_hold_is_subscribed_to() {
+        let slice = NodeSlice::new(NodeName::new("node-1").unwrap());
+        let object = json!({"metadata": {"name": "node-1"}, "status": {"node": "node-1"}});
+        for kind in crate::registry::kinds() {
+            if slice.includes(kind.kind, &object) {
+                assert!(SUBSCRIBED_KINDS.contains(&kind.kind), "{} is missing", kind.kind);
+            }
+        }
     }
 
     #[test]

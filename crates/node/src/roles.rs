@@ -190,9 +190,15 @@ fn start_api(
     configuration: &NodeConfiguration,
     services: &Services,
 ) -> anyhow::Result<()> {
-    let replicated_kinds = amafu_domain::registry::kinds().iter().map(|descriptor| descriptor.kind).collect();
+    let replicated_kinds = amafu_domain::registry::kinds()
+        .iter()
+        .map(|descriptor| descriptor.kind)
+        .filter(|kind| *kind != "NodeLease")
+        .collect();
+    let replica: Arc<dyn Store> =
+        Arc::new(ReadReplicaStore::start(Arc::clone(&services.store), &replicated_kinds));
     let state = ApiState {
-        store: Arc::new(ReadReplicaStore::start(Arc::clone(&services.store), &replicated_kinds)),
+        store: Arc::clone(&replica),
         authenticator: Arc::new(TokenAuthenticator::new(configuration.api.identities.clone())),
         audit: Arc::clone(&services.audit),
         clock: Arc::clone(&services.clock),
@@ -206,9 +212,9 @@ fn start_api(
     let mut application = router(state);
     if let Some(identity) = &configuration.identity {
         let authenticator =
-            NodeAuthenticator::new(identity.certificate_authority.as_bytes(), Arc::clone(&services.store))?;
+            NodeAuthenticator::new(identity.certificate_authority.as_bytes(), Arc::clone(&replica))?;
         application = application.merge(node_router(NodeApiState {
-            store: Arc::clone(&services.store),
+            store: Arc::clone(&replica),
             authenticator: Arc::new(authenticator),
             audit: Arc::clone(&services.audit),
             clock: Arc::clone(&services.clock),

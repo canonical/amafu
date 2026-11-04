@@ -1,10 +1,10 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
 use amafu_domain::access::Verb;
 use amafu_domain::registry::{self, KindDescriptor};
-use amafu_domain::slice::NodeSlice;
+use amafu_domain::slice::{NodeSlice, SUBSCRIBED_KINDS, depends_on_hosted_vms};
 use amafu_domain::{NodeName, ObjectId, ObjectName, ObjectReference, ProjectName};
 use amafu_interfaces::node_lease::{
     acquire_node_lease, admit_node_write, lease_reference, node_fence, renew_node_lease, surrender_node_lease,
@@ -179,10 +179,14 @@ fn refused(context: &NodeContext, verb: Verb, reference: ObjectReference, reason
 }
 
 async fn slice_of(store: &dyn Store, node: &NodeName) -> Result<NodeSlice, StoreError> {
-    let vms = store.list("Vm", None, Consistency::Linearizable).await?;
+    let vms = store.list("Vm", None, Consistency::Stale).await?;
     let mut slice = NodeSlice::new(node.clone());
     slice.learn_vms(vms.iter().map(|record| &record.object));
     Ok(slice)
+}
+
+async fn slice_for(store: &dyn Store, node: &NodeName, kind: &str) -> Result<NodeSlice, StoreError> {
+    if depends_on_hosted_vms(kind) { slice_of(store, node).await } else { Ok(NodeSlice::new(node.clone())) }
 }
 
 fn reference_of(kind: &KindDescriptor, object: &Value) -> Option<ObjectReference> {
@@ -201,8 +205,8 @@ async fn read(
 ) -> Response {
     let store = state.store.as_ref();
     let outcome = async {
-        let slice = slice_of(store, &context.credentials.name).await?;
-        let record = store.read(&request.reference, Consistency::Linearizable).await?;
+        let slice = slice_for(store, &context.credentials.name, &request.reference.kind).await?;
+        let record = store.read(&request.reference, Consistency::Stale).await?;
         Ok::<_, StoreError>((slice, record))
     }
     .await;
@@ -225,8 +229,8 @@ async fn list(
 ) -> Response {
     let store = state.store.as_ref();
     let outcome = async {
-        let slice = slice_of(store, &context.credentials.name).await?;
-        let records = store.list(&request.kind, request.project.as_ref(), Consistency::Linearizable).await?;
+        let slice = slice_for(store, &context.credentials.name, &request.kind).await?;
+        let records = store.list(&request.kind, request.project.as_ref(), Consistency::Stale).await?;
         Ok::<_, StoreError>(
             records.into_iter().filter(|record| slice.includes(&request.kind, &record.object)).collect(),
         )
@@ -270,7 +274,7 @@ async fn compare_and_swap(
     }
     let store = state.store.as_ref();
     let outcome = async {
-        let slice = slice_of(store, &context.credentials.name).await?;
+        let slice = slice_for(store, &context.credentials.name, &reference.kind).await?;
         let current = store.read(&reference, Consistency::Linearizable).await?;
         Ok::<_, StoreError>((slice, current))
     }
@@ -379,25 +383,33 @@ async fn surrender_lease(
     lease_answer(&context, outcome, true)
 }
 
+const REFRESHES_PER_FULL_VIEW: u32 = 12;
+
 struct Subscription {
     state: NodeApiState,
     context: NodeContext,
     events: BoxStream<'static, WatchEvent>,
     sent: BTreeMap<ObjectReference, u64>,
+    slice: NodeSlice,
     has_started: bool,
+    refreshes_since_full_view: u32,
+}
+
+enum Wake {
+    Changed(BTreeSet<ObjectReference>),
+    Refresh,
+    Resynchronize,
 }
 
 async fn current_view(
-    state: &NodeApiState,
-    node: &NodeName,
+    store: &dyn Store,
+    slice: &NodeSlice,
 ) -> Result<BTreeMap<ObjectReference, StoredRecord>, StoreError> {
-    let store = state.store.as_ref();
-    let slice = slice_of(store, node).await?;
     let mut view = BTreeMap::new();
-    for kind in registry::kinds() {
-        for record in store.list(kind.kind, None, Consistency::Linearizable).await? {
+    for kind in registry::kinds().iter().filter(|kind| SUBSCRIBED_KINDS.contains(&kind.kind)) {
+        for record in store.list(kind.kind, None, Consistency::Stale).await? {
             if slice.includes(kind.kind, &record.object)
-                && let Some(reference) = reference_of(&kind, &record.object)
+                && let Some(reference) = reference_of(kind, &record.object)
             {
                 view.insert(reference, record);
             }
@@ -406,30 +418,80 @@ async fn current_view(
     Ok(view)
 }
 
-impl Subscription {
-    async fn wait_for_change(&mut self) -> bool {
-        let refresh = self.state.clock.sleep(self.state.refresh_interval);
-        let event = futures::future::select(self.events.next(), refresh).await;
-        if let futures::future::Either::Left((None, _)) = event {
-            return false;
+async fn is_still_trusted(state: &NodeApiState, context: &NodeContext) -> bool {
+    match state.authenticator.authenticate(&context.peer, state.clock.now()).await {
+        Ok(_) => true,
+        Err(refusal) => {
+            tracing::warn!(node = %context.credentials.name, %refusal, "ending a subscription");
+            false
         }
-        while let Some(Some(_)) = self.events.next().now_or_never() {}
-        true
+    }
+}
+
+struct NodeShare<'share> {
+    store: &'share dyn Store,
+    node: &'share NodeName,
+    slice: &'share NodeSlice,
+    sent: &'share BTreeMap<ObjectReference, u64>,
+}
+
+impl NodeShare<'_> {
+    async fn is_concerned_by(&self, reference: &ObjectReference) -> bool {
+        match reference.kind.as_str() {
+            "Node" => reference.name.as_str() == self.node.as_str(),
+            "Vm" => {
+                self.sent.contains_key(reference)
+                    || matches!(
+                        self.store.read(reference, Consistency::Stale).await,
+                        Ok(Some(record)) if self.slice.includes("Vm", &record.object)
+                    )
+            }
+            _ => true,
+        }
+    }
+}
+
+impl Subscription {
+    async fn wait_for_change(&mut self) -> Option<Wake> {
+        let mut refresh = self.state.clock.sleep(self.state.refresh_interval);
+        let mut changed = BTreeSet::new();
+        loop {
+            let next = futures::future::select(self.events.next(), &mut refresh).await;
+            let first = match next {
+                futures::future::Either::Right(((), _)) => return Some(Wake::Refresh),
+                futures::future::Either::Left((None, _)) => return None,
+                futures::future::Either::Left((Some(event), _)) => event,
+            };
+            let mut pending = vec![first];
+            while let Some(Some(event)) = self.events.next().now_or_never() {
+                pending.push(event);
+            }
+            let share = NodeShare {
+                store: self.state.store.as_ref(),
+                node: &self.context.credentials.name,
+                slice: &self.slice,
+                sent: &self.sent,
+            };
+            for event in pending {
+                match event {
+                    WatchEvent::Resynchronize => return Some(Wake::Resynchronize),
+                    WatchEvent::Changed(reference) if share.is_concerned_by(&reference).await => {
+                        changed.insert(reference);
+                    }
+                    WatchEvent::Changed(_) => {}
+                }
+            }
+            if !changed.is_empty() {
+                return Some(Wake::Changed(changed));
+            }
+        }
     }
 
-    async fn next_changes(&mut self) -> Option<Vec<SliceChange>> {
-        if self.has_started && !self.wait_for_change().await {
-            return None;
-        }
-        if let Err(refusal) =
-            self.state.authenticator.authenticate(&self.context.peer, self.state.clock.now()).await
-        {
-            tracing::warn!(node = %self.context.credentials.name, %refusal, "ending a subscription");
-            return None;
-        }
-        let Ok(view) = current_view(&self.state, &self.context.credentials.name).await else {
-            return Some(vec![SliceChange::Heartbeat]);
-        };
+    async fn full_view(&mut self) -> Result<Vec<SliceChange>, StoreError> {
+        let store = self.state.store.as_ref();
+        self.slice = slice_of(store, &self.context.credentials.name).await?;
+        let view = current_view(store, &self.slice).await?;
+        self.refreshes_since_full_view = 0;
         let previous = std::mem::replace(
             &mut self.sent,
             view.iter().map(|(reference, record)| (reference.clone(), record.revision)).collect(),
@@ -438,7 +500,7 @@ impl Subscription {
             self.has_started = true;
             let records =
                 view.into_iter().map(|(reference, record)| SliceRecord { reference, record }).collect();
-            return Some(vec![SliceChange::Snapshot { records }]);
+            return Ok(vec![SliceChange::Snapshot { records }]);
         }
         let mut changes: Vec<SliceChange> = view
             .into_iter()
@@ -451,10 +513,72 @@ impl Subscription {
                 .filter(|reference| !self.sent.contains_key(reference))
                 .map(|reference| SliceChange::Removed { reference }),
         );
-        if changes.is_empty() {
-            changes.push(SliceChange::Heartbeat);
+        Ok(changes)
+    }
+
+    fn changes_the_slice(&self, reference: &ObjectReference, record: Option<&StoredRecord>) -> bool {
+        if reference.kind != "Vm" {
+            return false;
         }
-        Some(changes)
+        let was_sent = self.sent.contains_key(reference);
+        let included = record.filter(|record| self.slice.includes("Vm", &record.object));
+        match included {
+            Some(record) => !self.slice.accounts_for(&record.object),
+            None => was_sent,
+        }
+    }
+
+    async fn changes_to(
+        &mut self,
+        changed: BTreeSet<ObjectReference>,
+    ) -> Result<Vec<SliceChange>, StoreError> {
+        let mut records = Vec::with_capacity(changed.len());
+        for reference in changed {
+            let record = self.state.store.read(&reference, Consistency::Stale).await?;
+            if self.changes_the_slice(&reference, record.as_ref()) {
+                return self.full_view().await;
+            }
+            records.push((reference, record));
+        }
+        let mut slice_changes = Vec::new();
+        for (reference, record) in records {
+            let included = record.filter(|record| self.slice.includes(&reference.kind, &record.object));
+            if let Some(record) = included {
+                if self.sent.insert(reference.clone(), record.revision) != Some(record.revision) {
+                    slice_changes.push(SliceChange::Upserted { record: SliceRecord { reference, record } });
+                }
+            } else if self.sent.remove(&reference).is_some() {
+                slice_changes.push(SliceChange::Removed { reference });
+            }
+        }
+        Ok(slice_changes)
+    }
+
+    async fn next_changes(&mut self) -> Option<Vec<SliceChange>> {
+        loop {
+            let wake = if self.has_started { self.wait_for_change().await? } else { Wake::Resynchronize };
+            if !is_still_trusted(&self.state, &self.context).await {
+                return None;
+            }
+            let is_change = matches!(wake, Wake::Changed(_));
+            let computed = match wake {
+                Wake::Changed(changed) => self.changes_to(changed).await,
+                Wake::Resynchronize => self.full_view().await,
+                Wake::Refresh => {
+                    self.refreshes_since_full_view += 1;
+                    if self.refreshes_since_full_view >= REFRESHES_PER_FULL_VIEW {
+                        self.full_view().await
+                    } else {
+                        Ok(Vec::new())
+                    }
+                }
+            };
+            match computed {
+                Ok(changes) if !changes.is_empty() => return Some(changes),
+                Ok(_) if is_change => {}
+                Ok(_) | Err(_) => return Some(vec![SliceChange::Heartbeat]),
+            }
+        }
     }
 }
 
@@ -472,8 +596,17 @@ async fn subscribe(
     Extension(context): Extension<NodeContext>,
 ) -> Response {
     let events =
-        futures::stream::select_all(registry::kinds().map(|kind| state.store.watch(kind.kind))).boxed();
-    let subscription = Subscription { state, context, events, sent: BTreeMap::new(), has_started: false };
+        futures::stream::select_all(SUBSCRIBED_KINDS.iter().map(|kind| state.store.watch(kind))).boxed();
+    let slice = NodeSlice::new(context.credentials.name.clone());
+    let subscription = Subscription {
+        state,
+        context,
+        events,
+        sent: BTreeMap::new(),
+        slice,
+        has_started: false,
+        refreshes_since_full_view: 0,
+    };
     let frames = futures::stream::unfold(subscription, |mut subscription| async move {
         let changes = subscription.next_changes().await?;
         Some((encode_changes(&changes), subscription))

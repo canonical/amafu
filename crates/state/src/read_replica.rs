@@ -7,7 +7,9 @@ use amafu_interfaces::{Consistency, Fence, Store, StoreError, StoredRecord, Watc
 use futures::StreamExt;
 use futures::stream::BoxStream;
 use serde_json::Value;
+use tokio::sync::broadcast;
 
+const CHANGES_KEPT_FOR_SLOW_WATCHERS: usize = 16_384;
 const RELOAD_DELAY: Duration = Duration::from_secs(1);
 
 type RecordKey = (String, String);
@@ -21,6 +23,7 @@ struct Replica {
 pub struct ReadReplicaStore {
     inner: Arc<dyn Store>,
     replica: Arc<RwLock<Replica>>,
+    changes: BTreeMap<String, broadcast::Sender<WatchEvent>>,
 }
 
 fn record_key(reference: &ObjectReference) -> RecordKey {
@@ -64,42 +67,107 @@ async fn refresh(
     Ok(())
 }
 
-async fn follow(inner: Arc<dyn Store>, replica: Arc<RwLock<Replica>>, kind: String) {
-    loop {
-        let mut events = inner.watch(&kind);
-        match load(inner.as_ref(), &kind).await {
-            Ok(records) => {
-                replica.write().unwrap_or_else(PoisonError::into_inner).kinds.insert(kind.clone(), records);
-            }
-            Err(error) => {
-                tracing::warn!(%kind, %error, "the read replica cannot load a kind yet");
-                tokio::time::sleep(RELOAD_DELAY).await;
-                continue;
+fn differences(kind: &str, kept: &KindRecords, loaded: &KindRecords) -> Vec<ObjectReference> {
+    let changed = loaded
+        .iter()
+        .filter(|(key, record)| kept.get(*key).map(|kept| kept.revision) != Some(record.revision));
+    let removed = kept.iter().filter(|(key, _)| !loaded.contains_key(*key));
+    changed.chain(removed).filter_map(|(_, record)| reference_of(kind, record)).collect()
+}
+
+async fn reload(
+    inner: &dyn Store,
+    replica: &RwLock<Replica>,
+    kind: &str,
+    changes: &broadcast::Sender<WatchEvent>,
+) -> Result<(), StoreError> {
+    let loaded = load(inner, kind).await?;
+    let differing = {
+        let mut replica = replica.write().unwrap_or_else(PoisonError::into_inner);
+        let differing = replica.kinds.get(kind).map(|kept| differences(kind, kept, &loaded));
+        replica.kinds.insert(kind.to_owned(), loaded);
+        differing
+    };
+    match differing {
+        Some(references) => {
+            for reference in references {
+                let _ = changes.send(WatchEvent::Changed(reference));
             }
         }
-        while let Some(event) = events.next().await {
-            let outcome = match event {
-                WatchEvent::Changed(reference) => refresh(inner.as_ref(), &replica, &reference).await,
-                WatchEvent::Resynchronize => break,
-            };
-            if let Err(error) = outcome {
-                tracing::warn!(%kind, %error, "the read replica missed a change and reloads the kind");
-                break;
-            }
+        None => {
+            let _ = changes.send(WatchEvent::Resynchronize);
         }
-        replica.write().unwrap_or_else(PoisonError::into_inner).kinds.remove(&kind);
-        tokio::time::sleep(RELOAD_DELAY).await;
     }
+    Ok(())
+}
+
+async fn follow(
+    inner: Arc<dyn Store>,
+    replica: Arc<RwLock<Replica>>,
+    kind: String,
+    changes: broadcast::Sender<WatchEvent>,
+) {
+    let mut events = inner.watch(&kind);
+    let mut is_current = false;
+    loop {
+        if !is_current {
+            match reload(inner.as_ref(), &replica, &kind, &changes).await {
+                Ok(()) => is_current = true,
+                Err(error) => {
+                    tracing::warn!(%kind, %error, "the read replica cannot load a kind yet");
+                    tokio::time::sleep(RELOAD_DELAY).await;
+                    continue;
+                }
+            }
+        }
+        match events.next().await {
+            Some(WatchEvent::Changed(reference)) => match refresh(inner.as_ref(), &replica, &reference).await
+            {
+                Ok(()) => {
+                    let _ = changes.send(WatchEvent::Changed(reference));
+                }
+                Err(error) => {
+                    tracing::warn!(%kind, %error, "the read replica missed a change and reloads the kind");
+                    is_current = false;
+                }
+            },
+            Some(WatchEvent::Resynchronize) => is_current = false,
+            None => {
+                tokio::time::sleep(RELOAD_DELAY).await;
+                events = inner.watch(&kind);
+                is_current = false;
+            }
+        }
+    }
+}
+
+fn shared_changes(changes: broadcast::Receiver<WatchEvent>) -> BoxStream<'static, WatchEvent> {
+    futures::stream::unfold(changes, |mut changes| async move {
+        match changes.recv().await {
+            Ok(event) => Some((event, changes)),
+            Err(broadcast::error::RecvError::Lagged(_)) => Some((WatchEvent::Resynchronize, changes)),
+            Err(broadcast::error::RecvError::Closed) => None,
+        }
+    })
+    .boxed()
 }
 
 impl ReadReplicaStore {
     #[must_use]
     pub fn start(inner: Arc<dyn Store>, kinds: &BTreeSet<&'static str>) -> Self {
         let replica = Arc::new(RwLock::new(Replica::default()));
+        let mut changes = BTreeMap::new();
         for kind in kinds {
-            tokio::spawn(follow(Arc::clone(&inner), Arc::clone(&replica), (*kind).to_owned()));
+            let (sender, _) = broadcast::channel(CHANGES_KEPT_FOR_SLOW_WATCHERS);
+            tokio::spawn(follow(
+                Arc::clone(&inner),
+                Arc::clone(&replica),
+                (*kind).to_owned(),
+                sender.clone(),
+            ));
+            changes.insert((*kind).to_owned(), sender);
         }
-        Self { inner, replica }
+        Self { inner, replica, changes }
     }
 
     fn replica(&self) -> std::sync::RwLockReadGuard<'_, Replica> {
@@ -163,6 +231,9 @@ impl Store for ReadReplicaStore {
     }
 
     fn watch(&self, kind: &str) -> BoxStream<'static, WatchEvent> {
-        self.inner.watch(kind)
+        match self.changes.get(kind) {
+            Some(changes) => shared_changes(changes.subscribe()),
+            None => self.inner.watch(kind),
+        }
     }
 }

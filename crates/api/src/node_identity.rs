@@ -127,7 +127,7 @@ impl NodeAuthenticator {
         verify_chain(&self.authority, certificate, now).map_err(NodeRefusal::Untrusted)?;
         let (name, roles) = node_identity_of(certificate)?;
         let fingerprint = fingerprint(certificate);
-        let revocations = list::<CertificateRevocation>(self.store.as_ref(), None, Consistency::Linearizable)
+        let revocations = list::<CertificateRevocation>(self.store.as_ref(), None, Consistency::Stale)
             .await
             .map_err(|error| NodeRefusal::Unavailable(error.to_string()))?;
         if revocations.iter().any(|revocation| revocation.specification.fingerprint == fingerprint) {
