@@ -13,6 +13,7 @@ use crate::runtime::VmDirectory;
 use crate::sandbox::{give_to, limit_cpu_share};
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
+const API_TIMEOUT: Duration = Duration::from_secs(15);
 const EXIT_TIMEOUT: Duration = Duration::from_secs(30);
 const EXIT_POLL: Duration = Duration::from_millis(100);
 const MIGRATION_TIMEOUT_SECONDS: u64 = 900;
@@ -33,23 +34,56 @@ pub struct SendJob {
     pub is_alive: fn(&VmDirectory) -> bool,
 }
 
+async fn read_response(stream: &mut UnixStream) -> io::Result<(String, String)> {
+    let mut received = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    let header_end = loop {
+        if let Some(position) = received.windows(4).position(|window| window == b"\r\n\r\n") {
+            break position + 4;
+        }
+        let read = stream.read(&mut chunk).await?;
+        if read == 0 {
+            return Err(io::Error::other("the VMM closed its API connection early"));
+        }
+        received.extend_from_slice(&chunk[..read]);
+    };
+    let headers = String::from_utf8_lossy(&received[..header_end]).into_owned();
+    let length: usize = headers
+        .lines()
+        .find_map(|line| {
+            line.to_ascii_lowercase().strip_prefix("content-length:").map(|value| value.trim().to_owned())
+        })
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    while received.len() < header_end + length {
+        let read = stream.read(&mut chunk).await?;
+        if read == 0 {
+            break;
+        }
+        received.extend_from_slice(&chunk[..read]);
+    }
+    let body = String::from_utf8_lossy(&received[header_end..]).into_owned();
+    Ok((headers, body))
+}
+
 async fn put_api(socket: &Path, path: &str, body: &str) -> io::Result<()> {
-    let mut stream = UnixStream::connect(socket).await?;
-    let request = format!(
-        "PUT {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    stream.write_all(request.as_bytes()).await?;
-    let mut answer = String::new();
-    stream.read_to_string(&mut answer).await?;
-    let status = answer.split_whitespace().nth(1).unwrap_or_default();
+    let exchange = async {
+        let mut stream = UnixStream::connect(socket).await?;
+        let request = format!(
+            "PUT {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(request.as_bytes()).await?;
+        read_response(&mut stream).await
+    };
+    let (headers, answer) = tokio::time::timeout(API_TIMEOUT, exchange)
+        .await
+        .map_err(|_| io::Error::other("the VMM did not answer its API in time"))??;
+    let status = headers.split_whitespace().nth(1).unwrap_or_default();
     if status.starts_with('2') {
         Ok(())
     } else {
-        Err(io::Error::other(format!(
-            "the VMM refused to send the VM: {}",
-            answer.lines().last().unwrap_or(status)
-        )))
+        Err(io::Error::other(format!("the VMM refused to send the VM ({status}): {answer}")))
     }
 }
 
@@ -129,5 +163,23 @@ pub async fn run(job: SendJob) {
     };
     if let Err(error) = record.write(&job.directory) {
         tracing::error!(vm_id = %job.vm_id, %error, "recording the migration outcome failed");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn an_answer_is_read_without_waiting_for_the_connection_to_close() {
+        let (mut client, mut server) = UnixStream::pair().unwrap();
+        server.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n").await.unwrap();
+        let (headers, body) = read_response(&mut client).await.unwrap();
+        assert!(headers.starts_with("HTTP/1.1 204"));
+        assert_eq!(body, "");
+        server.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nbroke").await.unwrap();
+        let (_, body) = read_response(&mut client).await.unwrap();
+        assert_eq!(body, "broke");
+        drop(server);
     }
 }
