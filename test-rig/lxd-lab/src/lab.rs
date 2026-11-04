@@ -5,9 +5,16 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use amafu_api::diagnostics::{BOOT_PATH, BootFacts};
-use amafu_domain::NodeName;
+use std::sync::Arc;
+
+use amafu_api::{ApiClient, HttpTransport};
+use amafu_domain::access::Role;
+use amafu_domain::kinds::cluster_version::{
+    ClusterVersion, ClusterVersionSpecification, cluster_version_name,
+};
 use amafu_domain::kinds::node::NodeRole;
 use amafu_domain::kinds::storage_backend::StorageProviderSpecification;
+use amafu_domain::{NodeName, ProjectName};
 use amafu_network::{StaticAddress, UnderlayConfiguration};
 use amafu_node::configuration::{
     ApiSection, ComputeSection, DiagnosticsSection, Directories, FencingSection, IdentitySection,
@@ -406,6 +413,7 @@ pub async fn up(
     for node in &state.topology.nodes {
         boots.push(wait_until_serving(&state.settings, node).await?);
     }
+    record_installed_image(&state).await?;
     let waited = crate::nfs::wait_until_serving(&lxd, &state.topology).await?;
     tracing::info!(seconds = waited.as_secs(), "the NFS server is serving");
     crate::node_images::publish(&lxd, &state.topology.nfs_server.name, &prepared).await?;
@@ -418,6 +426,36 @@ pub async fn up(
     state.block_backends.push((String::from("ceph-rbd"), ceph));
     save_state(repository, &state)?;
     Ok((state, boots))
+}
+
+async fn record_installed_image(state: &LabState) -> anyhow::Result<()> {
+    let installed =
+        state.node_images.as_ref().map(|images| images.installed.clone()).context("the lab has no images")?;
+    let core = state.topology.nodes.first().context("the lab has no node")?;
+    let transport = HttpTransport::new(
+        &core.api_endpoint(&state.settings),
+        Some(state.server.certificate_authority.as_bytes()),
+    )?;
+    let project = ProjectName::new(crate::credentials::PROJECTS[0])?;
+    let admin = ApiClient::new(Arc::new(transport), state.tokens.token(Role::Admin, &project));
+    let started = Instant::now();
+    loop {
+        match admin
+            .create::<ClusterVersion>(
+                &cluster_version_name(),
+                &ClusterVersionSpecification::installed(installed.clone()),
+            )
+            .await
+        {
+            Ok(_) => return Ok(()),
+            Err(error) if error.is_conflict() => return Ok(()),
+            Err(error) if started.elapsed() < BOOT_TIMEOUT => {
+                tracing::info!(%error, "the cluster cannot record its image yet");
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
 }
 
 fn last_path_segment(url: &str) -> &str {
