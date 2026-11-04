@@ -4,6 +4,7 @@ mod floating_ip;
 mod image;
 mod network;
 mod node;
+mod operation;
 mod output;
 mod resources;
 mod security_group;
@@ -51,6 +52,8 @@ enum Command {
     StorageBackend(storage_backend::StorageBackendCommand),
     #[command(subcommand, about = "Inspect and manage nodes")]
     Node(node::NodeCommand),
+    #[command(subcommand, about = "Follow, pause and cancel migrations, evacuations and recoveries")]
+    Operation(operation::OperationCommand),
 }
 
 async fn run(arguments: Arguments) -> anyhow::Result<()> {
@@ -68,6 +71,7 @@ async fn run(arguments: Arguments) -> anyhow::Result<()> {
         Command::SecurityGroup(command) => security_group::run(&client, command, arguments.output).await,
         Command::StorageBackend(command) => storage_backend::run(&client, command, arguments.output).await,
         Command::Node(command) => node::run(&client, command, arguments.output).await,
+        Command::Operation(command) => operation::run(&client, command, arguments.output).await,
     }
 }
 

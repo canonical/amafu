@@ -1,6 +1,6 @@
 use amafu_api::ApiClient;
-use amafu_domain::Object;
 use amafu_domain::kinds::node::{Node, NodeSpecification};
+use amafu_domain::{NodeName, Object};
 use clap::Subcommand;
 
 use crate::output::{OutputFormat, Table, print_structured};
@@ -15,6 +15,14 @@ pub enum NodeCommand {
     Cordon { name: String },
     #[command(about = "Allow new workloads on a node again")]
     Uncordon { name: String },
+    #[command(about = "Cordon a node and move every VM off it")]
+    Evacuate {
+        name: NodeName,
+        #[arg(long, help = "Wait until every VM has moved")]
+        wait: bool,
+        #[arg(long, value_name = "SECONDS", default_value = "1800")]
+        timeout: u64,
+    },
 }
 
 fn print_nodes(nodes: &[Object<Node>], format: OutputFormat) -> anyhow::Result<()> {
@@ -61,5 +69,9 @@ pub async fn run(client: &ApiClient, command: NodeCommand, format: OutputFormat)
         NodeCommand::Show { name } => print_structured(&client.get::<Node>(&name).await?, format),
         NodeCommand::Cordon { name } => print_nodes(&[set_cordoned(client, &name, true).await?], format),
         NodeCommand::Uncordon { name } => print_nodes(&[set_cordoned(client, &name, false).await?], format),
+        NodeCommand::Evacuate { name, wait, timeout } => {
+            let wait = wait.then(|| std::time::Duration::from_secs(timeout));
+            crate::operation::evacuate(client, &name, wait, format).await
+        }
     }
 }

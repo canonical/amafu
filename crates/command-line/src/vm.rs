@@ -5,7 +5,7 @@ use amafu_api::client::WatchUpdate;
 use amafu_domain::kinds::vm::{
     BootSource, NetworkInterfaceSpecification, PowerState, Vm, VmPhase, VmSpecification,
 };
-use amafu_domain::{Object, ObjectName};
+use amafu_domain::{NodeName, Object, ObjectName};
 use anyhow::bail;
 use clap::Subcommand;
 use futures::StreamExt;
@@ -109,6 +109,16 @@ pub enum VmCommand {
     Start { name: String },
     #[command(about = "Stop a running virtual machine")]
     Stop { name: String },
+    #[command(about = "Move a running virtual machine to another node")]
+    Migrate {
+        name: String,
+        #[arg(long, value_name = "NODE", help = "The node to move to; the scheduler chooses when omitted")]
+        to: Option<NodeName>,
+        #[arg(long, help = "Wait until the move finishes")]
+        wait: bool,
+        #[arg(long, value_name = "SECONDS", default_value = DEFAULT_WAIT)]
+        timeout: u64,
+    },
     #[command(about = "Delete a virtual machine")]
     Delete {
         name: String,
@@ -252,6 +262,10 @@ pub async fn run(client: &ApiClient, command: VmCommand, format: OutputFormat) -
         }
         VmCommand::Stop { name } => {
             print_vms(&[set_power_state(client, &name, PowerState::Stopped).await?], format)
+        }
+        VmCommand::Migrate { name, to, wait, timeout } => {
+            let wait = wait.then(|| std::time::Duration::from_secs(timeout));
+            crate::operation::migrate(client, &name, to, wait, format).await
         }
         VmCommand::Delete { name, wait, timeout } => {
             let deleting = client.delete::<Vm>(&name).await?;

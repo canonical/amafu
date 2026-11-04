@@ -226,6 +226,11 @@ impl ApiClient {
         self
     }
 
+    #[must_use]
+    pub fn project(&self) -> Option<&ProjectName> {
+        self.project.as_ref()
+    }
+
     fn request(
         &self,
         method: Method,
@@ -317,6 +322,16 @@ impl ApiClient {
 
     pub async fn get<R: Resource>(&self, name: &str) -> Result<Object<R>, ClientError> {
         self.call(Method::GET, &self.object_path::<R>(name, ""), None).await
+    }
+
+    pub async fn list_in_every_project<R: Resource>(&self) -> Result<Vec<Object<R>>, ClientError> {
+        let path = format!("/v1/{}?all-projects=true", R::PLURAL_NAME);
+        let response: ListResponse = self.call(Method::GET, &path, None).await?;
+        response
+            .items
+            .into_iter()
+            .map(|item| serde_json::from_value(item).map_err(|error| ClientError::Decode(error.to_string())))
+            .collect()
     }
 
     pub async fn list<R: Resource>(&self) -> Result<Vec<Object<R>>, ClientError> {
