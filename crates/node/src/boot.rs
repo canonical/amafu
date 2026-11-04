@@ -3,7 +3,6 @@ use std::time::Duration;
 
 use amafu_system::boot_media::{BOOT_PARTITION_NAME, DATA_PARTITION_NAME, find_partition};
 use amafu_system::early_boot::{mount_boot_partition, mount_data_partition, set_hostname};
-use amafu_system::files::read_into_page_cache;
 use amafu_system::modules::load_listed_modules;
 use amafu_system::mount_essential_filesystems;
 
@@ -53,19 +52,6 @@ fn load_modules_in_background() -> ModuleLoading {
     })
 }
 
-fn warm_guest_boot_files(configuration: &NodeConfiguration) {
-    let compute = &configuration.compute;
-    let files =
-        [compute.container_kernel.clone(), compute.container_initramfs.clone(), compute.firmware.clone()];
-    tokio::task::spawn_blocking(move || {
-        for file in files {
-            if let Err(error) = read_into_page_cache(&file) {
-                tracing::warn!(file = %file.display(), %error, "a guest boot file cannot be read ahead");
-            }
-        }
-    });
-}
-
 pub async fn early_boot() -> anyhow::Result<(NodeConfiguration, ModuleLoading)> {
     mount_essential_filesystems()?;
     load_listed_modules(Path::new(MODULES_DIRECTORY), Path::new(EARLY_MODULE_LIST))?;
@@ -74,7 +60,6 @@ pub async fn early_boot() -> anyhow::Result<(NodeConfiguration, ModuleLoading)> 
     let modules = load_modules_in_background();
     let configuration = NodeConfiguration::load(Path::new(CONFIGURATION_FILE))?;
     set_hostname(configuration.node.name.as_str())?;
-    warm_guest_boot_files(&configuration);
     let data_partition = wait_for_partition(DATA_PARTITION_NAME).await?;
     mount_data_partition(&data_partition, &configuration.directories.data)?;
     for interface in [&configuration.management, &configuration.network].into_iter().flatten() {

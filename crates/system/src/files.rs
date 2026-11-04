@@ -13,21 +13,9 @@ pub fn write_durably(path: &Path, contents: &[u8]) -> std::io::Result<()> {
     File::open(directory)?.sync_all()
 }
 
-pub fn read_into_page_cache(path: &Path) -> std::io::Result<u64> {
-    std::io::copy(&mut File::open(path)?, &mut std::io::sink())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn reading_into_the_page_cache_reads_the_whole_file() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("vmlinux");
-        fs::write(&path, vec![7; 10_000]).unwrap();
-        assert_eq!(read_into_page_cache(&path).unwrap(), 10_000);
-    }
 
     #[test]
     fn the_file_is_replaced_whole() {
