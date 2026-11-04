@@ -20,7 +20,6 @@ pub const PROJECT: &str = "scale";
 const FIRST_API_PORT: u16 = 27_443;
 const FIRST_STATE_PORT: u16 = 27_400;
 const LOOPBACK: Ipv4Addr = Ipv4Addr::LOCALHOST;
-const LOCAL_HEARTBEAT_MILLISECONDS: u64 = 50;
 const READY_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub struct CoreMember {
@@ -81,7 +80,7 @@ fn configuration(
             listen: state_address(index),
             voters: (0..count).map(state_address).collect(),
             core_members: Vec::new(),
-            heartbeat_milliseconds: LOCAL_HEARTBEAT_MILLISECONDS,
+            ..StateSection::default()
         },
         directories: Directories { data, runtime: directory.join("run"), images: directory.join("images") },
         compute: ComputeSection::default(),
@@ -168,6 +167,15 @@ pub fn resident_memory_mebibytes(process_id: u32) -> u64 {
             })
         })
         .map_or(0, |kibibytes| kibibytes / 1024)
+}
+
+#[must_use]
+pub fn available_memory_mebibytes() -> Option<u64> {
+    std::fs::read_to_string("/proc/meminfo").ok()?.lines().find_map(|line| {
+        Some(
+            line.strip_prefix("MemAvailable:")?.trim().strip_suffix("kB")?.trim().parse::<u64>().ok()? / 1024,
+        )
+    })
 }
 
 #[must_use]

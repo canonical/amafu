@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use amafu_api::{ApiClient, HttpTransport};
@@ -10,12 +11,16 @@ use anyhow::bail;
 use futures::StreamExt;
 use serde::Serialize;
 
-use crate::cores::{CoreCluster, PROJECT, resident_memory_mebibytes};
+use crate::cores::{CoreCluster, PROJECT, available_memory_mebibytes, resident_memory_mebibytes};
 use crate::fleet::SimulatedFleet;
 
 const POLL: Duration = Duration::from_secs(1);
+const MEMORY_CHECK: Duration = Duration::from_millis(500);
+const LARGEST_CORE_MEMORY_MEBIBYTES: u64 = 6_144;
+const SMALLEST_AVAILABLE_MEMORY_MEBIBYTES: u64 = 6_144;
 const CREATION_CONCURRENCY: usize = 64;
 const READ_CLIENTS: usize = 48;
+const READER_THREADS: usize = 4;
 const VM_MEMORY_MEBIBYTES: u64 = 128;
 
 #[derive(Debug, Clone)]
@@ -68,6 +73,7 @@ pub struct ScaleReport {
     pub placement_seconds: f64,
     pub read: ReadReport,
     pub core_memory_mebibytes: Vec<u64>,
+    pub peak_core_memory_mebibytes: u64,
     pub fleet_memory_mebibytes: u64,
     pub nodes_not_ready_at_end: usize,
     pub budgets: ScaleBudgets,
@@ -186,6 +192,25 @@ async fn read_load(
     })
 }
 
+async fn on_a_runtime_of_its_own(
+    readers: Vec<ApiClient>,
+    vms: usize,
+    rate: u32,
+    duration: Duration,
+) -> anyhow::Result<ReadReport> {
+    let (answer, answered) = tokio::sync::oneshot::channel();
+    std::thread::spawn(move || {
+        let outcome = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(READER_THREADS)
+            .enable_all()
+            .build()
+            .map_err(anyhow::Error::from)
+            .and_then(|runtime| runtime.block_on(read_load(&readers, vms, rate, duration)));
+        let _ = answer.send(outcome);
+    });
+    answered.await?
+}
+
 fn violations(report: &ScaleReport) -> Vec<String> {
     let budgets = &report.budgets;
     let mut violations = Vec::new();
@@ -213,10 +238,10 @@ fn violations(report: &ScaleReport) -> Vec<String> {
             report.read.achieved_rate, report.read.failures
         ));
     }
-    if report.core_memory_mebibytes.iter().any(|memory| *memory > budgets.core_memory_mebibytes) {
+    if report.peak_core_memory_mebibytes > budgets.core_memory_mebibytes {
         violations.push(format!(
-            "a core member used more than {} MiB: {:?}",
-            budgets.core_memory_mebibytes, report.core_memory_mebibytes
+            "a core member reached {} MiB, over {} MiB",
+            report.peak_core_memory_mebibytes, budgets.core_memory_mebibytes
         ));
     }
     if report.nodes_not_ready_at_end > 0 {
@@ -225,16 +250,54 @@ fn violations(report: &ScaleReport) -> Vec<String> {
     violations
 }
 
+async fn memory_guard(process_ids: Vec<u32>, peak: Arc<AtomicU64>) -> anyhow::Error {
+    loop {
+        let largest = process_ids.iter().copied().map(resident_memory_mebibytes).max().unwrap_or_default();
+        peak.fetch_max(largest, Ordering::Relaxed);
+        if largest > LARGEST_CORE_MEMORY_MEBIBYTES {
+            return anyhow::anyhow!("a core member reached {largest} MiB, so the run was stopped");
+        }
+        if let Some(available) = available_memory_mebibytes()
+            && available < SMALLEST_AVAILABLE_MEMORY_MEBIBYTES
+        {
+            return anyhow::anyhow!("only {available} MiB of memory were left, so the run was stopped");
+        }
+        tokio::time::sleep(MEMORY_CHECK).await;
+    }
+}
+
 pub async fn run(settings: &ScaleSettings, budgets: ScaleBudgets) -> anyhow::Result<ScaleReport> {
     for directory in [&settings.work, &settings.state] {
         let _ = std::fs::remove_dir_all(directory);
         std::fs::create_dir_all(directory)?;
     }
+    if available_memory_mebibytes()
+        .is_some_and(|available| available < SMALLEST_AVAILABLE_MEMORY_MEBIBYTES * 2)
+    {
+        bail!("too little memory is free to run the scale scenario safely");
+    }
     let cluster =
         CoreCluster::start(&settings.node_binary, &settings.work, &settings.state, settings.core_members)
             .await?;
+    let peak = Arc::new(AtomicU64::new(0));
+    let process_ids = cluster.members.iter().map(|member| member.process.id()).collect();
+    let outcome = tokio::select! {
+        stopped = memory_guard(process_ids, Arc::clone(&peak)) => Err(stopped),
+        report = measure(settings, budgets, &cluster, &peak) => report,
+    };
+    drop(cluster);
+    let _ = std::fs::remove_dir_all(&settings.state);
+    outcome
+}
+
+async fn measure(
+    settings: &ScaleSettings,
+    budgets: ScaleBudgets,
+    cluster: &CoreCluster,
+    peak: &AtomicU64,
+) -> anyhow::Result<ScaleReport> {
     let endpoints = cluster.endpoints();
-    let operator = operator_client(&cluster, &endpoints[0])?;
+    let operator = operator_client(cluster, &endpoints[0])?;
     tracing::info!(nodes = settings.nodes, "starting the simulated nodes");
     let mut fleet = SimulatedFleet::start(settings.nodes, &endpoints, &cluster.authority)?;
     let nodes = settings.nodes;
@@ -251,12 +314,13 @@ pub async fn run(settings: &ScaleSettings, budgets: ScaleBudgets) -> anyhow::Res
     let placement_seconds = placing.elapsed().as_secs_f64();
     tracing::info!(placement_seconds, "every VM runs");
     let readers = (0..READ_CLIENTS)
-        .map(|index| operator_client(&cluster, &endpoints[index % endpoints.len()]))
+        .map(|index| operator_client(cluster, &endpoints[index % endpoints.len()]))
         .collect::<anyhow::Result<Vec<_>>>()?;
     for reader in &readers {
         reader.get_local::<Vm>(vm_name(0)?.as_str()).await?;
     }
-    let read = read_load(&readers, settings.vms, settings.read_rate, settings.read_duration).await?;
+    let read =
+        on_a_runtime_of_its_own(readers, settings.vms, settings.read_rate, settings.read_duration).await?;
     let nodes_not_ready_at_end = nodes.saturating_sub(ready_simulated_nodes(&operator).await?);
     let mut report = ScaleReport {
         nodes,
@@ -265,6 +329,7 @@ pub async fn run(settings: &ScaleSettings, budgets: ScaleBudgets) -> anyhow::Res
         placement_seconds,
         read,
         core_memory_mebibytes: cluster.resident_memory_mebibytes(),
+        peak_core_memory_mebibytes: peak.load(Ordering::Relaxed),
         fleet_memory_mebibytes: resident_memory_mebibytes(std::process::id()),
         nodes_not_ready_at_end,
         budgets,
