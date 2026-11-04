@@ -22,8 +22,8 @@ use amafu_domain::ObjectId;
 use amafu_domain::kinds::node::{CpuBaseline, NodeCapacity, NodeRole};
 use amafu_domain::kinds::node_lease::LeaseTerms;
 use amafu_hypervisor::{
-    BootSources, CloudHypervisor, CloudHypervisorSettings, HybridVsockAgents, RuntimeDirectory,
-    prepare_kvm_access,
+    BootSources, CloudHypervisor, CloudHypervisorSettings, HybridVsockAgents, MIGRATION_PORT,
+    MigrationTransport, RuntimeDirectory, prepare_kvm_access,
 };
 use amafu_interfaces::{
     AuditEntry, AuditLog, Clock, CoreConnection, Datapath, Fence, GuestAgents, Hypervisor, ImageStore,
@@ -250,10 +250,52 @@ fn compute_adapters(
     })
 }
 
-fn cloud_hypervisor(configuration: &NodeConfiguration) -> anyhow::Result<CloudHypervisor> {
+fn migration_transport(configuration: &NodeConfiguration) -> anyhow::Result<Option<Arc<MigrationTransport>>> {
+    let Some(identity) = &configuration.identity else {
+        return Ok(None);
+    };
+    Ok(Some(Arc::new(MigrationTransport::new(
+        &identity.certificate,
+        &identity.private_key,
+        &identity.certificate_authority,
+    )?)))
+}
+
+fn receive_migrations(
+    roles: &mut JoinSet<()>,
+    configuration: &NodeConfiguration,
+    transport: Option<Arc<MigrationTransport>>,
+) {
+    let Some(transport) = transport else {
+        return;
+    };
+    let address = configuration
+        .network
+        .as_ref()
+        .map_or(std::net::Ipv4Addr::UNSPECIFIED, |network| network.address.address);
+    let listen = std::net::SocketAddr::from((address, MIGRATION_PORT));
+    let runtime = RuntimeDirectory::new(configuration.directories.runtime.join(VM_DIRECTORY));
+    roles.spawn(supervise("migration", move || {
+        let (transport, runtime) = (Arc::clone(&transport), runtime.clone());
+        async move {
+            match TcpListener::bind(listen).await {
+                Ok(listener) => {
+                    tracing::info!(%listen, "the node receives migrations");
+                    transport.serve(listener, runtime).await.to_string()
+                }
+                Err(error) => format!("binding {listen} failed: {error}"),
+            }
+        }
+    }));
+}
+
+fn cloud_hypervisor(
+    configuration: &NodeConfiguration,
+    transport: Option<Arc<MigrationTransport>>,
+) -> anyhow::Result<CloudHypervisor> {
     let directories = &configuration.directories;
     let compute = &configuration.compute;
-    Ok(CloudHypervisor::new(CloudHypervisorSettings {
+    let hypervisor = CloudHypervisor::new(CloudHypervisorSettings {
         runtime: RuntimeDirectory::new(directories.runtime.join(VM_DIRECTORY)),
         boot: BootSources {
             bundles_directory: directories.images.clone(),
@@ -263,7 +305,11 @@ fn cloud_hypervisor(configuration: &NodeConfiguration) -> anyhow::Result<CloudHy
         },
         executable: std::env::current_exe()?,
         shared_readable: vec![directories.image_cache()],
-    }))
+    });
+    Ok(match transport {
+        Some(transport) => hypervisor.with_migration(transport),
+        None => hypervisor,
+    })
 }
 
 fn recovery_roles(
@@ -580,7 +626,8 @@ pub async fn run(configuration: NodeConfiguration, boot: Option<BootServices>) -
         follow_the_core(&mut roles, subscribed);
         services
     };
-    let hypervisor = Arc::new(cloud_hypervisor(&configuration)?);
+    let transport = migration_transport(&configuration)?;
+    let hypervisor = Arc::new(cloud_hypervisor(&configuration, transport.clone())?);
     let underlay = amafu_network::bring_up_underlay(configuration.network.as_ref()).await?;
     let adapters = compute_adapters(&configuration, &hypervisor, underlay)?;
     let responsive = ReconcilerSettings {
@@ -617,6 +664,7 @@ pub async fn run(configuration: NodeConfiguration, boot: Option<BootServices>) -
             tracing::warn!(%error, "VM processes cannot be given access to /dev/kvm");
         }
         compute_roles(&mut roles, &node_services, &adapters, &identity, &lease, responsive);
+        receive_migrations(&mut roles, &configuration, transport);
     }
     crate::diagnostics::start(&mut roles, &configuration, &services, &adapters);
     while let Some(ended) = roles.join_next().await {
