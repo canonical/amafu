@@ -1,4 +1,5 @@
 pub mod containers;
+pub mod migration;
 pub mod networking;
 pub mod overlay;
 pub mod placement;
@@ -39,6 +40,8 @@ pub fn all() -> Vec<ScenarioDefinition> {
         store_history::STORE_HISTORY_IS_LINEARIZABLE,
         recovery::POWERED_OFF_NODE_IS_RECOVERED,
         recovery::CUT_OFF_NODE_IS_FENCED,
+        migration::RUNNING_VM_MOVES,
+        migration::NODE_IS_EVACUATED,
     ]
 }
 
