@@ -135,6 +135,21 @@ pub struct LabTopology {
     pub external_network: ExternalNetworkSpecification,
 }
 
+const LARGE_NODE_MEMORY_GIBIBYTES: u32 = 7;
+const SMALL_NODE_MEMORY_GIBIBYTES: u32 = 2;
+const LARGE_NODES: [u8; 2] = [1, 2];
+
+const LARGE_NODE_CPU_COUNT: u32 = 4;
+const SMALL_NODE_CPU_COUNT: u32 = 2;
+
+fn node_cpu_count(index: u8) -> u32 {
+    if LARGE_NODES.contains(&index) { LARGE_NODE_CPU_COUNT } else { SMALL_NODE_CPU_COUNT }
+}
+
+fn node_memory_gibibytes(index: u8) -> u32 {
+    if LARGE_NODES.contains(&index) { LARGE_NODE_MEMORY_GIBIBYTES } else { SMALL_NODE_MEMORY_GIBIBYTES }
+}
+
 impl LabTopology {
     #[must_use]
     pub fn standard(settings: &LabSettings, node_count: u8) -> Self {
@@ -150,8 +165,8 @@ impl LabTopology {
                 machine.underlay_address = settings.underlay_address(FIRST_NODE_UNDERLAY_HOST + index);
                 LabNode {
                     machine,
-                    cpu_count: 2,
-                    memory_gibibytes: 3,
+                    cpu_count: node_cpu_count(index),
+                    memory_gibibytes: node_memory_gibibytes(index),
                     disk_gibibytes: 20,
                     api_port: settings.first_proxy_port + port_offset,
                     diagnostics_port: settings.first_proxy_port + port_offset + 1,

@@ -11,7 +11,7 @@ use amafu_domain::kinds::storage_backend::StorageProviderSpecification;
 use amafu_network::{StaticAddress, UnderlayConfiguration};
 use amafu_node::configuration::{
     ApiSection, ComputeSection, DiagnosticsSection, Directories, FencingSection, IdentitySection,
-    NodeConfiguration, NodeSection, SUPPORTED_VERSION, StateSection,
+    NodeConfiguration, NodeSection, SUPPORTED_VERSION, SchedulingSection, StateSection,
 };
 use anyhow::{Context, bail};
 use reqwest::Method;
@@ -29,6 +29,7 @@ use crate::topology::{
 };
 
 const BOOT_TIMEOUT: Duration = Duration::from_secs(180);
+const LAB_CPU_OVERCOMMIT_RATIO: u32 = 10;
 const BOOT_POLL: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,6 +134,10 @@ fn node_configuration(
         directories: Directories::default(),
         compute: ComputeSection { resolvers: vec![settings.gateway], ..ComputeSection::default() },
         fencing: FencingSection::default(),
+        scheduling: SchedulingSection {
+            cpu_overcommit_ratio: LAB_CPU_OVERCOMMIT_RATIO,
+            ..SchedulingSection::default()
+        },
         diagnostics: Some(DiagnosticsSection { listen: node_listen(NODE_DIAGNOSTICS_PORT) }),
     })
 }
@@ -193,7 +198,7 @@ async fn ensure_project(lxd: &LxdClient, settings: &LabSettings) -> anyhow::Resu
             "features.images": "false",
             "features.profiles": "true",
             "features.storage.volumes": "true",
-            "limits.memory": "22GiB",
+            "limits.memory": "28GiB",
             "limits.cpu": "20",
         },
     });

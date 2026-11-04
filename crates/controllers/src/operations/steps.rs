@@ -8,16 +8,24 @@ use crate::operations::migration::{
     AnnounceAddresses, CleanUpSource, CopyMemory, Cordon, MigrateVm, PrepareDestination, SwitchOver,
 };
 use crate::operations::recovery::{MarkNodeLost, ReleaseAssignments, RevokeNodeOnStorage, WaitOutWatchdog};
+use crate::scheduling::SchedulingSettings;
 
 pub struct OperationSteps {
     storage: Arc<dyn Storage>,
     identifiers: Arc<dyn Identifiers>,
+    scheduling: SchedulingSettings,
 }
 
 impl OperationSteps {
     #[must_use]
     pub fn new(storage: Arc<dyn Storage>, identifiers: Arc<dyn Identifiers>) -> Self {
-        Self { storage, identifiers }
+        Self { storage, identifiers, scheduling: SchedulingSettings::default() }
+    }
+
+    #[must_use]
+    pub fn scheduling(mut self, scheduling: SchedulingSettings) -> Self {
+        self.scheduling = scheduling;
+        self
     }
 }
 
@@ -32,9 +40,11 @@ impl StepRegistry for OperationSteps {
             StepSpecification::ReleaseAssignments { node } => {
                 Box::new(ReleaseAssignments { node: node.clone(), storage: Arc::clone(&self.storage) })
             }
-            StepSpecification::PrepareDestination { vm, destination } => {
-                Box::new(PrepareDestination { vm: vm.clone(), destination: destination.clone() })
-            }
+            StepSpecification::PrepareDestination { vm, destination } => Box::new(PrepareDestination {
+                vm: vm.clone(),
+                destination: destination.clone(),
+                scheduling: self.scheduling,
+            }),
             StepSpecification::CopyMemory { vm } => Box::new(CopyMemory { vm: vm.clone() }),
             StepSpecification::SwitchOver { vm } => Box::new(SwitchOver { vm: vm.clone() }),
             StepSpecification::AnnounceAddresses { vm } => Box::new(AnnounceAddresses { vm: vm.clone() }),

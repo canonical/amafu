@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use amafu_api::TokenIdentity;
+use amafu_controllers::SchedulingSettings;
 use amafu_domain::kinds::node::NodeRole;
 use amafu_domain::kinds::node_lease::LeaseTerms;
 use amafu_domain::{NodeName, ZoneName};
@@ -33,6 +34,8 @@ pub struct NodeConfiguration {
     pub compute: ComputeSection,
     #[serde(default)]
     pub fencing: FencingSection,
+    #[serde(default)]
+    pub scheduling: SchedulingSection,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub diagnostics: Option<DiagnosticsSection>,
 }
@@ -121,6 +124,33 @@ pub struct StateSection {
 pub struct FencingSection {
     pub lease_seconds: u64,
     pub watchdog_seconds: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchedulingSection {
+    pub cpu_overcommit_ratio: u32,
+    pub reserved_memory_mebibytes: u64,
+}
+
+impl Default for SchedulingSection {
+    fn default() -> Self {
+        let defaults = SchedulingSettings::default();
+        Self {
+            cpu_overcommit_ratio: defaults.cpu_overcommit_ratio,
+            reserved_memory_mebibytes: defaults.reserved_memory_mebibytes,
+        }
+    }
+}
+
+impl SchedulingSection {
+    #[must_use]
+    pub fn settings(&self) -> SchedulingSettings {
+        SchedulingSettings {
+            cpu_overcommit_ratio: self.cpu_overcommit_ratio,
+            reserved_memory_mebibytes: self.reserved_memory_mebibytes,
+        }
+    }
 }
 
 impl Default for FencingSection {

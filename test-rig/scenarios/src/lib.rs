@@ -42,6 +42,7 @@ pub fn all() -> Vec<ScenarioDefinition> {
         recovery::CUT_OFF_NODE_IS_FENCED,
         migration::RUNNING_VM_MOVES,
         migration::NODE_IS_EVACUATED,
+        migration::LOADED_VM_MOVES_WITHIN_BUDGET,
     ]
 }
 

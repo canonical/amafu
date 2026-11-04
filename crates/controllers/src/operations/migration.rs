@@ -73,6 +73,7 @@ async fn node_address(store: &dyn Store, node: &NodeName) -> Result<std::net::Ip
 pub struct PrepareDestination {
     pub vm: VmReference,
     pub destination: Option<NodeName>,
+    pub scheduling: SchedulingSettings,
 }
 
 impl PrepareDestination {
@@ -86,7 +87,7 @@ impl PrepareDestination {
                 Err(ActionError::invalid(format!("there is no node named {chosen}")))
             };
         }
-        choose_destination(&cluster, vm, SchedulingSettings::default())
+        choose_destination(&cluster, vm, self.scheduling)
             .map_err(|reason| ActionError::retryable(format!("no node can take {}: {reason}", self.vm)))
     }
 }

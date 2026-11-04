@@ -317,6 +317,7 @@ fn recovery_roles(
     services: &Services,
     adapters: &ComputeAdapters,
     settings: ReconcilerSettings,
+    scheduling: SchedulingSettings,
 ) {
     let (health_store, health_clock) = (Arc::clone(&services.store), Arc::clone(&services.clock));
     singleton_role(
@@ -335,10 +336,13 @@ fn recovery_roles(
     let (operations_store, operations_clock, operations_steps) = (
         Arc::clone(&services.store),
         Arc::clone(&services.clock),
-        Arc::new(OperationSteps::new(
-            Arc::clone(&adapters.storage) as Arc<dyn Storage>,
-            Arc::new(RandomIdentifiers),
-        )) as Arc<dyn StepRegistry>,
+        Arc::new(
+            OperationSteps::new(
+                Arc::clone(&adapters.storage) as Arc<dyn Storage>,
+                Arc::new(RandomIdentifiers),
+            )
+            .scheduling(scheduling),
+        ) as Arc<dyn StepRegistry>,
     );
     singleton_role(
         roles,
@@ -356,16 +360,19 @@ fn recovery_roles(
     );
 }
 
-fn core_roles(roles: &mut JoinSet<()>, services: &Services, adapters: &ComputeAdapters) {
+fn core_roles(
+    roles: &mut JoinSet<()>,
+    services: &Services,
+    adapters: &ComputeAdapters,
+    scheduling: SchedulingSettings,
+) {
     let store = || Arc::clone(&services.store);
     let settings = ReconcilerSettings::default();
     let scheduler_store = store();
     singleton_role(
         roles,
         "scheduler",
-        move |fence| {
-            SchedulerController::new(Arc::clone(&scheduler_store), fence, SchedulingSettings::default())
-        },
+        move |fence| SchedulerController::new(Arc::clone(&scheduler_store), fence, scheduling),
         services,
         settings,
     );
@@ -403,7 +410,7 @@ fn core_roles(roles: &mut JoinSet<()>, services: &Services, adapters: &ComputeAd
         services,
         settings,
     );
-    recovery_roles(roles, services, adapters, settings);
+    recovery_roles(roles, services, adapters, settings, scheduling);
     let external_store = store();
     singleton_role(
         roles,
@@ -636,7 +643,7 @@ pub async fn run(configuration: NodeConfiguration, boot: Option<BootServices>) -
     };
     if is_core {
         start_api(&mut roles, &configuration, &services)?;
-        core_roles(&mut roles, &services, &adapters);
+        core_roles(&mut roles, &services, &adapters, configuration.scheduling.settings());
     }
     let identity = node_identity(&configuration)?;
     let lease = NodeLeaseState::new();

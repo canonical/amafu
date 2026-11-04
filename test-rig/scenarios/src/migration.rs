@@ -37,8 +37,21 @@ pub const NODE_IS_EVACUATED: ScenarioDefinition = ScenarioDefinition {
     run: |cluster| an_evacuated_node_is_left_by_every_vm(cluster).boxed_local(),
 };
 
-const OPERATION_TIMEOUT: Duration = Duration::from_secs(300);
-const EVACUATED_VM_COUNT: usize = 12;
+pub const LOADED_VM_MOVES_WITHIN_BUDGET: ScenarioDefinition = ScenarioDefinition {
+    name: "a 4 GiB VM under memory load moves within its downtime budget",
+    levels: &[Level::VirtualLab],
+    node_count: 4,
+    run: |cluster| a_loaded_vm_moves_within_budget(cluster).boxed_local(),
+};
+
+const OPERATION_TIMEOUT: Duration = Duration::from_secs(1200);
+const SIMULATED_EVACUATED_VM_COUNT: usize = 12;
+const LAB_EVACUATED_VM_COUNT: usize = 40;
+const EVACUATED_VM_MEMORY_MEBIBYTES: u64 = 128;
+const LOADED_VM_MEMORY_MEBIBYTES: u64 = 4096;
+const FINAL_ROUND_BUDGET_BYTES: u64 = 8 * 1024 * 1024;
+const DOWNTIME_BUDGET_MILLISECONDS: u64 = 300;
+const MEMORY_LOAD: &str = "mount -t tmpfs -o size=1200m tmpfs /mnt && while true; do yes amafu-migration-load | head -c 1073741824 > /mnt/load; done";
 
 fn project() -> Result<ProjectName, ScenarioError> {
     ProjectName::new(DEFAULT_PROJECT).map_err(|error| ScenarioError::Expectation(error.to_string()))
@@ -136,18 +149,33 @@ async fn set_cordoned(operator: &ApiClient, node: &NodeName, is_cordoned: bool) 
     Ok(())
 }
 
+async fn roomiest_node(operator: &ApiClient) -> Result<NodeName, ScenarioError> {
+    let nodes = operator.list::<Node>().await?;
+    let roomiest = nodes
+        .iter()
+        .max_by_key(|node| (node.status.capacity.memory_mebibytes, node.metadata.name.clone()))
+        .ok_or_else(|| ScenarioError::Expectation(String::from("no nodes")))?;
+    NodeName::new(roomiest.metadata.name.as_str())
+        .map_err(|error| ScenarioError::Expectation(error.to_string()))
+}
+
 async fn an_evacuated_node_is_left_by_every_vm(cluster: &dyn Cluster) -> ScenarioResult {
     every_node_ready(cluster).await?;
     let member = client(cluster, Role::Member).await;
     let operator = client(cluster, Role::Operator).await;
     let nodes = cluster.nodes().await;
-    let evacuated =
-        nodes.last().cloned().ok_or_else(|| ScenarioError::Expectation(String::from("no nodes")))?;
+    let evacuated = roomiest_node(&operator).await?;
     for other in nodes.iter().filter(|node| **node != evacuated) {
         set_cordoned(&operator, other, true).await?;
     }
-    let names: Vec<String> = (0..EVACUATED_VM_COUNT).map(|index| format!("tenant-{index}")).collect();
-    let created = create_running(&member, cluster, &names, &VmSpecification::small()).await;
+    let count = match cluster.level() {
+        Level::Simulated => SIMULATED_EVACUATED_VM_COUNT,
+        _ => LAB_EVACUATED_VM_COUNT,
+    };
+    let names: Vec<String> = (0..count).map(|index| format!("tenant-{index}")).collect();
+    let small =
+        VmSpecification { memory_mebibytes: EVACUATED_VM_MEMORY_MEBIBYTES, ..VmSpecification::small() };
+    let created = create_running(&member, cluster, &names, &small).await;
     for other in nodes.iter().filter(|node| **node != evacuated) {
         set_cordoned(&operator, other, false).await?;
     }
@@ -179,4 +207,52 @@ async fn an_evacuated_node_is_left_by_every_vm(cluster: &dyn Cluster) -> Scenari
         delete_and_wait::<Operation>(&operator, cluster, operation.metadata.name.as_str()).await?;
     }
     Ok(())
+}
+
+async fn a_loaded_vm_moves_within_budget(cluster: &dyn Cluster) -> ScenarioResult {
+    every_node_ready(cluster).await?;
+    let member = client(cluster, Role::Member).await;
+    let operator = client(cluster, Role::Operator).await;
+    ready_image(&member, cluster, "busybox-heavy", busybox()?).await?;
+    let mut specification = VmSpecification::container(name("busybox-heavy")?);
+    specification.memory_mebibytes = LOADED_VM_MEMORY_MEBIBYTES;
+    if let BootSource::Container { command, .. } = &mut specification.boot {
+        *command = vec![String::from("sh"), String::from("-c"), MEMORY_LOAD.to_owned()];
+    }
+    let created = member.create::<Vm>(&name("heavy")?, &specification).await?;
+    vm_in_phase(&member, cluster, "heavy", VmPhase::Running, START_TIMEOUT).await?;
+    cluster.clock().sleep(Duration::from_secs(20)).await;
+    let source = instance(cluster, created.id()).await?.node;
+
+    operator
+        .create::<Operation>(
+            &name("move-heavy")?,
+            &OperationSpecification::migration(vm_reference("heavy")?, None),
+        )
+        .await?;
+    succeeded(&operator, cluster, "move-heavy").await?;
+
+    let moved = member.get::<Vm>("heavy").await?;
+    let report = moved
+        .status
+        .migration
+        .as_ref()
+        .and_then(|migration| migration.report)
+        .ok_or_else(|| ScenarioError::Expectation(String::from("the migration left no report")))?;
+    ensure(moved.status.node.as_ref() != Some(&source), || format!("the VM is still on {source}"))?;
+    ensure(report.final_round_bytes <= FINAL_ROUND_BUDGET_BYTES, || {
+        format!("{} bytes were left for the final pause, over 8 MiB: {report:?}", report.final_round_bytes)
+    })?;
+    ensure(report.downtime_milliseconds <= DOWNTIME_BUDGET_MILLISECONDS, || {
+        format!("the VM paused for {} ms, over 300 ms: {report:?}", report.downtime_milliseconds)
+    })?;
+    let running = instance(cluster, created.id()).await?;
+    ensure(running.workload == Some(WorkloadState::Running), || {
+        format!("the workload is {:?} after the move", running.workload)
+    })?;
+    always_during(cluster, Duration::from_secs(5), at_most_one_running_instance_per_vm).await?;
+
+    delete_and_wait::<Vm>(&member, cluster, "heavy").await?;
+    delete_and_wait::<Operation>(&operator, cluster, "move-heavy").await?;
+    delete_and_wait::<amafu_domain::kinds::image::Image>(&member, cluster, "busybox-heavy").await
 }
