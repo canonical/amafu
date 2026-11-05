@@ -13,5 +13,5 @@ pub mod switch;
 pub mod topology;
 
 pub use cluster::VirtualLab;
-pub use lab::{LabState, NodeBoot, down, load_state, up};
+pub use lab::{LabState, NodeBoot, contract_backends, down, load_state, up};
 pub use topology::{LabSettings, LabTopology};

@@ -3,6 +3,7 @@ use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 
 use amafu_domain::features::SUPPORTED_FEATURE_LEVEL;
+use amafu_domain::kinds::storage_backend::PluginModule;
 use amafu_domain::node_image::NodeImage;
 use amafu_interfaces::ImageSigningKey;
 use amafu_scenario::NodeImages;
@@ -61,6 +62,17 @@ fn sign(key: &ImageSigningKey, version: &str, file: &Path, url: String) -> anyho
     let bytes = std::fs::read(file).with_context(|| format!("reading {}", file.display()))?;
     let digest = hex::encode(Sha256::digest(&bytes)).parse()?;
     Ok(key.sign(version, SUPPORTED_FEATURE_LEVEL, digest, bytes.len() as u64, url))
+}
+
+pub const SPDK_PLUGIN_FILE: &str = "amafu_plugin_spdk_rpc.wasm";
+
+pub fn plugin_module(built_plugin: &Path, server: Ipv4Addr) -> anyhow::Result<PluginModule> {
+    let bytes = std::fs::read(built_plugin)
+        .with_context(|| format!("reading {}; run plugins/build", built_plugin.display()))?;
+    Ok(PluginModule {
+        url: image_url(server, SPDK_PLUGIN_FILE),
+        digest: hex::encode(Sha256::digest(&bytes)).parse()?,
+    })
 }
 
 #[must_use]

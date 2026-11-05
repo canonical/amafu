@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use amafu_api::diagnostics::{
     ATTACHMENTS_PATH, ContractOutcome, HYPERVISOR_CONTRACT_PATH, INSTANCES_PATH, NETWORK_PATH, NodeInstance,
-    SANDBOX_PATH,
+    SANDBOX_PATH, STORAGE_PROVIDER_CONTRACT_PATH,
 };
 use amafu_lxd_lab::{LabSettings, VirtualLab, down, load_state, up};
 use amafu_scenario::{Level, ScenarioDefinition};
@@ -47,6 +47,8 @@ enum Command {
     Lab(LabCommand),
     #[command(about = "List the scenarios and the levels they run at")]
     Scenarios,
+    #[command(about = "Generate the reference documentation from the kind registry")]
+    Reference,
     #[command(
         about = "Run real core members on this machine against many simulated nodes and check the budgets"
     )]
@@ -123,6 +125,8 @@ enum LabCommand {
     },
     #[command(about = "Run the hypervisor contract against the real adapter on every node")]
     Contract,
+    #[command(about = "Run the storage plugin contract against every built-in provider and the SPDK plugin")]
+    StorageContract,
     #[command(subcommand, about = "Manage the MAAS lab, whose nodes are installed as customers install them")]
     Maas(MaasCommand),
     #[command(about = "Show the VM processes running on every node, with their console output")]
@@ -239,6 +243,28 @@ async fn soak(repository: &std::path::Path, forced_stops: u32) -> anyhow::Result
     Ok(())
 }
 
+async fn storage_contract(repository: &std::path::Path) -> anyhow::Result<()> {
+    let state = load_state(repository)?;
+    let node = state.topology.nodes.first().context("the lab has no node")?;
+    let url = format!("{}{STORAGE_PROVIDER_CONTRACT_PATH}", node.diagnostics_endpoint(&state.settings));
+    let http = reqwest::Client::builder().timeout(Duration::from_secs(120)).build()?;
+    let mut failures = 0;
+    for (name, backend) in amafu_lxd_lab::contract_backends(&state) {
+        let outcome: ContractOutcome = http.post(&url).json(&backend).send().await?.json().await?;
+        match outcome.violation {
+            None => println!("passed: {name}"),
+            Some(violation) => {
+                failures += 1;
+                println!("FAILED: {name}: {violation}");
+            }
+        }
+    }
+    if failures > 0 {
+        bail!("{failures} storage providers broke the contract");
+    }
+    Ok(())
+}
+
 async fn run_in_lab(repository: &std::path::Path, scenario: Option<&str>) -> anyhow::Result<()> {
     let lab = VirtualLab::connect(load_state(repository)?)?;
     let mut failures = 0;
@@ -324,6 +350,7 @@ async fn lab(command: LabCommand) -> anyhow::Result<()> {
             Ok(())
         }
         LabCommand::Maas(command) => maas_lab(&repository, command).await,
+        LabCommand::StorageContract => storage_contract(&repository).await,
         LabCommand::Contract => {
             let state = load_state(&repository)?;
             let http = reqwest::Client::builder().timeout(Duration::from_secs(120)).build()?;
@@ -360,6 +387,13 @@ fn run(arguments: Arguments) -> anyhow::Result<()> {
         }
         Command::Scale { nodes, vms, read_rate, read_seconds, state_in_memory } => {
             scale(nodes, vms, read_rate, read_seconds, state_in_memory)
+        }
+        Command::Reference => {
+            let path = repository()?.join("docs/reference/kinds.md");
+            std::fs::create_dir_all(path.parent().context("the reference has no directory")?)?;
+            std::fs::write(&path, amafu_domain::registry::kind_reference())?;
+            println!("wrote {}", path.display());
+            Ok(())
         }
         Command::Lab(command) => {
             tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(lab(command))

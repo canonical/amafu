@@ -1,3 +1,4 @@
+mod audit_sink;
 mod connection;
 mod container;
 mod dashboard;
@@ -61,6 +62,8 @@ enum Command {
         about = "Follow, pause and cancel migrations, evacuations, recoveries and upgrades"
     )]
     Operation(operation::OperationCommand),
+    #[command(subcommand, about = "Export the audit log to syslog or object storage")]
+    AuditSink(audit_sink::AuditSinkCommand),
     #[command(subcommand, about = "Upgrade the cluster to a new image, roll back or finalize")]
     Upgrade(upgrade::UpgradeCommand),
     #[command(about = "Deploy a new cluster from MAAS")]
@@ -95,6 +98,7 @@ async fn run(arguments: Arguments) -> anyhow::Result<()> {
         Command::StorageBackend(command) => storage_backend::run(&client, command, arguments.output).await,
         Command::Node(command) => node::run(&client, command, arguments.output).await,
         Command::Operation(command) => operation::run(&client, command, arguments.output).await,
+        Command::AuditSink(command) => audit_sink::run(&client, command, arguments.output).await,
         Command::Upgrade(command) => upgrade::run(&client, command, arguments.output).await,
         Command::Install(_) | Command::Release(_) | Command::Dashboard(_) => Ok(()),
     }

@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt::Write;
 
 use serde_json::Value;
 
@@ -113,6 +114,34 @@ pub fn kinds() -> [KindDescriptor; 15] {
         KindDescriptor::of::<NetworkEndpoint>(),
         KindDescriptor::of::<FloatingIp>(),
     ]
+}
+
+#[must_use]
+pub fn kind_reference() -> String {
+    let mut document = String::from(
+        "# Kinds\n\nGenerated from the kind registry by `cargo rig reference`. Do not edit it by hand.\n\n| Kind | Path | Version | Scope | Who may change it |\n|---|---|---|---|---|\n",
+    );
+    for descriptor in kinds() {
+        let scope = if descriptor.is_project_scoped() { "project" } else { "cluster" };
+        let writers = if descriptor.is_project_scoped() {
+            match descriptor.project_policy {
+                ProjectPolicy::ManagedByUsers => "members of the project",
+                ProjectPolicy::ManagedByNodes => "nodes",
+            }
+        } else {
+            match descriptor.cluster_policy {
+                ClusterPolicy::ManagedByNodes => "nodes, and operators for their specification",
+                ClusterPolicy::SharedInfrastructure => "operators",
+                ClusterPolicy::AdminOnly => "admins",
+            }
+        };
+        let _ = writeln!(
+            document,
+            "| {} | `/v1/{}` | {} | {scope} | {writers} |",
+            descriptor.kind, descriptor.plural_name, descriptor.version
+        );
+    }
+    document
 }
 
 #[must_use]

@@ -422,6 +422,7 @@ name = "amafu-rig"
 version = "0.1.0"
 dependencies = [
  "amafu-api",
+ "amafu-domain",
  "amafu-lxd-lab",
  "amafu-scale",
  "amafu-scenario",
@@ -524,6 +525,7 @@ dependencies = [
  "rand_chacha",
  "serde_json",
  "time",
+ "tokio",
  "uuid",
 ]
 

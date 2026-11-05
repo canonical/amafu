@@ -13,7 +13,7 @@ use amafu_domain::kinds::cluster_version::{
     ClusterVersion, ClusterVersionSpecification, cluster_version_name,
 };
 use amafu_domain::kinds::node::NodeRole;
-use amafu_domain::kinds::storage_backend::StorageProviderSpecification;
+use amafu_domain::kinds::storage_backend::{PluginBackend, PluginModule, StorageProviderSpecification};
 use amafu_domain::{NodeName, ProjectName};
 use amafu_network::{StaticAddress, UnderlayConfiguration};
 use amafu_node::configuration::{
@@ -32,7 +32,7 @@ use amafu_scenario::{CertificateAuthority, TlsIdentity};
 use crate::credentials::{ClientTokens, ServerCredentials, client_tokens};
 use crate::lxd::{LxdClient, LxdCredentials};
 use crate::nfs::LabNfsServer;
-use crate::node_images::PreparedImages;
+use crate::node_images::{IMAGE_DIRECTORY, PreparedImages, SPDK_PLUGIN_FILE, plugin_module};
 use crate::topology::{
     LabNode, LabSettings, LabTopology, MANAGEMENT_MTU, NODE_API_PORT, NODE_DIAGNOSTICS_PORT, node_listen,
 };
@@ -57,6 +57,8 @@ pub struct LabState {
     pub node_images: Option<amafu_scenario::NodeImages>,
     #[serde(default)]
     pub image_signing_key: String,
+    #[serde(default)]
+    pub spdk_plugin: Option<PluginModule>,
 }
 
 const LAB_CONFIRM_AFTER_SECONDS: u64 = 30;
@@ -403,6 +405,7 @@ pub async fn up(
         block_backends: vec![(String::from("nvme-tcp"), nvme)],
         node_images: Some(prepared.images.clone()),
         image_signing_key: hex::encode(signing_document),
+        spdk_plugin: None,
     };
     save_state(repository, &state)?;
     let waited = crate::switch::wait_until_ready(&lxd).await?;
@@ -417,7 +420,11 @@ pub async fn up(
     let waited = crate::nfs::wait_until_serving(&lxd, &state.topology).await?;
     tracing::info!(seconds = waited.as_secs(), "the NFS server is serving");
     crate::node_images::publish(&lxd, &state.topology.nfs_server.name, &prepared).await?;
-    tracing::info!("the node images are published");
+    let plugin = repository.join("plugins/target/wasm32-wasip2/release").join(SPDK_PLUGIN_FILE);
+    let plugin_path = format!("{IMAGE_DIRECTORY}/{SPDK_PLUGIN_FILE}");
+    lxd.push_file(&state.topology.nfs_server.name, &plugin_path, std::fs::read(&plugin)?).await?;
+    state.spdk_plugin = Some(plugin_module(&plugin, state.topology.nfs_server.underlay_address)?);
+    tracing::info!("the node images and the storage plugin are published");
     let waited = crate::spdk::wait_until_serving(&lxd, &state.topology).await?;
     tracing::info!(seconds = waited.as_secs(), "the NVMe/TCP target is serving");
     let ceph =
@@ -426,6 +433,43 @@ pub async fn up(
     state.block_backends.push((String::from("ceph-rbd"), ceph));
     save_state(repository, &state)?;
     Ok((state, boots))
+}
+
+#[must_use]
+pub fn contract_backends(state: &LabState) -> Vec<(String, StorageProviderSpecification)> {
+    let mut backends = vec![(String::from("local-disk"), StorageProviderSpecification::LocalDisk)];
+    if let Some(nfs) = &state.nfs {
+        let (server, export) = (nfs.address.to_string(), nfs.export.clone());
+        backends.push((String::from("nfs"), StorageProviderSpecification::Nfs { server, export }));
+    }
+    backends.extend(state.block_backends.iter().cloned());
+    let target = state.block_backends.iter().find_map(|(_, backend)| match backend {
+        StorageProviderSpecification::NvmeTcp {
+            management,
+            management_user,
+            management_password,
+            addresses,
+            pool,
+        } => Some((management, management_user, management_password, addresses, pool)),
+        _ => None,
+    });
+    if let (Some(module), Some((management, user, password, addresses, pool))) = (&state.spdk_plugin, target)
+    {
+        let secrets = user.iter().map(|user| (String::from("user"), user.clone()));
+        let secrets =
+            secrets.chain(password.iter().map(|password| (String::from("password"), password.clone())));
+        let addresses: Vec<String> = addresses.iter().map(ToString::to_string).collect();
+        backends.push((
+            String::from("spdk-plugin"),
+            StorageProviderSpecification::Plugin(PluginBackend {
+                module: module.clone(),
+                configuration: json!({"management": management, "addresses": addresses, "pool": pool}),
+                endpoints: vec![management.clone()],
+                secrets: secrets.collect(),
+            }),
+        ));
+    }
+    backends
 }
 
 async fn record_installed_image(state: &LabState) -> anyhow::Result<()> {

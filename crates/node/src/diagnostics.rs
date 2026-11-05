@@ -57,11 +57,15 @@ mod test_channel {
     use amafu_api::diagnostics::{
         ATTACHMENTS_PATH, AUDIT_PATH, BOOT_PATH, BootFacts, ContractOutcome, HYPERVISOR_CONTRACT_PATH,
         INSTANCES_PATH, KERNEL_LOG_PATH, NETWORK_PATH, NodeAttachment, NodeFloatingAddress, NodeInstance,
-        NodeNetworkFacts, NodePort, NodeRemoteEndpoint, SANDBOX_PATH, SandboxCheck,
+        NodeNetworkFacts, NodePort, NodeRemoteEndpoint, SANDBOX_PATH, STORAGE_PROVIDER_CONTRACT_PATH,
+        SandboxCheck,
     };
+    use amafu_domain::NodeName;
+    use amafu_domain::kinds::storage_backend::StorageProviderSpecification;
     use amafu_domain::{ObjectId, ObjectName};
     use amafu_hypervisor::{Attempt, CloudHypervisor, HybridVsockAgents, RuntimeDirectory, VmProcessPlan};
     use amafu_interfaces::contract::hypervisor::hypervisor_contract;
+    use amafu_interfaces::contract::storage::provider_contract;
     use amafu_interfaces::{
         AuditEntry, AuditLog, Datapath, GuestAgents, Hypervisor, InstanceMigration, InstanceState,
         RunningInstance, Storage, StorageProtocol, VmLaunchSpecification,
@@ -114,6 +118,7 @@ mod test_channel {
         runtime: RuntimeDirectory,
         nft: amafu_interfaces::ExternalTool,
         data: PathBuf,
+        node: NodeName,
     }
 
     pub fn router(
@@ -129,6 +134,7 @@ mod test_channel {
             .route(SANDBOX_PATH, post(sandbox))
             .route(KERNEL_LOG_PATH, get(kernel_log))
             .route(HYPERVISOR_CONTRACT_PATH, post(contract))
+            .route(STORAGE_PROVIDER_CONTRACT_PATH, post(storage_provider_contract))
             .route(&format!("{AUDIT_PATH}/{{request_id}}"), get(audit_entry))
             .with_state(ChannelState {
                 hypervisor: Arc::clone(&adapters.hypervisor),
@@ -142,6 +148,7 @@ mod test_channel {
                 ),
                 nft: configuration.compute.nft_tool(),
                 data: configuration.directories.data.clone(),
+                node: configuration.node.name.clone(),
             })
     }
 
@@ -323,6 +330,18 @@ mod test_channel {
             is_kvm_available: Path::new("/dev/kvm").exists(),
             seconds_from_kernel_start_to_serving: SECONDS_FROM_KERNEL_START_TO_SERVING.get().copied(),
         })
+    }
+
+    async fn storage_provider_contract(
+        State(state): State<ChannelState>,
+        Json(backend): Json<StorageProviderSpecification>,
+    ) -> Json<ContractOutcome> {
+        let provider = match state.storage.provider(&backend) {
+            Ok(provider) => provider,
+            Err(error) => return Json(ContractOutcome { violation: Some(error.to_string()) }),
+        };
+        let outcome = provider_contract(provider.as_ref(), &state.node).await;
+        Json(ContractOutcome { violation: outcome.err().map(|violation| violation.to_string()) })
     }
 
     async fn contract(State(state): State<ChannelState>) -> Json<ContractOutcome> {

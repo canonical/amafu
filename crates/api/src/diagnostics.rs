@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub const INSTANCES_PATH: &str = "/diagnostics/instances";
 pub const BOOT_PATH: &str = "/diagnostics/boot";
 pub const HYPERVISOR_CONTRACT_PATH: &str = "/diagnostics/contracts/hypervisor";
+pub const STORAGE_PROVIDER_CONTRACT_PATH: &str = "/diagnostics/contracts/storage-provider";
 pub const AUDIT_PATH: &str = "/diagnostics/audit";
 pub const NETWORK_PATH: &str = "/diagnostics/network";
 pub const ATTACHMENTS_PATH: &str = "/diagnostics/attachments";
