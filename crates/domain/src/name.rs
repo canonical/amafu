@@ -95,6 +95,15 @@ label_name!(ProjectName);
 label_name!(NodeName);
 label_name!(ZoneName);
 
+impl NodeName {
+    #[must_use]
+    pub fn spread(&self) -> usize {
+        self.as_str()
+            .bytes()
+            .fold(0, |hash: usize, byte| hash.wrapping_mul(31).wrapping_add(usize::from(byte)))
+    }
+}
+
 impl From<&NodeName> for ObjectName {
     fn from(node: &NodeName) -> Self {
         Self(node.0.clone())

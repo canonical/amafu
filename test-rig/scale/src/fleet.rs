@@ -151,7 +151,8 @@ impl SimulatedFleet {
             let heartbeat = ReconcilerSettings {
                 periodic_resynchronization: HEARTBEAT_INTERVAL / 2,
                 ..ReconcilerSettings::default()
-            };
+            }
+            .spread_by(name.spread());
             spawn_controller(
                 &mut tasks,
                 NodeController::new(identity, Arc::clone(&fenced), Arc::clone(&clock)),
@@ -170,12 +171,8 @@ impl SimulatedFleet {
                 lease,
                 clock: Arc::clone(&clock),
             };
-            spawn_controller(
-                &mut tasks,
-                ComputeController::new(name.clone(), services),
-                fenced,
-                ReconcilerSettings::default(),
-            );
+            let settings = ReconcilerSettings::default().spread_by(name.spread());
+            spawn_controller(&mut tasks, ComputeController::new(name.clone(), services), fenced, settings);
             names.push(name);
         }
         Ok(Self { tasks, names })

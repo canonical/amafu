@@ -154,6 +154,9 @@ async fn read_load(
     rate: u32,
     duration: Duration,
 ) -> anyhow::Result<ReadReport> {
+    for reader in clients {
+        reader.get_local::<Vm>(vm_name(0)?.as_str()).await?;
+    }
     let interval = Duration::from_secs_f64(1.0 / f64::from(rate.max(1)));
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Burst);
@@ -316,9 +319,6 @@ async fn measure(
     let readers = (0..READ_CLIENTS)
         .map(|index| operator_client(cluster, &endpoints[index % endpoints.len()]))
         .collect::<anyhow::Result<Vec<_>>>()?;
-    for reader in &readers {
-        reader.get_local::<Vm>(vm_name(0)?.as_str()).await?;
-    }
     let read =
         on_a_runtime_of_its_own(readers, settings.vms, settings.read_rate, settings.read_duration).await?;
     let nodes_not_ready_at_end = nodes.saturating_sub(ready_simulated_nodes(&operator).await?);

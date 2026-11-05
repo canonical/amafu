@@ -68,11 +68,7 @@ impl NodeClient {
     #[must_use]
     pub fn spreading(core_members: Vec<Arc<dyn Transport>>, node: &NodeName) -> Self {
         let client = Self::new(core_members);
-        let spread = node
-            .as_str()
-            .bytes()
-            .fold(0_usize, |hash, byte| hash.wrapping_mul(31).wrapping_add(usize::from(byte)));
-        client.preferred.store(spread % client.core_members.len().max(1), Ordering::Relaxed);
+        client.preferred.store(node.spread() % client.core_members.len().max(1), Ordering::Relaxed);
         client
     }
 

@@ -41,6 +41,8 @@ pub enum StoreError {
     Corrupt(String),
 }
 
+pub type ObjectFilter<'filter> = dyn for<'object> Fn(&'object Value) -> bool + Send + Sync + 'filter;
+
 #[async_trait::async_trait]
 pub trait Store: Send + Sync {
     async fn read(
@@ -55,6 +57,18 @@ pub trait Store: Send + Sync {
         project: Option<&ProjectName>,
         consistency: Consistency,
     ) -> Result<Vec<StoredRecord>, StoreError>;
+
+    async fn list_matching(
+        &self,
+        kind: &str,
+        project: Option<&ProjectName>,
+        consistency: Consistency,
+        matches: &ObjectFilter<'_>,
+    ) -> Result<Vec<StoredRecord>, StoreError> {
+        let mut records = self.list(kind, project, consistency).await?;
+        records.retain(|record| matches(&record.object));
+        Ok(records)
+    }
 
     async fn compare_and_swap(
         &self,

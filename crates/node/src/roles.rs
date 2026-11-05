@@ -714,10 +714,12 @@ pub async fn run(configuration: NodeConfiguration, boot: Option<BootServices>) -
         String::new()
     };
     let adapters = compute_adapters(&configuration, &hypervisor, underlay)?;
+    let spread = configuration.node.name.spread();
     let responsive = ReconcilerSettings {
         periodic_resynchronization: Duration::from_secs(2),
         ..ReconcilerSettings::default()
-    };
+    }
+    .spread_by(spread);
     if is_core {
         start_api(&mut roles, &configuration, &services)?;
         core_roles(&mut roles, &services, &adapters, &configuration)?;
@@ -750,7 +752,8 @@ pub async fn run(configuration: NodeConfiguration, boot: Option<BootServices>) -
     let heartbeat = ReconcilerSettings {
         periodic_resynchronization: HEARTBEAT_INTERVAL / 2,
         ..ReconcilerSettings::default()
-    };
+    }
+    .spread_by(spread);
     controller_role(&mut roles, "node", node, &node_services, heartbeat);
     if let Some(modules) = modules {
         modules.await;

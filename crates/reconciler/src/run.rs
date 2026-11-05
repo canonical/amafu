@@ -42,7 +42,7 @@ pub async fn reconcile_once<C: Controller>(
             return fail(error);
         }
     }
-    let periodic = settings.periodic_resynchronization;
+    let periodic = settings.resynchronization_period();
     Ok(NextAttempt::After(revisit.map_or(periodic, |delay| delay.min(periodic))))
 }
 
@@ -84,7 +84,7 @@ impl<C: Controller> Loop<'_, C> {
                 for key in keys {
                     self.queue.notify_changed(key, now);
                 }
-                self.next_discovery_at = now + self.settings.periodic_resynchronization;
+                self.next_discovery_at = now + self.settings.resynchronization_period();
             }
             Err(error) => {
                 self.consecutive_discovery_failures = self.consecutive_discovery_failures.saturating_add(1);

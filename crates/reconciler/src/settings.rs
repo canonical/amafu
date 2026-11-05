@@ -5,6 +5,7 @@ pub struct ReconcilerSettings {
     pub initial_backoff: Duration,
     pub maximum_backoff: Duration,
     pub periodic_resynchronization: Duration,
+    pub resynchronization_spread: Duration,
 }
 
 impl Default for ReconcilerSettings {
@@ -13,7 +14,23 @@ impl Default for ReconcilerSettings {
             initial_backoff: Duration::from_millis(100),
             maximum_backoff: Duration::from_secs(30),
             periodic_resynchronization: Duration::from_secs(30),
+            resynchronization_spread: Duration::ZERO,
         }
+    }
+}
+
+const PHASES: u32 = 1_000;
+
+impl ReconcilerSettings {
+    #[must_use]
+    pub fn resynchronization_period(&self) -> Duration {
+        self.periodic_resynchronization + self.resynchronization_spread
+    }
+
+    #[must_use]
+    pub fn spread_by(self, spread: usize) -> Self {
+        let phase = u32::try_from(spread % PHASES as usize).unwrap_or_default();
+        Self { resynchronization_spread: self.periodic_resynchronization * phase / PHASES, ..self }
     }
 }
 

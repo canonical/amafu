@@ -179,9 +179,10 @@ fn refused(context: &NodeContext, verb: Verb, reference: ObjectReference, reason
 }
 
 async fn slice_of(store: &dyn Store, node: &NodeName) -> Result<NodeSlice, StoreError> {
-    let vms = store.list("Vm", None, Consistency::Stale).await?;
     let mut slice = NodeSlice::new(node.clone());
-    slice.learn_vms(vms.iter().map(|record| &record.object));
+    let probe = slice.clone();
+    let hosted = store.list_matching("Vm", None, Consistency::Stale, &|vm| probe.would_host(vm)).await?;
+    slice.learn_vms(hosted.iter().map(|record| &record.object));
     Ok(slice)
 }
 
@@ -230,10 +231,11 @@ async fn list(
     let store = state.store.as_ref();
     let outcome = async {
         let slice = slice_for(store, &context.credentials.name, &request.kind).await?;
-        let records = store.list(&request.kind, request.project.as_ref(), Consistency::Stale).await?;
-        Ok::<_, StoreError>(
-            records.into_iter().filter(|record| slice.includes(&request.kind, &record.object)).collect(),
-        )
+        store
+            .list_matching(&request.kind, request.project.as_ref(), Consistency::Stale, &|object| {
+                slice.includes(&request.kind, object)
+            })
+            .await
     }
     .await;
     match outcome {
@@ -383,7 +385,8 @@ async fn surrender_lease(
     lease_answer(&context, outcome, true)
 }
 
-const REFRESHES_PER_FULL_VIEW: u32 = 12;
+const REFRESHES_PER_FULL_VIEW: usize = 12;
+const REFRESH_PHASES: u32 = 1_000;
 
 struct Subscription {
     state: NodeApiState,
@@ -392,7 +395,8 @@ struct Subscription {
     sent: BTreeMap<ObjectReference, u64>,
     slice: NodeSlice,
     has_started: bool,
-    refreshes_since_full_view: u32,
+    refreshes_since_full_view: usize,
+    next_refresh: Duration,
 }
 
 enum Wake {
@@ -407,10 +411,11 @@ async fn current_view(
 ) -> Result<BTreeMap<ObjectReference, StoredRecord>, StoreError> {
     let mut view = BTreeMap::new();
     for kind in registry::kinds().iter().filter(|kind| SUBSCRIBED_KINDS.contains(&kind.kind)) {
-        for record in store.list(kind.kind, None, Consistency::Stale).await? {
-            if slice.includes(kind.kind, &record.object)
-                && let Some(reference) = reference_of(kind, &record.object)
-            {
+        let included = store
+            .list_matching(kind.kind, None, Consistency::Stale, &|object| slice.includes(kind.kind, object))
+            .await?;
+        for record in included {
+            if let Some(reference) = reference_of(kind, &record.object) {
                 view.insert(reference, record);
             }
         }
@@ -453,12 +458,15 @@ impl NodeShare<'_> {
 
 impl Subscription {
     async fn wait_for_change(&mut self) -> Option<Wake> {
-        let mut refresh = self.state.clock.sleep(self.state.refresh_interval);
+        let mut refresh = self.state.clock.sleep(self.next_refresh);
         let mut changed = BTreeSet::new();
         loop {
             let next = futures::future::select(self.events.next(), &mut refresh).await;
             let first = match next {
-                futures::future::Either::Right(((), _)) => return Some(Wake::Refresh),
+                futures::future::Either::Right(((), _)) => {
+                    self.next_refresh = self.state.refresh_interval;
+                    return Some(Wake::Refresh);
+                }
                 futures::future::Either::Left((None, _)) => return None,
                 futures::future::Either::Left((Some(event), _)) => event,
             };
@@ -491,7 +499,9 @@ impl Subscription {
         let store = self.state.store.as_ref();
         self.slice = slice_of(store, &self.context.credentials.name).await?;
         let view = current_view(store, &self.slice).await?;
-        self.refreshes_since_full_view = 0;
+        if self.has_started {
+            self.refreshes_since_full_view = 0;
+        }
         let previous = std::mem::replace(
             &mut self.sent,
             view.iter().map(|(reference, record)| (reference.clone(), record.revision)).collect(),
@@ -598,6 +608,10 @@ async fn subscribe(
     let events =
         futures::stream::select_all(SUBSCRIBED_KINDS.iter().map(|kind| state.store.watch(kind))).boxed();
     let slice = NodeSlice::new(context.credentials.name.clone());
+    let spread = context.credentials.name.spread();
+    let refreshes_since_full_view = spread % REFRESHES_PER_FULL_VIEW;
+    let phase = u32::try_from(spread % REFRESH_PHASES as usize).unwrap_or_default();
+    let next_refresh = state.refresh_interval + state.refresh_interval * phase / REFRESH_PHASES;
     let subscription = Subscription {
         state,
         context,
@@ -605,7 +619,8 @@ async fn subscribe(
         sent: BTreeMap::new(),
         slice,
         has_started: false,
-        refreshes_since_full_view: 0,
+        refreshes_since_full_view,
+        next_refresh,
     };
     let frames = futures::stream::unfold(subscription, |mut subscription| async move {
         let changes = subscription.next_changes().await?;

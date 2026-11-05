@@ -621,6 +621,7 @@ impl SimulatedWorld {
             initial_backoff: Duration::from_millis(100),
             maximum_backoff: Duration::from_secs(5),
             periodic_resynchronization: Duration::from_secs(2),
+            ..ReconcilerSettings::default()
         };
         let heartbeat = ReconcilerSettings { periodic_resynchronization: Duration::from_secs(5), ..fast };
         let compute = services.compute(&store, &clock);

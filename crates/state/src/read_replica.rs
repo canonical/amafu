@@ -3,6 +3,7 @@ use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use amafu_domain::{ObjectReference, ProjectName};
+use amafu_interfaces::store::ObjectFilter;
 use amafu_interfaces::{Consistency, Fence, Store, StoreError, StoredRecord, WatchEvent};
 use futures::StreamExt;
 use futures::stream::BoxStream;
@@ -209,6 +210,32 @@ impl Store for ReadReplicaStore {
                 .collect());
         }
         self.inner.list(kind, project, consistency).await
+    }
+
+    async fn list_matching(
+        &self,
+        kind: &str,
+        project: Option<&ProjectName>,
+        consistency: Consistency,
+        matches: &ObjectFilter<'_>,
+    ) -> Result<Vec<StoredRecord>, StoreError> {
+        if consistency == Consistency::Stale
+            && let Some(records) = self.replica().kinds.get(kind)
+        {
+            let wanted = project.map(ToString::to_string);
+            return Ok(records
+                .iter()
+                .filter(|((record_project, _), _)| {
+                    wanted.as_ref().is_none_or(|wanted| wanted == record_project)
+                })
+                .map(|(_, record)| record)
+                .filter(|record| matches(&record.object))
+                .cloned()
+                .collect());
+        }
+        let mut records = self.inner.list(kind, project, consistency).await?;
+        records.retain(|record| matches(&record.object));
+        Ok(records)
     }
 
     async fn compare_and_swap(

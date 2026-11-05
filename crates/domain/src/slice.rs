@@ -137,6 +137,11 @@ impl NodeSlice {
     }
 
     #[must_use]
+    pub fn would_host(&self, vm: &Value) -> bool {
+        names_node(vm, "/status/node", &self.node) || takes_part_in_migration(vm, &self.node)
+    }
+
+    #[must_use]
     pub fn accounts_for(&self, vm: &Value) -> bool {
         let (project, name) = project_and_name(vm);
         let volumes = vm.pointer("/specification/volumes").and_then(Value::as_array).into_iter().flatten();
