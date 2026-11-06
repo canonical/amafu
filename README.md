@@ -110,7 +110,7 @@ amafu node remove node-7            # drain by live migration, then release in M
 amafu cluster status
 ```
 
-How it works under the hood: the image carries a [curtin hook](packaging/maas/curtin-hooks) that hands MAAS's credentials and network config to Amafu during deployment, so nothing needs installing on the MAAS server.
+How it works under the hood: the image carries a [curtin hook](https://curtin.readthedocs.io/en/latest/) that hands MAAS's credentials and network config to Amafu during deployment, so nothing needs installing on the MAAS server.
 
 ## Using Amafu (planned)
 
