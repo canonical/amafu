@@ -77,7 +77,15 @@ pub enum WatchFrame {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum CollectionFrame {
-    Snapshot { items: Vec<Value> },
-    Changed { object: Value },
-    Removed { name: ObjectName },
+    Snapshot {
+        items: Vec<Value>,
+    },
+    Changed {
+        object: Value,
+    },
+    Removed {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        project: Option<ProjectName>,
+        name: ObjectName,
+    },
 }

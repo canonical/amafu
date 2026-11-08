@@ -84,11 +84,12 @@ impl Operation {
             .0;
         if kind.is_project_scoped() {
             if query.all_projects {
-                if verb != Verb::List {
+                let is_collection_read = verb == Verb::List || (verb == Verb::Watch && name.is_none());
+                if !is_collection_read {
                     return Err(operation.error(
                         StatusCode::BAD_REQUEST,
                         ErrorCode::Malformed,
-                        String::from("all-projects applies only to listing"),
+                        String::from("all-projects applies only to listing and watching"),
                     ));
                 }
                 operation.is_every_project = true;
@@ -366,6 +367,7 @@ async fn watch_collection(
             store: Arc::clone(&state.store),
             kind: kind.kind,
             project: operation.project.clone(),
+            is_every_project: operation.is_every_project,
         },
         pending: Some(CollectionFrame::Snapshot { items }),
         events,
@@ -391,6 +393,7 @@ struct CollectionSource {
     store: Arc<dyn Store>,
     kind: &'static str,
     project: Option<ProjectName>,
+    is_every_project: bool,
 }
 
 struct CollectionProgress {
@@ -400,6 +403,10 @@ struct CollectionProgress {
 }
 
 impl CollectionSource {
+    fn includes(&self, project: Option<&ProjectName>) -> bool {
+        self.is_every_project || self.project.as_ref() == project
+    }
+
     async fn frame_for(&self, event: WatchEvent) -> Result<Option<CollectionFrame>, StoreError> {
         match event {
             WatchEvent::Resynchronize => {
@@ -412,10 +419,10 @@ impl CollectionSource {
                 .await?;
                 Ok(Some(CollectionFrame::Snapshot { items }))
             }
-            WatchEvent::Changed(reference) if reference.project == self.project => {
+            WatchEvent::Changed(reference) if self.includes(reference.project.as_ref()) => {
                 Ok(Some(match self.store.read(&reference, Consistency::Linearizable).await? {
                     Some(record) => CollectionFrame::Changed { object: record.object },
-                    None => CollectionFrame::Removed { name: reference.name },
+                    None => CollectionFrame::Removed { project: reference.project, name: reference.name },
                 }))
             }
             WatchEvent::Changed(_) => Ok(None),
