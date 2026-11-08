@@ -1,0 +1,45 @@
+name: amafu
+title: Amafu
+summary: Install and operate Amafu clusters
+description: |
+  The Amafu command line installs a cluster from MAAS, deploys its dashboard and
+  operates it: virtual machines, containers, images, volumes, networks, nodes,
+  upgrades and the audit log.
+
+  Connect it to a cluster with AMAFU_ENDPOINT, AMAFU_CERTIFICATE_AUTHORITY and
+  AMAFU_TOKEN. Install descriptions, state directories and keys must be under
+  your home directory, outside hidden folders.
+license: Apache-2.0
+website: https://github.com/canonical/amafu
+source-code: https://github.com/canonical/amafu
+issues: https://github.com/canonical/amafu/issues
+base: core26
+grade: devel
+confinement: strict
+adopt-info: amafu
+
+platforms:
+  amd64:
+  arm64:
+
+apps:
+  amafu:
+    command: bin/amafu
+    plugs:
+      - home
+      - network
+      - network-bind
+
+parts:
+  amafu:
+    plugin: rust
+    source: .
+    source-type: git
+    rust-path:
+      - crates/command-line
+    build-packages:
+      - gcc
+      - pkg-config
+    override-pull: |
+      craftctl default
+      craftctl set version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)+git$(git rev-parse --short HEAD)"

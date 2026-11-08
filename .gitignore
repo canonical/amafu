@@ -27,3 +27,7 @@ rustc-ice-*.txt
 /design-do-not-commit
 /plugins/target
 node_modules
+/parts/
+/stage/
+/prime/
+*.snap
