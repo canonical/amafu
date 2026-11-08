@@ -25,6 +25,8 @@
 | `test-rig/*` | The `Cluster` trait, scenarios, checkers, the simulated world, the LXD lab, the scale run, the demo cluster, and `cargo rig` |
 | `image` | The node image build |
 | `docs/decisions` | Decision records |
+| `docs/guides` | Installing, upgrading and recovering a cluster, and writing a storage plugin |
+| `docs/reference` | Generated reference documentation |
 
 ## Everyday checks
 
