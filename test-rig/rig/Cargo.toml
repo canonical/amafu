@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 amafu-api.workspace = true
+amafu-demo-cluster.workspace = true
 amafu-domain.workspace = true
 amafu-lxd-lab.workspace = true
 amafu-scale.workspace = true

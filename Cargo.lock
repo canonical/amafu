@@ -209,6 +209,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "amafu-demo-cluster"
+version = "0.1.0"
+dependencies = [
+ "amafu-api",
+ "amafu-dashboard",
+ "amafu-domain",
+ "amafu-interfaces",
+ "amafu-simulated-world",
+ "anyhow",
+ "axum",
+ "futures",
+ "serde_json",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "amafu-domain"
 version = "0.1.0"
 dependencies = [
@@ -422,6 +441,7 @@ name = "amafu-rig"
 version = "0.1.0"
 dependencies = [
  "amafu-api",
+ "amafu-demo-cluster",
  "amafu-domain",
  "amafu-lxd-lab",
  "amafu-scale",

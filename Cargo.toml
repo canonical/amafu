@@ -34,6 +34,7 @@ amafu-checkers = { path = "test-rig/checkers" }
 amafu-lxd-lab = { path = "test-rig/lxd-lab" }
 amafu-scenarios = { path = "test-rig/scenarios" }
 amafu-scale = { path = "test-rig/scale" }
+amafu-demo-cluster = { path = "test-rig/demo-cluster" }
 
 anyhow = "1.0.104"
 base64 = "0.23.1"

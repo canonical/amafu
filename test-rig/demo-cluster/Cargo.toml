@@ -1,0 +1,28 @@
+[package]
+name = "amafu-demo-cluster"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+amafu-api.workspace = true
+amafu-dashboard.workspace = true
+amafu-domain.workspace = true
+amafu-interfaces.workspace = true
+amafu-simulated-world.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+futures.workspace = true
+serde_json.workspace = true
+time.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+
+[lints]
+workspace = true

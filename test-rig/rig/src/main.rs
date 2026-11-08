@@ -49,6 +49,13 @@ enum Command {
     Scenarios,
     #[command(about = "Generate the reference documentation from the kind registry")]
     Reference,
+    #[command(about = "Serve the dashboard over a seeded cluster that settles like a real one")]
+    Dashboard {
+        #[arg(long, default_value = "127.0.0.1:8480")]
+        listen: std::net::SocketAddr,
+        #[arg(long, help = "Drive every page in a headless browser, save screenshots and exit")]
+        browser_check: bool,
+    },
     #[command(
         about = "Run real core members on this machine against many simulated nodes and check the budgets"
     )]
@@ -64,6 +71,38 @@ enum Command {
         #[arg(long, help = "Keep the core members' state on tmpfs, to tell disk stalls from Amafu's own")]
         state_in_memory: bool,
     },
+}
+
+async fn dashboard(listen: std::net::SocketAddr, browser_check: bool) -> anyhow::Result<()> {
+    let cluster = amafu_demo_cluster::DemoCluster::start().await?;
+    if !browser_check {
+        println!(
+            "the dashboard is serving on http://{listen}; sign in with {} (admin), {} (member) or {} (viewer)",
+            amafu_demo_cluster::ADMIN_TOKEN,
+            amafu_demo_cluster::MEMBER_TOKEN,
+            amafu_demo_cluster::VIEWER_TOKEN
+        );
+        return cluster.serve(listen).await;
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    tokio::spawn(amafu_api::server::serve(listener, None, cluster.dashboard));
+    let repository = repository()?;
+    let frontend = repository.join("crates/dashboard/frontend");
+    let screenshots = repository.join("target/dashboard-screenshots");
+    std::fs::create_dir_all(&screenshots)?;
+    let status = tokio::process::Command::new("node")
+        .arg(frontend.join("browser-check.mjs"))
+        .arg(format!("http://{address}"))
+        .arg(&screenshots)
+        .current_dir(&frontend)
+        .status()
+        .await?;
+    if !status.success() {
+        bail!("the browser check failed; screenshots are in {}", screenshots.display());
+    }
+    println!("every page works; screenshots are in {}", screenshots.display());
+    Ok(())
 }
 
 fn scale(
@@ -388,6 +427,10 @@ fn run(arguments: Arguments) -> anyhow::Result<()> {
         Command::Scale { nodes, vms, read_rate, read_seconds, state_in_memory } => {
             scale(nodes, vms, read_rate, read_seconds, state_in_memory)
         }
+        Command::Dashboard { listen, browser_check } => tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()?
+            .block_on(dashboard(listen, browser_check)),
         Command::Reference => {
             let path = repository()?.join("docs/reference/kinds.md");
             std::fs::create_dir_all(path.parent().context("the reference has no directory")?)?;
