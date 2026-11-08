@@ -1,4 +1,3 @@
-use std::convert::Infallible;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -9,10 +8,9 @@ use axum::body::Body;
 use axum::extract::{Path, Request, State};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, COOKIE, SET_COOKIE};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
-use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use futures::StreamExt;
 use http_body_util::BodyExt;
 use serde::Deserialize;
@@ -26,7 +24,14 @@ const LARGEST_REQUEST_BYTES: usize = 1024 * 1024;
 const LARGEST_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 const INDEX: &str = include_str!("../assets/index.html");
 const SCRIPT: &str = include_str!("../assets/app.js");
-const STYLE: &str = include_str!("../assets/style.css");
+const STYLE: &str = include_str!("../assets/app.css");
+const LOGO: &str = include_str!("../assets/logo.svg");
+const FONTS: [(&str, &[u8]); 3] = [
+    ("ubuntu.woff2", include_bytes!("../assets/fonts/ubuntu.woff2")),
+    ("ubuntu-italic.woff2", include_bytes!("../assets/fonts/ubuntu-italic.woff2")),
+    ("ubuntu-mono.woff2", include_bytes!("../assets/fonts/ubuntu-mono.woff2")),
+];
+const IMMUTABLE: &str = "public, max-age=31536000, immutable";
 
 #[derive(Clone)]
 pub struct DashboardState {
@@ -51,7 +56,7 @@ impl DashboardState {
         collect(self.open(request).await?).await
     }
 
-    async fn open(
+    pub(crate) async fn open(
         &self,
         request: http::Request<Bytes>,
     ) -> Result<http::Response<amafu_api::client::ResponseBody>, ClientError> {
@@ -73,7 +78,7 @@ impl DashboardState {
     }
 }
 
-async fn collect(
+pub(crate) async fn collect(
     response: http::Response<amafu_api::client::ResponseBody>,
 ) -> Result<http::Response<Bytes>, ClientError> {
     let (parts, mut body) = response.into_parts();
@@ -92,7 +97,25 @@ fn asset(content_type: &'static str, contents: &'static str) -> Response {
     ([(CONTENT_TYPE, content_type), (http::header::CACHE_CONTROL, "no-store")], contents).into_response()
 }
 
-fn refusal(status: StatusCode, message: &str) -> Response {
+async fn font(Path(name): Path<String>) -> Response {
+    match FONTS.iter().find(|(file, _)| *file == name) {
+        Some((_, contents)) => {
+            ([(CONTENT_TYPE, "font/woff2"), (http::header::CACHE_CONTROL, IMMUTABLE)], *contents)
+                .into_response()
+        }
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn page(method: Method) -> Response {
+    if method == Method::GET {
+        asset("text/html; charset=utf-8", INDEX)
+    } else {
+        StatusCode::NOT_FOUND.into_response()
+    }
+}
+
+pub(crate) fn refusal(status: StatusCode, message: &str) -> Response {
     (status, Json(serde_json::json!({"message": message}))).into_response()
 }
 
@@ -112,7 +135,7 @@ fn cookie_value<'headers>(headers: &'headers HeaderMap, name: &str) -> Option<&'
         .find_map(|pair| pair.trim().strip_prefix(name)?.strip_prefix('='))
 }
 
-fn current_session(state: &DashboardState, headers: &HeaderMap) -> Option<Session> {
+pub(crate) fn current_session(state: &DashboardState, headers: &HeaderMap) -> Option<Session> {
     let cookie = cookie_value(headers, SESSION_COOKIE)?;
     state.key.open(cookie, OffsetDateTime::now_utc()).ok()
 }
@@ -124,7 +147,7 @@ struct SignIn {
     project: Option<String>,
 }
 
-fn upstream_request(
+pub(crate) fn upstream_request(
     method: Method,
     path_and_query: &str,
     token: &str,
@@ -223,69 +246,16 @@ async fn proxy(State(state): State<DashboardState>, Path(path): Path<String>, re
     }
 }
 
-fn watch_path(kind: &str, query: Option<&str>) -> String {
-    let forwarded = query
-        .unwrap_or_default()
-        .split('&')
-        .filter(|pair| !pair.is_empty() && !pair.starts_with("watch="))
-        .chain(std::iter::once("watch=true"))
-        .collect::<Vec<_>>()
-        .join("&");
-    format!("/v1/{kind}?{forwarded}")
-}
-
-fn changes_as_events(
-    body: amafu_api::client::ResponseBody,
-) -> impl futures::Stream<Item = Result<Event, Infallible>> {
-    futures::stream::unfold((body, BytesMut::new()), |(mut body, mut buffer)| async move {
-        loop {
-            if let Some(position) = buffer.iter().position(|byte| *byte == b'\n') {
-                let line = buffer.split_to(position + 1);
-                let text = String::from_utf8_lossy(&line[..position]).into_owned();
-                return Some((Ok(Event::default().data(text)), (body, buffer)));
-            }
-            match body.next().await? {
-                Ok(chunk) => buffer.extend_from_slice(&chunk),
-                Err(_) => return None,
-            }
-        }
-    })
-}
-
-async fn changes(
-    State(state): State<DashboardState>,
-    Path(kind): Path<String>,
-    request: Request,
-) -> Response {
-    let Some(session) = current_session(&state, request.headers()) else {
-        return refusal(StatusCode::UNAUTHORIZED, "sign in first");
-    };
-    let path = watch_path(&kind, request.uri().query());
-    let Some(upstream) = upstream_request(Method::GET, &path, &session.token, Bytes::new()) else {
-        return refusal(StatusCode::BAD_REQUEST, "the request cannot be forwarded");
-    };
-    match state.open(upstream).await {
-        Ok(answer) if answer.status() == StatusCode::OK => {
-            Sse::new(changes_as_events(answer.into_body())).keep_alive(KeepAlive::default()).into_response()
-        }
-        Ok(answer) => match collect(answer).await {
-            Ok(refused) => {
-                let (parts, body) = refused.into_parts();
-                (parts.status, [(CONTENT_TYPE, "application/json")], body).into_response()
-            }
-            Err(error) => refusal(StatusCode::BAD_GATEWAY, &error.to_string()),
-        },
-        Err(error) => refusal(StatusCode::BAD_GATEWAY, &error.to_string()),
-    }
-}
-
 pub fn dashboard_router(state: DashboardState) -> axum::Router {
     axum::Router::new()
         .route("/", get(|| async { asset("text/html; charset=utf-8", INDEX) }))
         .route("/app.js", get(|| async { asset("text/javascript; charset=utf-8", SCRIPT) }))
-        .route("/style.css", get(|| async { asset("text/css; charset=utf-8", STYLE) }))
+        .route("/app.css", get(|| async { asset("text/css; charset=utf-8", STYLE) }))
+        .route("/logo.svg", get(|| async { asset("image/svg+xml", LOGO) }))
+        .route("/fonts/{name}", get(font))
         .route("/session", post(sign_in).delete(sign_out).get(who_am_i))
         .route("/api/{*path}", any(proxy))
-        .route("/events/{kind}", get(changes))
+        .route("/events", get(crate::events::changes))
+        .fallback(page)
         .with_state(state)
 }

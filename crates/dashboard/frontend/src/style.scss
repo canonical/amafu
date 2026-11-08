@@ -1,0 +1,376 @@
+@import "vanilla-framework";
+
+@mixin vf-b-typography-fontfaces {
+  @font-face {
+    font-family: "Ubuntu variable";
+    font-stretch: 100%;
+    font-style: normal;
+    font-weight: 100 800;
+    src: url("./fonts/ubuntu.woff2") format("woff2-variations");
+  }
+
+  @font-face {
+    font-family: "Ubuntu variable";
+    font-stretch: 100%;
+    font-style: italic;
+    font-weight: 100 800;
+    src: url("./fonts/ubuntu-italic.woff2") format("woff2-variations");
+  }
+
+  @font-face {
+    font-family: "Ubuntu Mono variable";
+    font-style: normal;
+    font-weight: 100 800;
+    src: url("./fonts/ubuntu-mono.woff2") format("woff2-variations");
+  }
+}
+
+@include vanilla;
+@include vf-p-icon-home;
+@include vf-p-icon-machines;
+@include vf-p-icon-containers;
+@include vf-p-icon-image;
+@include vf-p-icon-storage-pool;
+@include vf-p-icon-storage-volume;
+@include vf-p-icon-connected;
+@include vf-p-icon-exposed;
+@include vf-p-icon-security;
+@include vf-p-icon-cluster-host;
+@include vf-p-icon-history;
+@include vf-p-icon-settings;
+@include vf-p-icon-log-out;
+@include vf-p-icon-power-off;
+@include vf-p-icon-power-on;
+@include vf-p-icon-change-version;
+@include vf-p-icon-lock-locked;
+@include vf-p-icon-lock-unlock;
+@include vf-p-icon-export;
+@include vf-p-icon-play;
+@include vf-p-icon-pause;
+@include vf-p-icon-stop;
+
+$positive: #0e8420;
+$progress: #0066cc;
+$caution: #f99b11;
+$negative: #c7162b;
+$neutral: #999;
+
+.page {
+  padding: 1rem 1.5rem 3rem;
+}
+
+.page-header {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-bottom: 1.5rem;
+}
+
+.page-header__title {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.page-header__controls {
+  align-items: center;
+  display: flex;
+  gap: 0.5rem;
+}
+
+.page-search {
+  min-width: 18rem;
+}
+
+.section-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  margin: 2rem 0 1rem;
+}
+
+.filter-line {
+  align-items: center;
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.filter-select {
+  width: auto;
+}
+
+.secondary-line {
+  color: var(--vf-color-text-muted);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+
+.footnote {
+  font-size: 0.875rem;
+  max-width: 48rem;
+}
+
+.status-dot::before {
+  border-radius: 50%;
+  content: "";
+  display: inline-block;
+  height: 0.5rem;
+  margin-right: 0.5rem;
+  vertical-align: 0.1rem;
+  width: 0.5rem;
+}
+
+.status-dot--positive::before {
+  background: $positive;
+}
+
+.status-dot--progress::before {
+  background: $progress;
+}
+
+.status-dot--caution::before {
+  background: $caution;
+}
+
+.status-dot--negative::before {
+  background: $negative;
+}
+
+.status-dot--neutral::before {
+  background: $neutral;
+}
+
+.meter {
+  min-width: 9rem;
+}
+
+.meter__track {
+  background: var(--vf-color-background-neutral-default);
+  height: 0.25rem;
+  margin-top: 0.6rem;
+  overflow: hidden;
+}
+
+.meter__fill {
+  background: $progress;
+  display: block;
+  height: 100%;
+}
+
+.meter--caution .meter__fill {
+  background: $caution;
+}
+
+.meter__label {
+  color: var(--vf-color-text-muted);
+  font-size: 0.875rem;
+}
+
+.amafu-tag {
+  border: 1px solid var(--vf-color-border-high-contrast);
+  border-radius: 1rem;
+  display: inline-block;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  margin: 0.15rem 0.25rem 0.15rem 0;
+  padding: 0 0.5rem;
+  white-space: nowrap;
+}
+
+.amafu-tag--information {
+  background: var(--vf-color-background-information-default);
+  border-color: var(--vf-color-border-information);
+}
+
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.summary-cards {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  margin-bottom: 1.5rem;
+}
+
+.summary-card {
+  margin-bottom: 0;
+
+  h2 {
+    margin-bottom: 0.75rem;
+  }
+
+  h2 a {
+    color: inherit;
+  }
+}
+
+.summary-card__value {
+  font-size: 2rem;
+  font-weight: 300;
+  line-height: 2.5rem;
+  margin-bottom: 0.25rem;
+  padding-top: 0;
+}
+
+.row-actions {
+  display: inline-flex;
+  gap: 0.25rem;
+  justify-content: flex-end;
+}
+
+.icon-action {
+  padding: 0.25rem 0.4rem;
+}
+
+.location-cell {
+  overflow-wrap: anywhere;
+}
+
+.source-cell {
+  display: inline-block;
+  max-width: 22rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+
+.amafu-panel__form {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.panel-footer {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  margin-top: auto;
+}
+
+.field-pair {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 1fr 1fr;
+}
+
+.choice-list {
+  border: 0;
+  margin: 0 0 1rem;
+  padding: 0;
+
+  legend {
+    margin-bottom: 0.5rem;
+  }
+}
+
+.rule-editor {
+  align-items: start;
+  border-top: 1px solid var(--vf-color-border-low-contrast);
+  display: grid;
+  gap: 0 1rem;
+  grid-template-columns: repeat(4, 1fr);
+  margin-bottom: 1.5rem;
+  padding-top: 1rem;
+}
+
+.same-as-command {
+  margin-top: 1.5rem;
+}
+
+.same-as-command__code {
+  background: var(--vf-color-background-code);
+  font-size: 0.875rem;
+  margin-bottom: 0.5rem;
+  overflow-x: auto;
+  padding: 0.75rem 1rem;
+}
+
+.detail-list {
+  margin-bottom: 1.5rem;
+
+  th {
+    color: var(--vf-color-text-muted);
+    font-weight: 400;
+    text-transform: none;
+    width: 35%;
+  }
+
+  th,
+  td {
+    vertical-align: top;
+  }
+}
+
+.step-list {
+  margin: 1rem 0;
+}
+
+.step-list__step--done {
+  color: var(--vf-color-text-muted);
+  text-decoration: line-through;
+}
+
+.step-list__step--current {
+  font-weight: 550;
+}
+
+.session-footer {
+  color: #fff;
+  padding: 0.5rem 1rem;
+}
+
+.session-footer__label {
+  color: #ccc;
+  margin-bottom: 0;
+}
+
+.session-footer__project {
+  margin-bottom: 0.5rem;
+}
+
+.session-footer__sign-out {
+  color: #fff;
+  padding-left: 0;
+}
+
+.sign-in {
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 1rem;
+}
+
+.sign-in__card {
+  max-width: 28rem;
+  width: 100%;
+}
+
+.is-dark {
+  background: #262626;
+  color: #fff;
+
+  .l-main {
+    background: #262626;
+  }
+}
+
+.p-panel__logo-name {
+  color: #fff;
+}
+
+.rule-editor__add {
+  grid-column: 4;
+  justify-self: end;
+}
+
+.u-text--monospace {
+  font-family: "Ubuntu Mono variable", "Ubuntu Mono", monospace;
+}

@@ -176,16 +176,20 @@ mod sessions {
         let instance = &dashboard_instances(&SessionKey::generate_hexadecimal().unwrap(), 1, &cluster)[0];
         let (_, cookie) = sign_in(instance, MEMBER_TOKEN).await;
         let cookie = cookie.unwrap();
-        let unsigned = Request::get(format!("/events/vms?project={PROJECT}")).body(Body::empty()).unwrap();
+        let path = format!("/events?collections=vms@{PROJECT},nodes");
+        let unsigned = Request::get(&path).body(Body::empty()).unwrap();
         assert_eq!(send(instance, unsigned).await.0, StatusCode::UNAUTHORIZED);
-        let response = instance
-            .clone()
-            .oneshot(with_cookie(Method::GET, &format!("/events/vms?project={PROJECT}"), &cookie, None))
-            .await
-            .unwrap();
+        let response =
+            instance.clone().oneshot(with_cookie(Method::GET, &path, &cookie, None)).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         let mut body = response.into_body();
-        assert_eq!(next_event(&mut body).await, json!({"type": "snapshot", "items": []}));
+        let mut first = [next_event(&mut body).await, next_event(&mut body).await];
+        first.sort_by_key(|event| event["collection"].as_str().unwrap_or_default().to_owned());
+        assert_eq!(first[0], json!({"collection": "nodes", "refused": 403}));
+        assert_eq!(
+            first[1],
+            json!({"collection": format!("vms@{PROJECT}"), "frame": {"type": "snapshot", "items": []}})
+        );
         let created = send(
             instance,
             with_cookie(Method::POST, &format!("/api/v1/vms?project={PROJECT}"), &cookie, Some(small_vm())),
@@ -193,8 +197,8 @@ mod sessions {
         .await;
         assert_eq!(created.0, StatusCode::CREATED);
         let changed = next_event(&mut body).await;
-        assert_eq!(changed["type"], "changed");
-        assert_eq!(changed["object"]["metadata"]["name"], "web-1");
+        assert_eq!(changed["frame"]["type"], "changed");
+        assert_eq!(changed["frame"]["object"]["metadata"]["name"], "web-1");
         let deleted = send(
             instance,
             with_cookie(
@@ -207,14 +211,14 @@ mod sessions {
         .await;
         assert_eq!(deleted.0, StatusCode::ACCEPTED, "{:?}", deleted.2);
         let deleting = next_event(&mut body).await;
-        assert_eq!(deleting["object"]["metadata"]["is_deleting"], true);
+        assert_eq!(deleting["frame"]["object"]["metadata"]["is_deleting"], true);
     }
 
     #[tokio::test]
     async fn the_interface_is_served() {
         let cluster = cluster();
         let instance = &dashboard_instances(&SessionKey::generate_hexadecimal().unwrap(), 1, &cluster)[0];
-        for path in ["/", "/app.js", "/style.css"] {
+        for path in ["/", "/app.js", "/app.css", "/logo.svg", "/fonts/ubuntu.woff2", "/virtual-machines"] {
             let response =
                 instance.clone().oneshot(Request::get(path).body(Body::empty()).unwrap()).await.unwrap();
             assert_eq!(response.status(), StatusCode::OK, "{path}");
