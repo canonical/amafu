@@ -30,3 +30,4 @@ Each record states a decision that is hard to reverse, why it was taken, and wha
 | [0024](0024-reads-at-scale.md) | Reads at scale from a replica on each core member, and no subscription relays |
 | [0025](0025-audit-export.md) | Audit export as a singleton that keeps its place in the sink's status |
 | [0026](0026-the-dashboard.md) | A stateless dashboard that forwards each user's token, in React and Vanilla |
+| [0027](0027-the-command-line-snap.md) | The command line as a strictly confined snap |

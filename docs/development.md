@@ -235,3 +235,20 @@ cargo rig lab maas install        # amafu install, timed
 cargo rig lab maas down
 ```
 
+`cargo rig lab maas up --snap amafu_<version>_amd64.snap` installs the command from the snap instead, so the
+install runs under the snap's confinement as customers' does.
+
+## The snap
+
+The `amafu` command ships as a strictly confined snap on core26 (decision 0027). `snap/snapcraft.yaml` builds the
+committed `HEAD`, not the working tree, so commit before packing. Snapd does not start in an LXD container nested in
+another, so in the development container pack in destructive mode; elsewhere drop the flag and snapcraft builds in
+an LXD instance.
+
+```sh
+sudo snap install snapcraft --classic
+sudo snapcraft pack --destructive-mode --platform amd64
+sudo snap install --dangerous amafu_*_amd64.snap
+amafu --help
+```
+

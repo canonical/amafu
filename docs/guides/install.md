@@ -4,6 +4,16 @@ Amafu installs from MAAS. The installer runs on a machine that reaches both MAAS
 each machine's disk through an in-memory Ubuntu, and becomes the cluster's first certificate authority (decision
 0022).
 
+## Get the command
+
+```sh
+sudo snap install amafu
+```
+
+The snap is strictly confined: keep install descriptions, keys and the state directory under your home directory,
+outside hidden folders (decision 0027). Until it is in the Snap Store, install a built one with
+`sudo snap install --dangerous amafu_<version>_amd64.snap`.
+
 ## Before you start
 
 - MAAS, with the machines commissioned and `Ready`, and an API key for a user who may deploy them.
@@ -88,6 +98,9 @@ amafu dashboard enable --description cluster.yaml --state-directory ~/amafu-prod
     --command-line-url https://images.example/amafu --command-line-digest sha256:... \
     --session-key-file dashboard-session.key
 ```
+
+The management machines download the plain `amafu` binary, published beside the snap, from `--command-line-url`
+and check it against `--command-line-digest`; they do not use the snap.
 
 Users sign in with their own token; the dashboard can do only what they may.
 
