@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 
-use amafu_node::configuration::NodeConfiguration;
+use amafu_node_configuration::NodeConfiguration;
 
 const REBOOT_DELAY: Duration = Duration::from_secs(30);
 

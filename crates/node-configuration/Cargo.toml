@@ -1,0 +1,20 @@
+[package]
+name = "amafu-node-configuration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+amafu-api.workspace = true
+amafu-controllers.workspace = true
+amafu-domain.workspace = true
+amafu-interfaces.workspace = true
+amafu-network.workspace = true
+serde.workspace = true
+serde_yaml_ng.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

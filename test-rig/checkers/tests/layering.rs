@@ -25,13 +25,17 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "amafu-domain",
             "amafu-interfaces",
             "amafu-network",
-            "amafu-node",
+            "amafu-node-configuration",
             "amafu-reconciler",
         ],
     ),
     (
         "amafu-command-line",
         &["amafu-api", "amafu-dashboard", "amafu-domain", "amafu-installer", "amafu-interfaces"],
+    ),
+    (
+        "amafu-node-configuration",
+        &["amafu-api", "amafu-controllers", "amafu-domain", "amafu-interfaces", "amafu-network"],
     ),
     (
         "amafu-node",
@@ -44,6 +48,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "amafu-hypervisor",
             "amafu-interfaces",
             "amafu-network",
+            "amafu-node-configuration",
             "amafu-reconciler",
             "amafu-state",
             "amafu-storage",

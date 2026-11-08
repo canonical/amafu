@@ -28,6 +28,7 @@ amafu-dashboard = { path = "crates/dashboard" }
 amafu-system = { path = "crates/system" }
 amafu-network = { path = "crates/network" }
 amafu-node = { path = "crates/node" }
+amafu-node-configuration = { path = "crates/node-configuration" }
 amafu-scenario = { path = "test-rig/scenario" }
 amafu-simulated-world = { path = "test-rig/simulated-world" }
 amafu-checkers = { path = "test-rig/checkers" }

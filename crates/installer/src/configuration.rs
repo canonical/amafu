@@ -6,7 +6,7 @@ use amafu_api::authentication::generate_token;
 use amafu_api::{Principal, TokenIdentity};
 use amafu_domain::ProjectName;
 use amafu_domain::access::Role;
-use amafu_node::configuration::{
+use amafu_node_configuration::{
     ApiSection, ComputeSection, Directories, FencingSection, IdentitySection, NodeConfiguration, NodeSection,
     SUPPORTED_VERSION, SchedulingSection, StateSection, UpgradeSection,
 };

@@ -9,7 +9,7 @@ use amafu_system::files::read_into_page_cache;
 use amafu_system::modules::load_listed_modules;
 use amafu_system::mount_essential_filesystems;
 
-use amafu_node::configuration::NodeConfiguration;
+use amafu_node_configuration::NodeConfiguration;
 
 const MODULES_DIRECTORY: &str = "/usr/lib/amafu/modules";
 const BOOT_MODULES_DIRECTORY: &str = "/run/amafu/boot/amafu/modules";

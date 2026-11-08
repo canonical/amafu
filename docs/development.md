@@ -17,6 +17,7 @@
 | `crates/system` | What PID 1 needs: mounts, kernel modules, boot media, firmware facts |
 | `crates/network` | The underlay, bridges, taps and VXLAN tunnels, floating addresses, the nftables ruleset, and the DHCP, DNS and metadata services |
 | `crates/node` | `amafu-node`: PID 1, role wiring, the test-only diagnostic channel |
+| `crates/node-configuration` | The node configuration file, which the installer writes and the node reads |
 | `crates/command-line` | `amafu` |
 | `crates/audit-export` | Delivering the audit log to syslog (RFC 5424 over TCP or TLS) and S3-compatible object storage |
 | `crates/dashboard` | The dashboard server: sealed sessions, the proxy that forwards with each user's token, and the event stream |

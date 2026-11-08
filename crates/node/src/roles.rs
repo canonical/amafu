@@ -45,7 +45,7 @@ use tokio::task::JoinSet;
 use uuid::Uuid;
 
 use crate::clock::SystemClock;
-use amafu_node::configuration::NodeConfiguration;
+use amafu_node_configuration::NodeConfiguration;
 
 const INITIAL_RESTART_DELAY: Duration = Duration::from_secs(1);
 const MAXIMUM_RESTART_DELAY: Duration = Duration::from_secs(30);

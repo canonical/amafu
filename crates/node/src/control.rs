@@ -11,7 +11,7 @@ use amafu_boot_slots::{EspBootSlots, EspLayout, NodeRestart};
 
 use crate::boot::{self, ESP_MOUNT};
 use crate::roles::{self, BootServices};
-use amafu_node::configuration::NodeConfiguration;
+use amafu_node_configuration::NodeConfiguration;
 
 pub const INIT_SOCKET: &str = "/run/amafu/init.socket";
 pub const MODULES_READY_FILE: &str = "/run/amafu/modules-ready";

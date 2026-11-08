@@ -10,7 +10,7 @@ use amafu_domain::access::Role;
 use amafu_domain::kinds::node::NodeRole;
 use amafu_domain::{NodeName, ProjectName};
 use amafu_installer::certificates::CertificateAuthority;
-use amafu_node::configuration::{
+use amafu_node_configuration::{
     ApiSection, ComputeSection, Directories, FencingSection, IdentitySection, NodeConfiguration, NodeSection,
     SUPPORTED_VERSION, SchedulingSection, StateSection, UpgradeSection,
 };

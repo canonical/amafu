@@ -297,7 +297,7 @@ dependencies = [
  "amafu-domain",
  "amafu-interfaces",
  "amafu-network",
- "amafu-node",
+ "amafu-node-configuration",
  "amafu-reconciler",
  "async-trait",
  "base64",
@@ -342,7 +342,7 @@ dependencies = [
  "amafu-installer",
  "amafu-interfaces",
  "amafu-network",
- "amafu-node",
+ "amafu-node-configuration",
  "amafu-scenario",
  "anyhow",
  "async-trait",
@@ -399,6 +399,7 @@ dependencies = [
  "amafu-hypervisor",
  "amafu-interfaces",
  "amafu-network",
+ "amafu-node-configuration",
  "amafu-reconciler",
  "amafu-state",
  "amafu-storage",
@@ -420,6 +421,20 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "amafu-node-configuration"
+version = "0.1.0"
+dependencies = [
+ "amafu-api",
+ "amafu-controllers",
+ "amafu-domain",
+ "amafu-interfaces",
+ "amafu-network",
+ "serde",
+ "serde_yaml_ng",
+ "thiserror",
 ]
 
 [[package]]
@@ -467,7 +482,7 @@ dependencies = [
  "amafu-domain",
  "amafu-installer",
  "amafu-interfaces",
- "amafu-node",
+ "amafu-node-configuration",
  "amafu-reconciler",
  "amafu-simulated-world",
  "amafu-state",

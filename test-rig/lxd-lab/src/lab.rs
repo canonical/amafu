@@ -16,7 +16,7 @@ use amafu_domain::kinds::node::NodeRole;
 use amafu_domain::kinds::storage_backend::{PluginBackend, PluginModule, StorageProviderSpecification};
 use amafu_domain::{NodeName, ProjectName};
 use amafu_network::{StaticAddress, UnderlayConfiguration};
-use amafu_node::configuration::{
+use amafu_node_configuration::{
     ApiSection, ComputeSection, DiagnosticsSection, Directories, FencingSection, IdentitySection,
     NodeConfiguration, NodeSection, SUPPORTED_VERSION, SchedulingSection, StateSection, UpgradeSection,
 };

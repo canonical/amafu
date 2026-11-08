@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 use tokio::task::JoinSet;
 
 use crate::roles::{ComputeAdapters, Services};
-use amafu_node::configuration::NodeConfiguration;
+use amafu_node_configuration::NodeConfiguration;
 
 static SECONDS_FROM_KERNEL_START_TO_SERVING: OnceLock<f64> = OnceLock::new();
 
@@ -79,7 +79,7 @@ mod test_channel {
 
     use super::SECONDS_FROM_KERNEL_START_TO_SERVING;
     use crate::roles::{ComputeAdapters, Services};
-    use amafu_node::configuration::NodeConfiguration;
+    use amafu_node_configuration::NodeConfiguration;
 
     const TEST_IMAGE: &str = "test-guest";
     const SERIAL_LOG_FILE: &str = "serial.log";
