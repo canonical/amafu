@@ -6,6 +6,7 @@ use amafu_api::diagnostics::{
     ATTACHMENTS_PATH, ContractOutcome, HYPERVISOR_CONTRACT_PATH, INSTANCES_PATH, NETWORK_PATH, NodeInstance,
     SANDBOX_PATH, STORAGE_PROVIDER_CONTRACT_PATH,
 };
+use amafu_lxd_lab::maas_lab::CommandLine;
 use amafu_lxd_lab::{LabSettings, VirtualLab, down, load_state, up};
 use amafu_scenario::{Level, ScenarioDefinition};
 use amafu_scenarios::recovery::{ForcedStop, soak_forced_stops};
@@ -183,6 +184,8 @@ enum MaasCommand {
     Up {
         #[arg(long, default_value_t = 3)]
         nodes: u8,
+        #[arg(long, help = "Install the command from this snap instead of target/release/amafu")]
+        snap: Option<PathBuf>,
     },
     #[command(about = "Install a cluster on the commissioned machines with amafu install")]
     Install,
@@ -193,8 +196,9 @@ enum MaasCommand {
 async fn maas_lab(repository: &std::path::Path, command: MaasCommand) -> anyhow::Result<()> {
     let settings = LabSettings::default();
     match command {
-        MaasCommand::Up { nodes } => {
-            let state = amafu_lxd_lab::maas_lab::up(repository, &settings, nodes).await?;
+        MaasCommand::Up { nodes, snap } => {
+            let command_line = snap.map_or(CommandLine::Built, CommandLine::Snap);
+            let state = amafu_lxd_lab::maas_lab::up(repository, &settings, nodes, &command_line).await?;
             println!("the MAAS lab commissioned {} machines", state.machines.len());
         }
         MaasCommand::Install => {

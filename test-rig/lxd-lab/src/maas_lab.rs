@@ -41,6 +41,8 @@ const INSTALL_DESCRIPTION: &str = "/root/install.yaml";
 const INSTALL_LOG: &str = "/root/amafu-install.log";
 const INSTALL_DONE: &str = "/root/amafu-install.done";
 const CLI_PATH: &str = "/usr/local/bin/amafu";
+const SNAP_PATH: &str = "/root/amafu.snap";
+const SNAP_COMMAND: &str = "/snap/bin/amafu";
 const MACHINE_MEMORY_MEBIBYTES: u32 = 3072;
 const MACHINE_CPU_COUNT: u32 = 2;
 const MACHINE_DISK_GIBIBYTES: u32 = 16;
@@ -335,6 +337,11 @@ fn install_description(
     }
 }
 
+pub enum CommandLine {
+    Built,
+    Snap(PathBuf),
+}
+
 fn command_line_binary(repository: &Path) -> anyhow::Result<PathBuf> {
     ["target/release/amafu", "target/debug/amafu"]
         .into_iter()
@@ -343,7 +350,39 @@ fn command_line_binary(repository: &Path) -> anyhow::Result<PathBuf> {
         .context("build the amafu command first: cargo build --release -p amafu-command-line")
 }
 
-pub async fn up(repository: &Path, settings: &LabSettings, node_count: u8) -> anyhow::Result<MaasLabState> {
+async fn install_command_line(
+    lxd: &LxdClient,
+    repository: &Path,
+    command_line: &CommandLine,
+) -> anyhow::Result<()> {
+    match command_line {
+        CommandLine::Built => {
+            let binary = command_line_binary(repository)?;
+            lxd.push_file(MAAS_INSTANCE, CLI_PATH, std::fs::read(&binary)?).await?;
+            lxd.execute(MAAS_INSTANCE, &format!("chmod 0755 {CLI_PATH}")).await?;
+        }
+        CommandLine::Snap(snap) => {
+            let contents = std::fs::read(snap).with_context(|| format!("reading {}", snap.display()))?;
+            lxd.push_file(MAAS_INSTANCE, SNAP_PATH, contents).await?;
+            lxd.execute(
+                MAAS_INSTANCE,
+                &format!("snap install --dangerous {SNAP_PATH} && ln -sf {SNAP_COMMAND} {CLI_PATH}"),
+            )
+            .await?;
+        }
+    }
+    Ok(())
+}
+
+pub async fn up(
+    repository: &Path,
+    settings: &LabSettings,
+    node_count: u8,
+    command_line: &CommandLine,
+) -> anyhow::Result<MaasLabState> {
+    if let CommandLine::Built = command_line {
+        command_line_binary(repository)?;
+    }
     let image = repository.join(&settings.image_directory);
     if !image.join("esp").is_dir() {
         bail!("no built image in {}; run image/build test first", image.display());
@@ -385,9 +424,7 @@ pub async fn up(repository: &Path, settings: &LabSettings, node_count: u8) -> an
     );
     lxd.push_file(MAAS_INSTANCE, INSTALL_DESCRIPTION, serde_yaml_ng::to_string(&description)?.into_bytes())
         .await?;
-    let binary = command_line_binary(repository)?;
-    lxd.push_file(MAAS_INSTANCE, CLI_PATH, std::fs::read(&binary)?).await?;
-    lxd.execute(MAAS_INSTANCE, &format!("chmod 0755 {CLI_PATH}")).await?;
+    install_command_line(&lxd, repository, command_line).await?;
     let state =
         MaasLabState { machines, trust_fingerprint, image_signing_key: hex::encode(signing_document) };
     std::fs::write(state_file(repository), serde_json::to_vec_pretty(&state)?)?;
