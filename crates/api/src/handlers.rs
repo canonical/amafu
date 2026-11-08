@@ -18,7 +18,7 @@ use crate::admission::{AdmissionError, admit_create, admit_update};
 use crate::authorization::{Target, is_allowed};
 use crate::request_chain::{AuditDetails, RequestContext};
 use crate::routes::ApiState;
-use crate::wire::{ErrorBody, ErrorCode, ListResponse, ProjectQuery, WatchFrame};
+use crate::wire::{CollectionFrame, ErrorBody, ErrorCode, ListResponse, ProjectQuery, WatchFrame};
 
 pub struct ApiError {
     status: StatusCode,
@@ -217,10 +217,14 @@ impl Operation {
 }
 
 const LOCAL_CONSISTENCY: &str = "consistency=local";
+const WATCH_REQUEST: &str = "watch=true";
+
+fn has_query_pair(target: &Uri, expected: &str) -> bool {
+    target.query().is_some_and(|query| query.split('&').any(|pair| pair == expected))
+}
 
 fn requested_consistency(target: &Uri) -> Consistency {
-    let is_local = target.query().is_some_and(|query| query.split('&').any(|pair| pair == LOCAL_CONSISTENCY));
-    if is_local { Consistency::Stale } else { Consistency::Linearizable }
+    if has_query_pair(target, LOCAL_CONSISTENCY) { Consistency::Stale } else { Consistency::Linearizable }
 }
 
 pub async fn list_objects(
@@ -229,6 +233,9 @@ pub async fn list_objects(
     context: RequestContext,
     target: Uri,
 ) -> Result<ApiSuccess, ApiError> {
+    if has_query_pair(&target, WATCH_REQUEST) {
+        return watch_collection(kind, state, context, target).await;
+    }
     let operation = Operation::new(kind, Verb::List, context, &target, None)?;
     operation.authorize()?;
     let records = state
@@ -341,18 +348,110 @@ pub async fn watch_object(
     })
 }
 
+async fn watch_collection(
+    kind: KindDescriptor,
+    state: ApiState,
+    context: RequestContext,
+    target: Uri,
+) -> Result<ApiSuccess, ApiError> {
+    let operation = Operation::new(kind, Verb::Watch, context, &target, None)?;
+    operation.authorize()?;
+    let events = state.store.watch(kind.kind);
+    let items =
+        snapshot(state.store.as_ref(), kind.kind, operation.project.as_ref(), requested_consistency(&target))
+            .await
+            .map_err(|error| operation.store_error(error.into()))?;
+    let progress = CollectionProgress {
+        source: CollectionSource {
+            store: Arc::clone(&state.store),
+            kind: kind.kind,
+            project: operation.project.clone(),
+        },
+        pending: Some(CollectionFrame::Snapshot { items }),
+        events,
+    };
+    Ok(ApiSuccess {
+        status: StatusCode::OK,
+        body: Body::from_stream(collection_frames(progress)),
+        content_type: "application/x-ndjson",
+        audit: operation.audit(),
+    })
+}
+
+async fn snapshot(
+    store: &dyn Store,
+    kind: &str,
+    project: Option<&ProjectName>,
+    consistency: Consistency,
+) -> Result<Vec<Value>, StoreError> {
+    Ok(store.list(kind, project, consistency).await?.into_iter().map(|record| record.object).collect())
+}
+
+struct CollectionSource {
+    store: Arc<dyn Store>,
+    kind: &'static str,
+    project: Option<ProjectName>,
+}
+
+struct CollectionProgress {
+    source: CollectionSource,
+    pending: Option<CollectionFrame>,
+    events: futures::stream::BoxStream<'static, WatchEvent>,
+}
+
+impl CollectionSource {
+    async fn frame_for(&self, event: WatchEvent) -> Result<Option<CollectionFrame>, StoreError> {
+        match event {
+            WatchEvent::Resynchronize => {
+                let items = snapshot(
+                    self.store.as_ref(),
+                    self.kind,
+                    self.project.as_ref(),
+                    Consistency::Linearizable,
+                )
+                .await?;
+                Ok(Some(CollectionFrame::Snapshot { items }))
+            }
+            WatchEvent::Changed(reference) if reference.project == self.project => {
+                Ok(Some(match self.store.read(&reference, Consistency::Linearizable).await? {
+                    Some(record) => CollectionFrame::Changed { object: record.object },
+                    None => CollectionFrame::Removed { name: reference.name },
+                }))
+            }
+            WatchEvent::Changed(_) => Ok(None),
+        }
+    }
+}
+
+fn encode_line(frame: &impl serde::Serialize) -> Result<Bytes, std::io::Error> {
+    let mut line = serde_json::to_vec(frame).map_err(std::io::Error::other)?;
+    line.push(b'\n');
+    Ok(Bytes::from(line))
+}
+
+fn collection_frames(
+    progress: CollectionProgress,
+) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
+    futures::stream::unfold(progress, |mut progress| async move {
+        loop {
+            if let Some(frame) = progress.pending.take() {
+                return Some((encode_line(&frame), progress));
+            }
+            let event = progress.events.next().await?;
+            match progress.source.frame_for(event).await {
+                Ok(frame) => progress.pending = frame,
+                Err(error) => return Some((Err(std::io::Error::other(error)), progress)),
+            }
+        }
+    })
+}
+
 struct WatchProgress {
     store: Arc<dyn Store>,
     reference: ObjectReference,
     last_revision: Option<u64>,
     pending: Option<WatchFrame>,
     events: futures::stream::BoxStream<'static, WatchEvent>,
-}
-
-fn encode_frame(frame: &WatchFrame) -> Result<Bytes, std::io::Error> {
-    let mut line = serde_json::to_vec(frame).map_err(std::io::Error::other)?;
-    line.push(b'\n');
-    Ok(Bytes::from(line))
 }
 
 fn watch_frames(
@@ -372,7 +471,7 @@ fn watch_frames(
     futures::stream::unfold(progress, |mut progress| async move {
         loop {
             if let Some(frame) = progress.pending.take() {
-                return Some((encode_frame(&frame), progress));
+                return Some((encode_line(&frame), progress));
             }
             progress.last_revision?;
             let event = progress.events.next().await?;

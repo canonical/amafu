@@ -14,6 +14,7 @@ mod sessions {
     use amafu_simulated_world::fakes::{MemoryAuditLog, MemoryStore};
     use axum::body::Body;
     use axum::http::{Method, Request, StatusCode, header};
+    use http_body_util::BodyExt;
     use serde_json::json;
     use time::OffsetDateTime;
     use tower::ServiceExt;
@@ -155,6 +156,58 @@ mod sessions {
             .body(Body::from(small_vm().to_string()))
             .unwrap();
         assert_eq!(send(instance, forged).await.0, StatusCode::FORBIDDEN);
+    }
+
+    async fn next_event(body: &mut Body) -> serde_json::Value {
+        loop {
+            let frame =
+                tokio::time::timeout(Duration::from_secs(5), body.frame()).await.unwrap().unwrap().unwrap();
+            let Ok(data) = frame.into_data() else { continue };
+            let text = String::from_utf8(data.to_vec()).unwrap();
+            if let Some(line) = text.lines().find_map(|line| line.strip_prefix("data: ")) {
+                return serde_json::from_str(line).unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn changes_reach_the_browser_as_they_happen() {
+        let cluster = cluster();
+        let instance = &dashboard_instances(&SessionKey::generate_hexadecimal().unwrap(), 1, &cluster)[0];
+        let (_, cookie) = sign_in(instance, MEMBER_TOKEN).await;
+        let cookie = cookie.unwrap();
+        let unsigned = Request::get(format!("/events/vms?project={PROJECT}")).body(Body::empty()).unwrap();
+        assert_eq!(send(instance, unsigned).await.0, StatusCode::UNAUTHORIZED);
+        let response = instance
+            .clone()
+            .oneshot(with_cookie(Method::GET, &format!("/events/vms?project={PROJECT}"), &cookie, None))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let mut body = response.into_body();
+        assert_eq!(next_event(&mut body).await, json!({"type": "snapshot", "items": []}));
+        let created = send(
+            instance,
+            with_cookie(Method::POST, &format!("/api/v1/vms?project={PROJECT}"), &cookie, Some(small_vm())),
+        )
+        .await;
+        assert_eq!(created.0, StatusCode::CREATED);
+        let changed = next_event(&mut body).await;
+        assert_eq!(changed["type"], "changed");
+        assert_eq!(changed["object"]["metadata"]["name"], "web-1");
+        let deleted = send(
+            instance,
+            with_cookie(
+                Method::DELETE,
+                &format!("/api/v1/vms/web-1?project={PROJECT}"),
+                &cookie,
+                Some(json!({})),
+            ),
+        )
+        .await;
+        assert_eq!(deleted.0, StatusCode::ACCEPTED, "{:?}", deleted.2);
+        let deleting = next_event(&mut body).await;
+        assert_eq!(deleting["object"]["metadata"]["is_deleting"], true);
     }
 
     #[tokio::test]

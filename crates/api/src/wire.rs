@@ -73,3 +73,11 @@ pub enum WatchFrame {
     Object { object: Value },
     Removed,
 }
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum CollectionFrame {
+    Snapshot { items: Vec<Value> },
+    Changed { object: Value },
+    Removed { name: ObjectName },
+}

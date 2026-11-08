@@ -1,3 +1,4 @@
+use std::convert::Infallible;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -8,9 +9,10 @@ use axum::body::Body;
 use axum::extract::{Path, Request, State};
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE, COOKIE, SET_COOKIE};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, get, post};
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 use futures::StreamExt;
 use http_body_util::BodyExt;
 use serde::Deserialize;
@@ -46,6 +48,13 @@ impl DashboardState {
     }
 
     async fn forward(&self, request: http::Request<Bytes>) -> Result<http::Response<Bytes>, ClientError> {
+        collect(self.open(request).await?).await
+    }
+
+    async fn open(
+        &self,
+        request: http::Request<Bytes>,
+    ) -> Result<http::Response<amafu_api::client::ResponseBody>, ClientError> {
         let count = self.upstreams.len();
         let first = self.preferred.load(Ordering::Relaxed);
         let mut last_failure = ClientError::Transport(String::from("the dashboard knows no core member"));
@@ -54,7 +63,7 @@ impl DashboardState {
             match self.upstreams[index].send(request.clone()).await {
                 Ok(response) => {
                     self.preferred.store(index, Ordering::Relaxed);
-                    return collect(response).await;
+                    return Ok(response);
                 }
                 Err(failure @ ClientError::Transport(_)) => last_failure = failure,
                 Err(other) => return Err(other),
@@ -214,6 +223,62 @@ async fn proxy(State(state): State<DashboardState>, Path(path): Path<String>, re
     }
 }
 
+fn watch_path(kind: &str, query: Option<&str>) -> String {
+    let forwarded = query
+        .unwrap_or_default()
+        .split('&')
+        .filter(|pair| !pair.is_empty() && !pair.starts_with("watch="))
+        .chain(std::iter::once("watch=true"))
+        .collect::<Vec<_>>()
+        .join("&");
+    format!("/v1/{kind}?{forwarded}")
+}
+
+fn changes_as_events(
+    body: amafu_api::client::ResponseBody,
+) -> impl futures::Stream<Item = Result<Event, Infallible>> {
+    futures::stream::unfold((body, BytesMut::new()), |(mut body, mut buffer)| async move {
+        loop {
+            if let Some(position) = buffer.iter().position(|byte| *byte == b'\n') {
+                let line = buffer.split_to(position + 1);
+                let text = String::from_utf8_lossy(&line[..position]).into_owned();
+                return Some((Ok(Event::default().data(text)), (body, buffer)));
+            }
+            match body.next().await? {
+                Ok(chunk) => buffer.extend_from_slice(&chunk),
+                Err(_) => return None,
+            }
+        }
+    })
+}
+
+async fn changes(
+    State(state): State<DashboardState>,
+    Path(kind): Path<String>,
+    request: Request,
+) -> Response {
+    let Some(session) = current_session(&state, request.headers()) else {
+        return refusal(StatusCode::UNAUTHORIZED, "sign in first");
+    };
+    let path = watch_path(&kind, request.uri().query());
+    let Some(upstream) = upstream_request(Method::GET, &path, &session.token, Bytes::new()) else {
+        return refusal(StatusCode::BAD_REQUEST, "the request cannot be forwarded");
+    };
+    match state.open(upstream).await {
+        Ok(answer) if answer.status() == StatusCode::OK => {
+            Sse::new(changes_as_events(answer.into_body())).keep_alive(KeepAlive::default()).into_response()
+        }
+        Ok(answer) => match collect(answer).await {
+            Ok(refused) => {
+                let (parts, body) = refused.into_parts();
+                (parts.status, [(CONTENT_TYPE, "application/json")], body).into_response()
+            }
+            Err(error) => refusal(StatusCode::BAD_GATEWAY, &error.to_string()),
+        },
+        Err(error) => refusal(StatusCode::BAD_GATEWAY, &error.to_string()),
+    }
+}
+
 pub fn dashboard_router(state: DashboardState) -> axum::Router {
     axum::Router::new()
         .route("/", get(|| async { asset("text/html; charset=utf-8", INDEX) }))
@@ -221,5 +286,6 @@ pub fn dashboard_router(state: DashboardState) -> axum::Router {
         .route("/style.css", get(|| async { asset("text/css; charset=utf-8", STYLE) }))
         .route("/session", post(sign_in).delete(sign_out).get(who_am_i))
         .route("/api/{*path}", any(proxy))
+        .route("/events/{kind}", get(changes))
         .with_state(state)
 }
