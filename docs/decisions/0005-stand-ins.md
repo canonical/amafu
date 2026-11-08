@@ -1,6 +1,6 @@
 # 0005: Stand-ins, and what replaces them
 
-Status: accepted for milestones 1 to 5
+Status: accepted for milestones 1 to 6
 
 Milestone 1 builds every layer thinly. Where the plan's full design belongs to a later milestone, milestone 1 uses
 a simpler stand-in behind the same interface, so that replacing it does not ripple through the other crates.
@@ -57,6 +57,19 @@ Milestone 5 replaces the rig issuing node certificates (the installer issues the
 | The previous release is the same build with another release file, and the broken image has an empty initramfs | There is one build per lab run, and no CI keeps earlier releases | CI upgrading every build from the previous release |
 | Node configurations, with their private keys, travel in MAAS user data | There is no join endpoint yet | A join token exchanged for a TPM-bound certificate at first boot |
 | The two features of the plan are gates with nothing behind them | Neither feature exists yet | Parallel migration streams and dedicated subscription relays |
+
+Milestone 6 adds:
+
+| Stand-in | Why | Replaced by |
+|---|---|---|
+| The 1,000-node run uses three core members on one machine, with their state on tmpfs | The lab cannot host the run yet, and the machine's network block device takes 50 ms per write, where the plan requires local NVMe for core members (0024) | The run in the lab, with core members on NVMe |
+| On that network block device, placing 2,000 VMs on 1,000 nodes does not finish within 260 s; 200 nodes pass | Quorium's fenced writes wait on the disk | The same run on local NVMe |
+| The NFS and Ceph RBD contracts run only in the lab, and the SPDK plugin is checked against a fake SPDK in unit tests | Those servers exist only in the lab | Every contract on every build in CI |
+| Storage backend and audit sink secrets live in their specifications | There is no secret store | A secret store with references from specifications, readable only by the nodes that need them |
+| The dashboard's virtual address and failover are deployed by `amafu dashboard enable` but not exercised in a lab; session survival is tested across instances in-process | The MAAS lab has no management machines yet | Killing a management machine in the MAAS lab with users signed in |
+| The node binary grew to 35 MiB with the plugin runtime; boot time is not remeasured | The lab was down when the runtime was added | Boot timing in the lab, and the runtime in a separate module fetched on demand if it matters |
+| The external security review and the 14-day MAAS lab soak have not happened | Both need people and hardware outside this repository | The review, with findings fixed or recorded as decisions, and the soak, before the first release |
+| The dashboard is checked in headless Chromium against a seeded in-process cluster whose controllers are simulated | The browser check must run without a lab | The same check against the virtual lab |
 
 None of these stand-ins weakens a guarantee the plan says must not be simplified: generations on every object,
 audit of every request including denials, at most one running instance of each VM, and signed images. Each of

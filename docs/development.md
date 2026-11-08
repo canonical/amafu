@@ -18,7 +18,11 @@
 | `crates/network` | The underlay, bridges, taps and VXLAN tunnels, floating addresses, the nftables ruleset, and the DHCP, DNS and metadata services |
 | `crates/node` | `amafu-node`: PID 1, role wiring, the test-only diagnostic channel |
 | `crates/command-line` | `amafu` |
-| `test-rig/*` | The `Cluster` trait, scenarios, checkers, the simulated world, the LXD lab, and `cargo rig` |
+| `crates/audit-export` | Delivering the audit log to syslog (RFC 5424 over TCP or TLS) and S3-compatible object storage |
+| `crates/dashboard` | The dashboard server: sealed sessions, the proxy that forwards with each user's token, and the event stream |
+| `crates/dashboard/frontend` | The dashboard's React and Vanilla sources; the built bundle is committed in `crates/dashboard/assets` |
+| `wit`, `plugins` | The storage plugin contract, the plugin kit, the SPDK JSON-RPC plugin and the hostile test plugin |
+| `test-rig/*` | The `Cluster` trait, scenarios, checkers, the simulated world, the LXD lab, the scale run, the demo cluster, and `cargo rig` |
 | `image` | The node image build |
 | `docs/decisions` | Decision records |
 
@@ -42,6 +46,55 @@ Some tests need root and are ignored by default: the kernel datapath contract an
 test (`crates/network/tests`), the VM
 process sandbox (`crates/node/tests/sandbox.rs`), and a real registry pull (`crates/storage/tests`). Build them with
 `cargo test --no-run` and run the test binary with `sudo ... --ignored`.
+
+`docs/reference/kinds.md` is generated from the kind registry with `cargo rig reference`; a test fails when it is
+out of date.
+
+## Storage plugins
+
+Plugins are WebAssembly components built against `wit/storage-provider.wit` with the kit in `plugins/kit`. They
+are a separate workspace because they target `wasm32-wasip2`:
+
+```sh
+rustup target add wasm32-wasip2
+plugins/build
+cargo test -p amafu-storage --test plugin_kit
+```
+
+The contract tests load the SPDK plugin and the hostile plugin from `plugins/target`. Generated bindings use
+`unsafe`, so it is allowed only in the kit and in each plugin's `abi` module.
+
+## Scale
+
+```sh
+cargo build --release -p amafu-node
+cargo rig scale --nodes 1000 --vms 2000 --state-in-memory
+```
+
+The run starts three real core members on this machine and 1,000 simulated nodes, places the VMs, reads at the
+requested rate and prints a report with the budgets it checked. Without `--state-in-memory` the core members keep
+their state under `target/`; on a network block device that measures the disk rather than Amafu (0024). The run
+needs about 2 GiB per core member and stops before the host runs out of memory.
+
+## The dashboard
+
+```sh
+cd crates/dashboard/frontend
+npm ci
+npm run check
+npm run build
+cargo rig dashboard
+```
+
+`npm run build` writes the bundle into `crates/dashboard/assets`, which `amafu-dashboard` embeds, so a Rust build
+never needs Node. Commit the rebuilt bundle with the sources. `cargo rig dashboard` serves it over a seeded cluster
+on `http://127.0.0.1:8480` whose objects settle as a real cluster's would; sign in with `amafu-demo-admin`,
+`amafu-demo-member` or `amafu-demo-viewer`. `npm run develop` serves the sources with hot reload, forwarding to
+that cluster.
+
+`cargo rig dashboard --browser-check` drives every page and the main workflows in headless Chromium and saves
+screenshots in `target/dashboard-screenshots`. It needs Playwright's browser once:
+`npx playwright install --with-deps chromium`.
 
 ## Fuzzing
 
@@ -160,6 +213,9 @@ amafu node list
 ```
 
 `lab.json` holds the block backends the lab created (`block_backends`), with their credentials.
+
+`cargo rig lab storage-contract` runs the storage provider contract on a lab node against every built-in provider
+the lab has and against the SPDK plugin, built with `plugins/build`.
 
 ## The MAAS lab
 
