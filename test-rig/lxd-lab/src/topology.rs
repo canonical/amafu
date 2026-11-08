@@ -23,7 +23,7 @@ pub struct LabSettings {
 impl Default for LabSettings {
     fn default() -> Self {
         Self {
-            lxd_endpoint: String::from("https://10.0.10.13:8443"),
+            lxd_endpoint: String::from("https://10.0.10.2:8443"),
             lxd_remote: String::from("amafu-lab"),
             project: String::from("amafu-lab"),
             host_address: Ipv4Addr::new(10, 0, 10, 13),

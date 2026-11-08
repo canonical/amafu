@@ -174,7 +174,7 @@ on port 8080 for the upgrade scenarios.
 `target/rig/lab.json` holds the lab's CA and tokens. To use the command line against the lab:
 
 ```sh
-export AMAFU_ENDPOINT=https://10.0.10.13:17443 AMAFU_PROJECT=project-a
+export AMAFU_ENDPOINT=https://10.0.10.2:17443 AMAFU_PROJECT=project-a
 export AMAFU_CERTIFICATE_AUTHORITY=<the certificate_authority from lab.json, saved to a file>
 export AMAFU_TOKEN=<a token from lab.json, for example operator@project-a>
 amafu vm create web-1 --cpus 1 --memory 256 --kernel test-guest --wait
