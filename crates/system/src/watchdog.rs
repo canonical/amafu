@@ -55,6 +55,12 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_kernel_keeps_the_watchdog_running_while_the_node_restarts() {
+        let boot_entry = include_str!("../../../image/grub.cfg");
+        assert!(boot_entry.contains("watchdog.stop_on_reboot=0"));
+    }
+
+    #[test]
     fn the_margin_is_given_in_whole_seconds() {
         assert_eq!(margin_parameter(Duration::from_secs(8)), "soft_margin=8");
         assert_eq!(margin_parameter(Duration::from_millis(300)), "soft_margin=1");
