@@ -26,7 +26,7 @@ outside hidden folders (decision 0027). Until it is in the Snap Store, install a
 ```sh
 amafu release create-key --private-key release.key          # prints the public key
 amafu release sign --private-key release.key --bundle node-image.tar \
-    --version 26.04.1 --feature-level 3 --url https://images.example/node-image.tar > manifest.json
+    --version 26.04.1 --feature-level 1 --url https://images.example/node-image.tar > manifest.json
 ```
 
 ## The install description
@@ -80,12 +80,15 @@ Keep it safe and readable only by you; anyone holding it administers the cluster
 
 ```sh
 jq -r .authority.certificate_pem ~/amafu-prod-east/cluster-credentials.json > prod-east-ca.pem
-export AMAFU_ENDPOINT=https://10.0.0.11:7443
+export AMAFU_ENDPOINT=https://10.0.0.11:7443,https://10.0.0.12:7443,https://10.0.0.13:7443
 export AMAFU_CERTIFICATE_AUTHORITY=prod-east-ca.pem
 export AMAFU_TOKEN=$(jq -r .admin_token ~/amafu-prod-east/cluster-credentials.json)
 amafu node list
 amafu upgrade status
 ```
+
+Name every core member in `AMAFU_ENDPOINT`: reads, and `--wait` while an upgrade restarts members, move to the next
+one that answers.
 
 ## The dashboard
 

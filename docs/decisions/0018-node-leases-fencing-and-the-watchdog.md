@@ -30,6 +30,10 @@ Status: accepted for milestone 4 (replaces the heartbeat stand-in of 0005)
 - With the defaults a powered-off node's VMs run elsewhere about 20 s after it stopped; the budget is 30 s.
 - A node cut off for longer than its lease resets itself, even if it runs VMs. A shorter cut keeps everything
   running, which the "node outside the core" scenario now checks with a 5 s cut.
+- Losing quorum stops every VM: no node can renew its lease, so every watchdog resets its node. They run again once
+  quorum is back.
+- The kernel keeps the watchdog armed while the node restarts (`watchdog.stop_on_reboot=0`), and the node flushes
+  its file systems for at most 10 s before restarting, so a restart that hangs still ends in a reset.
 - NFS and local disks have no fencing of their own; for them the watchdog deadline is the only guarantee.
 - Ceph blocklisting needs the backend's command endpoint (`command_endpoint`, `command_user`, `command_key` and an
   optional CA) in addition to the dashboard.

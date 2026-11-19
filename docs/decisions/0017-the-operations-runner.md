@@ -28,3 +28,13 @@ Status: accepted for milestone 4
 - The simulator proves resumption by crashing between every pair of steps of an evacuation and by making a step's
   effect land just before a crash (`test-rig/simulated-world/tests/operations.rs`).
 - Milestone 5's install and upgrade become new operation kinds with their own steps on the same runner.
+- A failing step backs off exponentially up to 30 s; the runner's own status write does not wake it early. A pause or
+  cancellation of an operation that is backing off therefore takes effect at its next attempt.
+- An evacuation moves each VM in a step that can be undone: cancelling or failing it stops between VMs, leaves moved
+  VMs where they are and uncordons the node. A VM that is assigned but not running cannot be moved live, so it fails
+  the evacuation at once; a stopped VM needs no move.
+- A cancellation that cannot be honoured now is kept and honoured at the first later step that can be undone or
+  abandoned; `amafu operation cancel` says so.
+- Every step that waits on a node during an upgrade has the plan's health deadline, so a node that never restarts
+  fails the upgrade instead of holding it.
+- Each finished step records when it started and finished, so an operation shows where its time went.
