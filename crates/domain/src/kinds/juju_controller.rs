@@ -195,7 +195,7 @@ pub struct Deployment {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "request", rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum JujuRequest {
     Create { controller: JujuControllerSpecification },
     Delete,
@@ -401,7 +401,6 @@ impl PlannedStep for JujuStep {
 #[serde(deny_unknown_fields)]
 pub struct JujuControllerChangeSpecification {
     pub controller: ObjectName,
-    #[serde(flatten)]
     pub request: JujuRequest,
     pub steps: Vec<JujuStep>,
     #[serde(default)]
@@ -566,6 +565,17 @@ mod tests {
             },
         );
         assert!(change.validate().is_err());
+    }
+
+    #[test]
+    fn a_change_survives_a_trip_through_json() {
+        let change = JujuControllerChangeSpecification::new(
+            name("ctl"),
+            JujuRequest::Create { controller: on_vms(3) },
+        );
+        let json = serde_json::to_value(&change).unwrap();
+        assert_eq!(json["request"]["controller"]["substrate"]["on"], "vms");
+        assert_eq!(serde_json::from_value::<JujuControllerChangeSpecification>(json).unwrap(), change);
     }
 
     #[test]

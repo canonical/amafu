@@ -67,6 +67,12 @@ pub struct ProjectQuery {
     pub all_projects: bool,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ListQuery {
+    #[serde(default)]
+    pub labels: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum WatchFrame {

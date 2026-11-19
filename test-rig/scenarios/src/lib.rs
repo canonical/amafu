@@ -1,4 +1,5 @@
 pub mod containers;
+pub mod environments;
 pub mod migration;
 pub mod networking;
 pub mod overlay;
@@ -48,6 +49,7 @@ pub fn all() -> Vec<ScenarioDefinition> {
         upgrade::CLUSTER_UPGRADES_AND_ROLLS_BACK,
         upgrade::LARGE_CLUSTER_UPGRADES_AND_ROLLS_BACK,
         upgrade::FINALIZED_CLUSTER_REFUSES_ROLLBACK,
+        environments::ENVIRONMENTS_ARE_GUARDED,
     ]
 }
 

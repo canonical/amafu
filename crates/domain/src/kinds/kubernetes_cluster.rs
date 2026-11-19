@@ -226,7 +226,7 @@ impl Resource for KubernetesClusterChange {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "request", rename_all = "kebab-case", deny_unknown_fields)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum KubernetesRequest {
     Create { cluster: KubernetesClusterSpecification },
     Delete,
@@ -377,7 +377,6 @@ impl PlannedStep for KubernetesStep {
 #[serde(deny_unknown_fields)]
 pub struct KubernetesClusterChangeSpecification {
     pub cluster: ObjectName,
-    #[serde(flatten)]
     pub request: KubernetesRequest,
     pub steps: Vec<KubernetesStep>,
     #[serde(default)]
@@ -552,6 +551,17 @@ mod tests {
         assert!(change.validate().is_err());
         change.steps = change.request.steps();
         assert!(change.validate().is_ok());
+    }
+
+    #[test]
+    fn a_change_survives_a_trip_through_json() {
+        let change = KubernetesClusterChangeSpecification::new(
+            name("platform"),
+            KubernetesRequest::ScalePool { pool: name("general"), nodes: vec![], to: 2 },
+        );
+        let json = serde_json::to_value(&change).unwrap();
+        assert_eq!(json["request"]["kind"], "scale-pool");
+        assert_eq!(serde_json::from_value::<KubernetesClusterChangeSpecification>(json).unwrap(), change);
     }
 
     #[test]

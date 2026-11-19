@@ -190,6 +190,17 @@ pub enum WatchUpdate<R: Resource> {
     Removed,
 }
 
+fn query_escaped(text: &str) -> String {
+    text.bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                char::from(byte).to_string()
+            }
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
+}
+
 pub struct FailoverTransport {
     transports: Vec<Arc<dyn Transport>>,
     preferred: std::sync::atomic::AtomicUsize,
@@ -394,7 +405,17 @@ impl ApiClient {
     }
 
     pub async fn list<R: Resource>(&self) -> Result<Vec<Object<R>>, ClientError> {
-        let response: ListResponse = self.call(Method::GET, &self.collection_path::<R>(), None).await?;
+        self.list_at::<R>(&self.collection_path::<R>()).await
+    }
+
+    pub async fn list_labelled<R: Resource>(&self, selector: &str) -> Result<Vec<Object<R>>, ClientError> {
+        let separator = if self.collection_path::<R>().contains('?') { '&' } else { '?' };
+        let path = format!("{}{separator}labels={}", self.collection_path::<R>(), query_escaped(selector));
+        self.list_at::<R>(&path).await
+    }
+
+    async fn list_at<R: Resource>(&self, path: &str) -> Result<Vec<Object<R>>, ClientError> {
+        let response: ListResponse = self.call(Method::GET, path, None).await?;
         response
             .items
             .into_iter()
@@ -480,6 +501,14 @@ mod tests {
 
     fn request(method: Method) -> Request<Bytes> {
         Request::builder().method(method).uri("/v1/ping").body(Bytes::new()).unwrap()
+    }
+
+    #[test]
+    fn a_selector_is_escaped_for_the_query_string() {
+        assert_eq!(
+            query_escaped("amafu.io/juju-model=default,tier=web"),
+            "amafu.io/juju-model%3Ddefault%2Ctier%3Dweb"
+        );
     }
 
     #[test]

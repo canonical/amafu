@@ -1,6 +1,8 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use amafu_domain::access::Verb;
+use amafu_domain::labels::LabelSelector;
 use amafu_domain::registry::{KindDescriptor, UntypedChange};
 use amafu_domain::{ChangeError, ObjectId, ObjectName, ObjectReference, ProjectName, Violation};
 use amafu_interfaces::objects::{ObjectStoreError, apply_untyped};
@@ -18,7 +20,8 @@ use crate::admission::{AdmissionError, admit_create, admit_update};
 use crate::authorization::{Target, is_allowed};
 use crate::request_chain::{AuditDetails, RequestContext};
 use crate::routes::ApiState;
-use crate::wire::{CollectionFrame, ErrorBody, ErrorCode, ListResponse, ProjectQuery, WatchFrame};
+use crate::store_admission::{Refusal, StoreAdmission};
+use crate::wire::{CollectionFrame, ErrorBody, ErrorCode, ListQuery, ListResponse, ProjectQuery, WatchFrame};
 
 pub struct ApiError {
     status: StatusCode,
@@ -184,6 +187,17 @@ impl Operation {
         api_error
     }
 
+    fn refusal(&self, refusal: Refusal) -> ApiError {
+        match refusal {
+            Refusal::InUse(message) => self.error(StatusCode::CONFLICT, ErrorCode::Conflict, message),
+            Refusal::Owned(message) => self.error(StatusCode::FORBIDDEN, ErrorCode::Forbidden, message),
+            Refusal::Unready(message) => {
+                self.error(StatusCode::UNPROCESSABLE_ENTITY, ErrorCode::Invalid, message)
+            }
+            Refusal::Store(error) => self.store_error(error),
+        }
+    }
+
     fn admission_error(&self, error: AdmissionError) -> ApiError {
         match error {
             AdmissionError::Malformed(message) => {
@@ -224,6 +238,10 @@ fn has_query_pair(target: &Uri, expected: &str) -> bool {
     target.query().is_some_and(|query| query.split('&').any(|pair| pair == expected))
 }
 
+fn object_labels(object: &serde_json::Value) -> BTreeMap<String, String> {
+    serde_json::from_value(object["metadata"]["labels"].clone()).unwrap_or_default()
+}
+
 fn requested_consistency(target: &Uri) -> Consistency {
     if has_query_pair(target, LOCAL_CONSISTENCY) { Consistency::Stale } else { Consistency::Linearizable }
 }
@@ -244,7 +262,14 @@ pub async fn list_objects(
         .list(kind.kind, operation.project.as_ref(), requested_consistency(&target))
         .await
         .map_err(|error| operation.store_error(error.into()))?;
-    let items = records.into_iter().map(|record| record.object).collect();
+    let labels = Query::<ListQuery>::try_from_uri(&target).map(|query| query.0.labels).unwrap_or_default();
+    let selector = LabelSelector::parse(labels.as_deref().unwrap_or_default())
+        .map_err(|problem| operation.error(StatusCode::BAD_REQUEST, ErrorCode::Malformed, problem))?;
+    let items = records
+        .into_iter()
+        .map(|record| record.object)
+        .filter(|object| selector.matches(&object_labels(object)))
+        .collect();
     operation.json(StatusCode::OK, &ListResponse { items })
 }
 
@@ -283,6 +308,12 @@ pub async fn create_object(
         operation.name = Some(name.clone());
     }
     let reference = operation.reference()?;
+    if let UntypedChange::Create { labels, specification, .. } = &change {
+        StoreAdmission { store: state.store.as_ref() }
+            .on_create(&reference, labels, specification)
+            .await
+            .map_err(|refusal| operation.refusal(refusal))?;
+    }
     let created = apply_untyped(state.store.as_ref(), &kind, &reference, change)
         .await
         .map_err(|error| operation.store_error(error))?;
@@ -301,6 +332,10 @@ pub async fn update_object(
     operation.authorize()?;
     let reference = operation.reference()?;
     let change = admit_update(&body).map_err(|error| operation.admission_error(error))?;
+    StoreAdmission { store: state.store.as_ref() }
+        .on_update(&reference)
+        .await
+        .map_err(|refusal| operation.refusal(refusal))?;
     let updated = apply_untyped(state.store.as_ref(), &kind, &reference, change)
         .await
         .map_err(|error| operation.store_error(error))?;
@@ -317,16 +352,10 @@ pub async fn delete_object(
     let operation = Operation::new(kind, Verb::Delete, context, &target, Some(name))?;
     operation.authorize()?;
     let reference = operation.reference()?;
-    let holders = crate::deletion_guard::holders(state.store.as_ref(), &reference)
+    StoreAdmission { store: state.store.as_ref() }
+        .on_delete(&reference)
         .await
-        .map_err(|error| operation.store_error(error))?;
-    if !holders.is_empty() {
-        return Err(operation.error(
-            StatusCode::CONFLICT,
-            ErrorCode::Conflict,
-            format!("{} is in use by {}", reference.name, holders.join(", ")),
-        ));
-    }
+        .map_err(|refusal| operation.refusal(refusal))?;
     let deleting = apply_untyped(state.store.as_ref(), &kind, &reference, UntypedChange::Delete)
         .await
         .map_err(|error| operation.store_error(error))?;

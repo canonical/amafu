@@ -2,7 +2,6 @@ pub mod admission;
 pub mod authentication;
 pub mod authorization;
 pub mod client;
-mod deletion_guard;
 pub mod diagnostics;
 mod handlers;
 pub mod identity;
@@ -13,6 +12,7 @@ pub mod node_wire;
 mod request_chain;
 pub mod routes;
 pub mod server;
+mod store_admission;
 pub mod wire;
 
 pub use authentication::{AuthenticationError, Authenticator, TokenAuthenticator, TokenIdentity};
