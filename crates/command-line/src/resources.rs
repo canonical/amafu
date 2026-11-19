@@ -46,7 +46,7 @@ where
     for object in objects {
         table.add(R::row(object));
     }
-    print!("{}", table.render());
+    crate::output::emit(&table.render())?;
     Ok(())
 }
 

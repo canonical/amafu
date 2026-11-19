@@ -53,7 +53,7 @@ fn print_nodes(nodes: &[Object<Node>], format: OutputFormat) -> anyhow::Result<(
             node.status.software_version.clone(),
         ]);
     }
-    print!("{}", table.render());
+    crate::output::emit(&table.render())?;
     Ok(())
 }
 

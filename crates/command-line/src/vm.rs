@@ -165,7 +165,7 @@ pub fn print_vms(vms: &[Object<Vm>], format: OutputFormat) -> anyhow::Result<()>
             addresses(vm),
         ]);
     }
-    print!("{}", table.render());
+    crate::output::emit(&table.render())?;
     Ok(())
 }
 
@@ -282,7 +282,7 @@ pub async fn run(client: &ApiClient, command: VmCommand, format: OutputFormat) -
             let deleting = client.delete::<Vm>(&name).await?;
             if wait {
                 wait_for_removal(client, &name, timeout).await?;
-                println!("deleted {name}");
+                crate::output::emit_line(format!("deleted {name}"))?;
                 return Ok(());
             }
             print_vms(&[deleting], format)

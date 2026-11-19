@@ -68,7 +68,7 @@ fn print_operations(operations: &[Object<Operation>], format: OutputFormat) -> a
             outcome_text(operation),
         ]);
     }
-    print!("{}", table.render());
+    crate::output::emit(&table.render())?;
     Ok(())
 }
 

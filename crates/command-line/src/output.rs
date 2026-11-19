@@ -1,4 +1,5 @@
-use std::fmt::Write;
+use std::fmt::Write as _;
+use std::io::Write as _;
 
 use serde::Serialize;
 
@@ -43,10 +44,29 @@ impl Table {
     }
 }
 
+pub fn emit(text: &str) -> std::io::Result<()> {
+    let mut standard_output = std::io::stdout().lock();
+    standard_output.write_all(text.as_bytes())?;
+    standard_output.flush()
+}
+
+pub fn emit_line(line: impl std::fmt::Display) -> std::io::Result<()> {
+    emit(&format!("{line}\n"))
+}
+
+#[must_use]
+pub fn is_closed_output(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::BrokenPipe)
+    })
+}
+
 pub fn print_structured(value: &impl Serialize, format: OutputFormat) -> anyhow::Result<()> {
     match format {
-        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(value)?),
-        OutputFormat::Table | OutputFormat::Yaml => print!("{}", serde_yaml_ng::to_string(value)?),
+        OutputFormat::Json => emit_line(serde_json::to_string_pretty(value)?)?,
+        OutputFormat::Table | OutputFormat::Yaml => emit(&serde_yaml_ng::to_string(value)?)?,
     }
     Ok(())
 }
@@ -54,6 +74,14 @@ pub fn print_structured(value: &impl Serialize, format: OutputFormat) -> anyhow:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_closed_pipe_is_recognised_through_the_error_chain() {
+        let closed =
+            anyhow::Error::from(std::io::Error::from(std::io::ErrorKind::BrokenPipe)).context("printing");
+        assert!(is_closed_output(&closed));
+        assert!(!is_closed_output(&anyhow::anyhow!("the API refused the request")));
+    }
 
     #[test]
     fn columns_are_aligned_to_the_widest_cell() {

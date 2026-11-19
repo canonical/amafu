@@ -46,6 +46,9 @@ pub async fn run(arguments: InstallArguments) -> anyhow::Result<()> {
     )
     .await?;
     session.run_to_completion().await?;
-    println!("the cluster is installed; its credentials are in {}", directory.credentials().display());
+    crate::output::emit_line(format!(
+        "the cluster is installed; its credentials are in {}",
+        directory.credentials().display()
+    ))?;
     Ok(())
 }

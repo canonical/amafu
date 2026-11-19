@@ -44,7 +44,7 @@ pub fn run(command: ReleaseCommand) -> anyhow::Result<()> {
         ReleaseCommand::CreateKey { private_key } => {
             let (key, document) = ImageSigningKey::generate()?;
             write_private(&private_key, &document)?;
-            println!("{}", key.public_key_hexadecimal());
+            crate::output::emit_line(key.public_key_hexadecimal())?;
             Ok(())
         }
         ReleaseCommand::Sign { private_key, bundle, version, feature_level, url } => {
@@ -57,7 +57,7 @@ pub fn run(command: ReleaseCommand) -> anyhow::Result<()> {
             let bytes = std::fs::read(&bundle).with_context(|| format!("reading {}", bundle.display()))?;
             let digest = hex::encode(Sha256::digest(&bytes)).parse()?;
             let image = key.sign(&version, FeatureLevel(feature_level), digest, bytes.len() as u64, url);
-            println!("{}", serde_json::to_string_pretty(&image)?);
+            crate::output::emit_line(serde_json::to_string_pretty(&image)?)?;
             Ok(())
         }
     }

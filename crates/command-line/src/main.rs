@@ -115,6 +115,7 @@ fn main() -> ExitCode {
     };
     match runtime.block_on(run(arguments)) {
         Ok(()) => ExitCode::SUCCESS,
+        Err(error) if output::is_closed_output(&error) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("error: {error:#}");
             ExitCode::FAILURE

@@ -65,8 +65,12 @@ async fn cluster_version(client: &ApiClient) -> anyhow::Result<amafu_domain::Obj
     client.get::<ClusterVersion>(CLUSTER_VERSION_NAME).await.context("reading the cluster version")
 }
 
-fn print_plan(plan: &UpgradePlan) {
-    println!("{} to {}", if plan.is_rollback { "roll back" } else { "upgrade" }, plan.image.identity());
+fn print_plan(plan: &UpgradePlan) -> std::io::Result<()> {
+    crate::output::emit_line(format!(
+        "{} to {}",
+        if plan.is_rollback { "roll back" } else { "upgrade" },
+        plan.image.identity()
+    ))?;
     for (index, step) in plan.steps().iter().enumerate() {
         let subject = match step {
             StepSpecification::Evacuate { node }
@@ -76,8 +80,9 @@ fn print_plan(plan: &UpgradePlan) {
             | StepSpecification::Uncordon { node } => node.to_string(),
             _ => String::new(),
         };
-        println!("{:>4}  {:<20} {subject}", index + 1, step.name());
+        crate::output::emit_line(format!("{:>4}  {:<20} {subject}", index + 1, step.name()))?;
     }
+    Ok(())
 }
 
 async fn ensure_no_upgrade_runs(client: &ApiClient) -> anyhow::Result<()> {
@@ -103,7 +108,7 @@ async fn start(
     format: OutputFormat,
 ) -> anyhow::Result<()> {
     if arguments.dry_run {
-        print_plan(&plan);
+        print_plan(&plan)?;
         return Ok(());
     }
     ensure_no_upgrade_runs(client).await?;
@@ -112,7 +117,7 @@ async fn start(
     operation::start(client, &name, &OperationSpecification::upgrade(plan), arguments.wait, format).await
 }
 
-fn print_status(nodes: &[amafu_domain::Object<Node>]) {
+fn print_status(nodes: &[amafu_domain::Object<Node>]) -> std::io::Result<()> {
     let mut table = Table::new(vec!["NODE", "RUNS", "SLOT", "CONFIRMED", "INACTIVE SLOT", "CORDONED"]);
     for node in nodes {
         let boot = node.status.boot.as_ref();
@@ -127,7 +132,7 @@ fn print_status(nodes: &[amafu_domain::Object<Node>]) {
             node.specification.is_cordoned.to_string(),
         ]);
     }
-    print!("{}", table.render());
+    crate::output::emit(&table.render())
 }
 
 pub async fn run(client: &ApiClient, command: UpgradeCommand, format: OutputFormat) -> anyhow::Result<()> {
@@ -176,7 +181,7 @@ pub async fn run(client: &ApiClient, command: UpgradeCommand, format: OutputForm
             if format != OutputFormat::Table {
                 return print_structured(&version, format);
             }
-            println!(
+            crate::output::emit_line(format!(
                 "cluster image {} at feature level {}{}",
                 version.specification.image.identity(),
                 version.specification.finalized_feature_level,
@@ -186,8 +191,8 @@ pub async fn run(client: &ApiClient, command: UpgradeCommand, format: OutputForm
                     .as_ref()
                     .map(|previous| format!(", can go back to {}", previous.identity()))
                     .unwrap_or_default()
-            );
-            print_status(&client.list::<Node>().await?);
+            ))?;
+            print_status(&client.list::<Node>().await?)?;
             Ok(())
         }
     }

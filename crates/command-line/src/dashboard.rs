@@ -105,7 +105,7 @@ pub async fn run(command: DashboardCommand, certificate_authority: Option<&PathB
                 read(&private_key)?.as_bytes(),
             )?;
             let listener = tokio::net::TcpListener::bind(listen).await?;
-            println!("the dashboard is serving on {listen}");
+            crate::output::emit_line(format!("the dashboard is serving on {listen}"))?;
             Err(amafu_api::server::serve(listener, Some(tls), dashboard_router(state)).await.into())
         }
         DashboardCommand::CreateSessionKey { file } => {
@@ -139,9 +139,11 @@ pub async fn run(command: DashboardCommand, certificate_authority: Option<&PathB
             };
             enable_dashboard(&plan, &credentials.authority, provisioner).await?;
             let address = plan.virtual_address.split('/').next().unwrap_or_default();
-            println!("the machines are deployed; waiting for the dashboard to answer on {address}");
+            crate::output::emit_line(format!(
+                "the machines are deployed; waiting for the dashboard to answer on {address}"
+            ))?;
             wait_until_answering(address, &credentials.authority.certificate_pem).await?;
-            println!("the dashboard answers on https://{address}/");
+            crate::output::emit_line(format!("the dashboard answers on https://{address}/"))?;
             Ok(())
         }
     }
