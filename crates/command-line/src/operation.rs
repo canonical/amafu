@@ -75,8 +75,10 @@ fn print_operations(operations: &[Object<Operation>], format: OutputFormat) -> a
 pub fn unique_name(prefix: &str, subject: &str) -> anyhow::Result<ObjectName> {
     let stamp =
         SystemTime::now().duration_since(UNIX_EPOCH).map(|elapsed| elapsed.as_millis()).unwrap_or_default();
-    let subject: String = subject.chars().take(LONGEST_SUBJECT).collect();
-    Ok(ObjectName::new(format!("{prefix}-{subject}-{:x}", stamp & 0xff_ffff_ffff))?)
+    let subject: String = amafu_domain::label_fragment(subject).chars().take(LONGEST_SUBJECT).collect();
+    let stamp = format!("{:x}", stamp & 0xff_ffff_ffff);
+    let parts = [prefix, subject.trim_end_matches('-'), &stamp];
+    Ok(ObjectName::new(parts.iter().filter(|part| !part.is_empty()).copied().collect::<Vec<_>>().join("-"))?)
 }
 
 async fn change(
@@ -97,12 +99,14 @@ pub async fn wait_until_finished(
 ) -> anyhow::Result<Object<Operation>> {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        let operation = client.get::<Operation>(name).await?;
-        if operation.status.is_finished() {
-            return Ok(operation);
-        }
+        let progress = match client.get::<Operation>(name).await {
+            Ok(operation) if operation.status.is_finished() => return Ok(operation),
+            Ok(operation) => current_step(&operation),
+            Err(error) if error.is_transient() => format!("the cluster could not answer: {error}"),
+            Err(error) => return Err(error.into()),
+        };
         if tokio::time::Instant::now() >= deadline {
-            bail!("operation {name} has not finished after {timeout:?}: {}", current_step(&operation));
+            bail!("operation {name} has not finished after {timeout:?}: {progress}");
         }
         tokio::time::sleep(POLL_INTERVAL).await;
     }
@@ -134,8 +138,9 @@ pub async fn migrate(
     wait: Option<Duration>,
     format: OutputFormat,
 ) -> anyhow::Result<()> {
-    let project = client.project().cloned().context("migrating a VM needs --project")?;
-    let reference = VmReference { project, name: ObjectName::new(vm)? };
+    let found = client.get::<Vm>(vm).await?;
+    let project = found.metadata.project.context("the VM belongs to no project")?;
+    let reference = VmReference { project, name: found.metadata.name };
     let specification = OperationSpecification::migration(reference, destination);
     start(client, &unique_name("migrate", vm)?, &specification, wait, format).await
 }
@@ -169,12 +174,34 @@ pub async fn run(client: &ApiClient, command: OperationCommand, format: OutputFo
             &[change(client, &name, |specification| specification.is_paused = false).await?],
             format,
         ),
-        OperationCommand::Cancel { name } => print_operations(
-            &[change(client, &name, |specification| specification.is_cancelled = true).await?],
-            format,
-        ),
+        OperationCommand::Cancel { name } => {
+            let cancelled = change(client, &name, |specification| specification.is_cancelled = true).await?;
+            if !cancelled.status.is_finished() && !cancelled.specification.can_stop_now(&cancelled.status) {
+                eprintln!(
+                    "{name} is past a point of no return; it stops at the first later step it can undo or abandon"
+                );
+            }
+            print_operations(&[cancelled], format)
+        }
         OperationCommand::Delete { name } => {
             print_operations(&[client.delete::<Operation>(&name).await?], format)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn versions_with_dots_name_an_operation() {
+        for version in ["0.1.1", "26.04.1+git3d3a433", "lab-2", "..."] {
+            assert!(unique_name("rollback", version).is_ok(), "{version}");
+        }
+    }
+
+    #[test]
+    fn a_long_subject_still_names_an_operation() {
+        assert!(unique_name("migrate", &"a.".repeat(60)).is_ok());
     }
 }

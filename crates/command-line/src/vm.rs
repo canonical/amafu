@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use amafu_api::ApiClient;
-use amafu_api::client::WatchUpdate;
+use amafu_api::client::{ClientError, WatchUpdate};
 use amafu_domain::kinds::vm::{
     BootSource, NetworkInterfaceSpecification, PowerState, Vm, VmPhase, VmSpecification,
 };
@@ -195,6 +195,17 @@ pub async fn wait_for(
         .map_err(|_| anyhow::anyhow!("timed out after {timeout} seconds"))?
 }
 
+async fn wait_for_removal(client: &ApiClient, name: &str, timeout: u64) -> anyhow::Result<()> {
+    match wait_for(client, name, timeout, |update| matches!(update, WatchUpdate::Removed)).await {
+        Err(error) if is_already_removed(&error) => Ok(()),
+        outcome => outcome,
+    }
+}
+
+fn is_already_removed(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<ClientError>().is_some_and(ClientError::is_not_found)
+}
+
 async fn set_power_state(
     client: &ApiClient,
     name: &str,
@@ -270,11 +281,31 @@ pub async fn run(client: &ApiClient, command: VmCommand, format: OutputFormat) -
         VmCommand::Delete { name, wait, timeout } => {
             let deleting = client.delete::<Vm>(&name).await?;
             if wait {
-                wait_for(client, &name, timeout, |update| matches!(update, WatchUpdate::Removed)).await?;
+                wait_for_removal(client, &name, timeout).await?;
                 println!("deleted {name}");
                 return Ok(());
             }
             print_vms(&[deleting], format)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn refused(status: u16) -> anyhow::Error {
+        ClientError::UnexpectedStatus { status, body: String::new() }.into()
+    }
+
+    #[test]
+    fn a_vm_gone_before_the_watch_starts_counts_as_deleted() {
+        assert!(is_already_removed(&refused(404)));
+    }
+
+    #[test]
+    fn other_failures_are_still_failures() {
+        assert!(!is_already_removed(&refused(503)));
+        assert!(!is_already_removed(&anyhow::anyhow!("timed out after 120 seconds")));
     }
 }
