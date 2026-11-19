@@ -38,6 +38,18 @@ pub struct MarkNodeLost {
     pub node: NodeName,
 }
 
+impl MarkNodeLost {
+    async fn not_expired_yet(&self, context: &OperationContext<'_>) -> Result<ActionError, ActionError> {
+        let lease = lease_of(context.store, &self.node).await?;
+        let started = context.operation.status.current_step.as_ref().map(|progress| progress.started_at);
+        Ok(if started.is_some_and(|started| lease.specification.renewed_at > started) {
+            ActionError::invalid("the node renewed its lease, so it is not lost")
+        } else {
+            ActionError::retryable("the lease has not expired yet by this member's clock")
+        })
+    }
+}
+
 #[async_trait::async_trait]
 impl Step for MarkNodeLost {
     async fn is_complete(&self, context: &OperationContext<'_>) -> Result<bool, ActionError> {
@@ -48,12 +60,17 @@ impl Step for MarkNodeLost {
 
     async fn run(&self, context: &OperationContext<'_>) -> Result<(), ActionError> {
         let now = context.clock.now();
-        let lease = change_node_lease(context.store, &self.node, None, |existing| {
+        let lease = match change_node_lease(context.store, &self.node, None, |existing| {
             let lease = existing.ok_or(LeaseRefusal::Lost)?;
             if lease.is_lost { Ok(lease.clone()) } else { lease.marked_lost(now) }
         })
         .await
-        .map_err(lease_failure)?;
+        {
+            Err(NodeLeaseError::Refused(LeaseRefusal::NotExpired)) => {
+                return Err(self.not_expired_yet(context).await?);
+            }
+            outcome => outcome.map_err(lease_failure)?,
+        };
         let fence = node_fence(&self.node, lease.epoch);
         let reference = ObjectReference::of::<Node>(None, ObjectName::from(&self.node));
         if node_object(context.store, &self.node).await?.is_some() {

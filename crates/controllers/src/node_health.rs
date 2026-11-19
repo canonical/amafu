@@ -4,9 +4,11 @@ use std::time::Duration;
 
 use amafu_domain::kinds::node::{Node, NodePhase, NodeStatus};
 use amafu_domain::kinds::node_lease::{NodeLease, NodeLeaseSpecification};
-use amafu_domain::kinds::operation::{Operation, OperationKind, OperationSpecification, OperationTarget};
+use amafu_domain::kinds::operation::{
+    Operation, OperationKind, OperationOutcome, OperationSpecification, OperationTarget,
+};
 use amafu_domain::{Change, ChangeError, NodeName, Object, ObjectId, ObjectName, ObjectReference};
-use amafu_interfaces::objects::{apply, get, list, update_status};
+use amafu_interfaces::objects::{apply, get, list, remove, update_status};
 use amafu_interfaces::{ActionError, Clock, Consistency, Identifiers, ObjectStoreError, Store};
 use amafu_reconciler::{Controller, KeyMapping, WatchedKind};
 use time::OffsetDateTime;
@@ -134,6 +136,18 @@ impl Controller for NodeHealthController {
 }
 
 impl NodeHealthController {
+    async fn clear_failed(&self, reference: &ObjectReference) -> Result<(), ActionError> {
+        let existing = get::<Operation>(self.store.as_ref(), reference, Consistency::Linearizable).await?;
+        let has_failed = existing.is_some_and(|operation| {
+            matches!(operation.status.outcome, Some(OperationOutcome::Failed { .. }))
+        });
+        if !has_failed {
+            return Ok(());
+        }
+        remove::<Operation>(self.store.as_ref(), reference).await?;
+        Err(ActionError::retryable("a failed recovery of the same lease was cleared; starting it again"))
+    }
+
     async fn start_recovery(&self, node: &NodeName, epoch: u64) -> Result<(), ActionError> {
         let name = ObjectName::new(recovery_name(node, epoch)).map_err(ActionError::invalid)?;
         let reference = ObjectReference::of::<Operation>(None, name.clone());
@@ -154,7 +168,7 @@ impl NodeHealthController {
                 tracing::warn!(%node, epoch, "a node's lease expired; recovering its VMs");
                 Ok(())
             }
-            Err(ObjectStoreError::Change(ChangeError::AlreadyExists)) => Ok(()),
+            Err(ObjectStoreError::Change(ChangeError::AlreadyExists)) => self.clear_failed(&reference).await,
             Err(error) => Err(error.into()),
         }
     }
