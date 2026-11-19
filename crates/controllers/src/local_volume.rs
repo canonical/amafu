@@ -35,9 +35,16 @@ pub struct LocalVolumeObservation {
     pub node: NodeName,
     pub volume: Option<Object<Volume>>,
     pub is_local_disk: bool,
-    pub is_used_here: bool,
+    pub usage: VolumeUsage,
     pub needs_source_image: bool,
     pub cached_source: Option<CachedImage>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VolumeUsage {
+    Unused,
+    Elsewhere,
+    Here,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,14 +61,14 @@ pub fn plan_local_volume(observation: &LocalVolumeObservation) -> Vec<LocalVolum
     };
     match &volume.status.provisioned {
         Some(provisioned) if provisioned.node.as_ref() == Some(&observation.node) => {
-            if volume.metadata.is_deleting && !observation.is_used_here {
+            if volume.metadata.is_deleting && observation.usage == VolumeUsage::Unused {
                 vec![LocalVolumeAction::Delete(provisioned.clone()), LocalVolumeAction::ReportReleased]
             } else {
                 Vec::new()
             }
         }
         Some(_) => Vec::new(),
-        None if volume.metadata.is_deleting || !observation.is_used_here => Vec::new(),
+        None if volume.metadata.is_deleting || observation.usage != VolumeUsage::Here => Vec::new(),
         None if observation.needs_source_image && observation.cached_source.is_none() => Vec::new(),
         None => vec![LocalVolumeAction::Create(VolumeRequest {
             volume_id: volume.metadata.id,
@@ -113,7 +120,7 @@ impl Controller for LocalVolumeController {
             node: self.node.clone(),
             volume: None,
             is_local_disk: false,
-            is_used_here: false,
+            usage: VolumeUsage::Unused,
             needs_source_image: false,
             cached_source: None,
         };
@@ -130,10 +137,15 @@ impl Controller for LocalVolumeController {
             .is_some_and(|backend| backend.specification.provider == StorageProviderSpecification::LocalDisk);
         if observation.is_local_disk {
             let vms = list::<Vm>(store, volume.metadata.project.as_ref(), Consistency::Linearizable).await?;
-            observation.is_used_here = vms.iter().any(|vm| {
-                vm.status.node.as_ref() == Some(&self.node)
-                    && vm.specification.volumes.contains(&volume.metadata.name)
-            });
+            let users: Vec<&Object<Vm>> =
+                vms.iter().filter(|vm| vm.specification.volumes.contains(&volume.metadata.name)).collect();
+            observation.usage = if users.iter().any(|vm| vm.status.node.as_ref() == Some(&self.node)) {
+                VolumeUsage::Here
+            } else if users.is_empty() {
+                VolumeUsage::Unused
+            } else {
+                VolumeUsage::Elsewhere
+            };
             observation.needs_source_image = volume.specification.source_image.is_some();
             observation.cached_source = self.source_image(&volume).await?;
         }
@@ -193,7 +205,7 @@ mod tests {
             node: here(),
             volume: Some(volume),
             is_local_disk: true,
-            is_used_here: true,
+            usage: VolumeUsage::Here,
             needs_source_image: false,
             cached_source: None,
         }
@@ -227,7 +239,7 @@ mod tests {
             plan_local_volume(&observation(volume())).as_slice(),
             [LocalVolumeAction::Create(_)]
         ));
-        let unused = LocalVolumeObservation { is_used_here: false, ..observation(volume()) };
+        let unused = LocalVolumeObservation { usage: VolumeUsage::Unused, ..observation(volume()) };
         assert_eq!(plan_local_volume(&unused), Vec::new());
         let not_local = LocalVolumeObservation { is_local_disk: false, ..observation(volume()) };
         assert_eq!(plan_local_volume(&not_local), Vec::new());
@@ -253,7 +265,7 @@ mod tests {
         deleting.metadata.is_deleting = true;
         let in_use = observation(deleting.clone());
         assert_eq!(plan_local_volume(&in_use), Vec::new());
-        let unused = LocalVolumeObservation { is_used_here: false, ..in_use };
+        let unused = LocalVolumeObservation { usage: VolumeUsage::Unused, ..in_use };
         assert!(matches!(
             plan_local_volume(&unused).as_slice(),
             [LocalVolumeAction::Delete(_), LocalVolumeAction::ReportReleased]
@@ -261,8 +273,20 @@ mod tests {
         let mut elsewhere = provisioned_on("node-2");
         elsewhere.metadata.is_deleting = true;
         assert_eq!(
-            plan_local_volume(&LocalVolumeObservation { is_used_here: false, ..observation(elsewhere) }),
+            plan_local_volume(&LocalVolumeObservation {
+                usage: VolumeUsage::Unused,
+                ..observation(elsewhere)
+            }),
             Vec::new()
         );
+    }
+
+    #[test]
+    fn a_deleted_volume_survives_while_a_vm_still_names_it_even_unassigned() {
+        let mut deleting = provisioned_on("node-1");
+        deleting.metadata.is_deleting = true;
+        let stopped_and_unassigned =
+            LocalVolumeObservation { usage: VolumeUsage::Elsewhere, ..observation(deleting) };
+        assert_eq!(plan_local_volume(&stopped_and_unassigned), Vec::new());
     }
 }
