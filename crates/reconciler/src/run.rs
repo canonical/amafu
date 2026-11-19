@@ -125,7 +125,7 @@ impl<C: Controller> Loop<'_, C> {
                 }
                 NextAttempt::WithBackoff => {
                     let failures = self.queue.record_failure(&key);
-                    self.queue.schedule(key, now + self.settings.backoff_after(failures));
+                    self.queue.back_off(key, now + self.settings.backoff_after(failures));
                 }
                 NextAttempt::WhenSpecificationChanges(_) => {
                     self.queue.record_success(&key);
