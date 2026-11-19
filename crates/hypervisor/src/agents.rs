@@ -9,7 +9,7 @@ use tokio::net::UnixStream;
 use crate::runtime::RuntimeDirectory;
 
 const EXCHANGE_TIMEOUT: Duration = Duration::from_secs(3);
-const CONNECTION_TIMEOUT: Duration = Duration::from_millis(300);
+const CONNECTION_TIMEOUT: Duration = Duration::from_millis(1500);
 const ACCEPTED_PREFIX: &str = "OK ";
 
 pub struct HybridVsockAgents {
@@ -156,7 +156,7 @@ mod tests {
         let started = std::time::Instant::now();
         let failure = agents.workload(&vm_id).await.unwrap_err();
         assert!(failure.is_retryable());
-        assert!(started.elapsed() < EXCHANGE_TIMEOUT / 2);
+        assert!(started.elapsed() < EXCHANGE_TIMEOUT);
         silent_vmm.abort();
     }
 }
