@@ -55,7 +55,8 @@ fn step_age(context: &OperationContext<'_>) -> Duration {
         .unwrap_or_default()
 }
 
-fn cluster_version_reference() -> ObjectReference {
+#[must_use]
+pub fn cluster_version_reference() -> ObjectReference {
     ObjectReference::of::<ClusterVersion>(None, cluster_version_name())
 }
 

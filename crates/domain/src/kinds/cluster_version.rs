@@ -49,6 +49,12 @@ impl ClusterVersionSpecification {
     }
 
     #[must_use]
+    pub fn reverted(&self) -> Option<Self> {
+        let previous = self.previous_image.clone()?;
+        Some(Self { image: previous, previous_image: None, ..self.clone() })
+    }
+
+    #[must_use]
     pub fn finalized(&self) -> Self {
         Self {
             previous_image: None,

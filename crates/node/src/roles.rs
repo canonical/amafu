@@ -18,6 +18,7 @@ use amafu_controllers::{
     FloatingIpController, ImageController, LocalVolumeController, NetworkController, NodeController,
     NodeHealthController, NodeIdentity, NodeNetworkController, OperationSteps, OperationsController,
     SchedulerController, SecurityGroupController, StorageBackendController, VolumeController,
+    cluster_image::ClusterImageController,
 };
 use amafu_domain::NodeName;
 use amafu_domain::ObjectId;
@@ -474,6 +475,14 @@ fn core_roles(
         roles,
         "certificate-revocation",
         move |_| CertificateRevocationController::new(Arc::clone(&revocation_store)),
+        services,
+        settings,
+    );
+    let image_store = store();
+    singleton_role(
+        roles,
+        "cluster-image",
+        move |_| ClusterImageController::new(Arc::clone(&image_store)),
         services,
         settings,
     );
