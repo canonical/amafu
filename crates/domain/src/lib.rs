@@ -18,7 +18,7 @@ pub mod validation;
 pub use addressing::{InvalidAddress, Ipv4Network, MacAddress, SegmentId};
 pub use change::{Change, ChangeError, apply_change, confirm_removal};
 pub use digest::{InvalidReference, OciReference, Sha256Digest};
-pub use name::{InvalidName, NodeName, ObjectName, ProjectName, ZoneName};
+pub use name::{InvalidName, NodeName, ObjectName, ProjectName, ZoneName, label_fragment};
 pub use object::{Metadata, Object, ObjectReference};
 pub use object_id::ObjectId;
 pub use resource::{Resource, Scope};

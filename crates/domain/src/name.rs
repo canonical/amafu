@@ -34,6 +34,19 @@ fn check_label(value: &str) -> Result<(), InvalidName> {
     Ok(())
 }
 
+#[must_use]
+pub fn label_fragment(text: &str) -> String {
+    let mut fragment = String::with_capacity(text.len());
+    for character in text.chars().map(|character| character.to_ascii_lowercase()) {
+        if character.is_ascii_lowercase() || character.is_ascii_digit() {
+            fragment.push(character);
+        } else if !fragment.is_empty() && !fragment.ends_with('-') {
+            fragment.push('-');
+        }
+    }
+    fragment.trim_end_matches('-').to_owned()
+}
+
 macro_rules! label_name {
     ($type_name:ident) => {
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -115,6 +128,23 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    #[test]
+    fn a_fragment_keeps_only_what_a_name_allows() {
+        assert_eq!(label_fragment("0.1.1"), "0-1-1");
+        assert_eq!(label_fragment("26.04.1+git3d3a433"), "26-04-1-git3d3a433");
+        assert_eq!(label_fragment("--Lab_2--"), "lab-2");
+        assert_eq!(label_fragment("..."), "");
+    }
+
+    proptest! {
+        #[test]
+        fn any_text_becomes_a_valid_name_after_a_prefix(text in ".{0,80}") {
+            let name = format!("upgrade-{}", label_fragment(&text));
+            let name = name.trim_end_matches('-');
+            prop_assert!(name.len() > 63 || ObjectName::new(name).is_ok(), "{name}");
+        }
+    }
 
     #[test]
     fn accepts_simple_labels() {

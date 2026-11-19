@@ -89,9 +89,9 @@ pub fn prepare(
     std::fs::create_dir_all(work)?;
     let source = built.join(BUNDLE_FILE);
     let variants = [
-        ("lab-1", "installed.tar", Change::Release(String::from("lab-1"))),
-        ("lab-2", "upgrade.tar", Change::Release(String::from("lab-2"))),
-        ("lab-2-broken", "broken.tar", Change::BreakInitramfs),
+        ("26.11.1", "installed.tar", Change::Release(String::from("26.11.1"))),
+        ("26.11.2", "upgrade.tar", Change::Release(String::from("26.11.2"))),
+        ("26.11.2+broken", "broken.tar", Change::BreakInitramfs),
     ];
     let mut files = Vec::new();
     let mut signed = Vec::new();
