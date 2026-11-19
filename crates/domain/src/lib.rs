@@ -12,6 +12,7 @@ pub mod object_id;
 pub mod registry;
 pub mod resource;
 pub mod slice;
+pub mod step_plan;
 pub mod upgrade;
 pub mod validation;
 

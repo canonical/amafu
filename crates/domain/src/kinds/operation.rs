@@ -8,6 +8,7 @@ use crate::install::InstallPlan;
 use crate::name::{NodeName, ObjectName, ProjectName};
 use crate::node_image::NodeImage;
 use crate::resource::{Resource, Scope};
+use crate::step_plan::{PlannedStep, StepPlan};
 use crate::upgrade::UpgradePlan;
 use crate::validation::{Validate, ValidationError};
 
@@ -466,20 +467,33 @@ impl OperationStatus {
     }
 }
 
-impl OperationSpecification {
-    #[must_use]
-    pub fn can_undo_first(&self, steps: usize) -> bool {
-        self.steps.iter().take(steps).all(StepSpecification::can_be_undone)
+impl PlannedStep for StepSpecification {
+    fn name(&self) -> &'static str {
+        StepSpecification::name(self)
     }
 
-    #[must_use]
-    pub fn can_abandon_at(&self, index: usize) -> bool {
-        self.steps.get(index).is_some_and(StepSpecification::can_be_abandoned)
+    fn can_be_undone(&self) -> bool {
+        StepSpecification::can_be_undone(self)
     }
 
-    #[must_use]
-    pub fn can_stop_now(&self, status: &OperationStatus) -> bool {
-        self.can_undo_first(status.touched_steps()) || self.can_abandon_at(status.completed_steps)
+    fn can_be_abandoned(&self) -> bool {
+        StepSpecification::can_be_abandoned(self)
+    }
+}
+
+impl StepPlan for OperationSpecification {
+    type Step = StepSpecification;
+
+    fn steps(&self) -> &[StepSpecification] {
+        &self.steps
+    }
+
+    fn is_paused(&self) -> bool {
+        self.is_paused
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.is_cancelled
     }
 }
 

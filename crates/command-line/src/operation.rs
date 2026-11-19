@@ -3,6 +3,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use amafu_api::ApiClient;
 use amafu_domain::kinds::operation::{Operation, OperationOutcome, OperationSpecification, VmReference};
 use amafu_domain::kinds::vm::Vm;
+use amafu_domain::step_plan::StepPlan;
 use amafu_domain::{NodeName, Object, ObjectName};
 use anyhow::{Context, bail};
 use clap::Subcommand;
