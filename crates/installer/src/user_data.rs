@@ -38,6 +38,7 @@ head -c "$((1024 - $(stat --format=%s "${work}/esp/amafu/grubenv")))" /dev/zero 
 umount "${work}/esp"
 sync
 put_amafu_first() {
+    command -v efibootmgr > /dev/null || DEBIAN_FRONTEND=noninteractive apt-get install --yes --quiet efibootmgr
     for entry in $(efibootmgr | awk '/ Amafu$/ { print substr($1, 5, 4) }'); do
         efibootmgr --quiet --delete-bootnum --bootnum "${entry}"
     done
@@ -46,7 +47,10 @@ put_amafu_first() {
     others="$(efibootmgr | awk -F': ' '/^BootOrder/ { print $2 }' | tr ',' '\n' | grep -v "^${amafu_entry}$" | paste -sd, -)"
     efibootmgr --quiet --bootorder "${amafu_entry}${others:+,${others}}"
 }
-put_amafu_first || echo "amafu installer: the firmware boot order could not be changed; the disk must come before the network"
+if ! put_amafu_first; then
+    echo "amafu installer: the firmware boot order could not be changed, so ${AMAFU_NODE} would boot this installer again"
+    exit 1
+fi
 echo "amafu installer: ${AMAFU_NODE} is written; restarting into it"
 systemd-run --on-active=15 --unit amafu-restart systemctl reboot
 "#;
@@ -86,6 +90,19 @@ pub fn installer_script(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_boot_entry_is_set_with_a_tool_the_installer_brings() {
+        let install = SCRIPT.find("apt-get install --yes --quiet efibootmgr").unwrap();
+        let first_use = SCRIPT.find("efibootmgr |").unwrap();
+        assert!(install < first_use);
+    }
+
+    #[test]
+    fn a_boot_order_that_cannot_be_set_stops_the_install() {
+        assert!(SCRIPT.contains("if ! put_amafu_first; then"));
+        assert!(!SCRIPT.contains("put_amafu_first ||"));
+    }
 
     #[test]
     fn values_are_quoted_so_the_shell_cannot_split_them() {
