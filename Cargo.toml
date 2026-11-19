@@ -21,6 +21,7 @@ amafu-storage = { path = "crates/storage" }
 amafu-guest-agent = { path = "crates/guest-agent" }
 amafu-hypervisor = { path = "crates/hypervisor" }
 amafu-installer = { path = "crates/installer" }
+amafu-token-issuer = { path = "crates/token-issuer" }
 amafu-api = { path = "crates/api" }
 amafu-audit-export = { path = "crates/audit-export" }
 amafu-boot-slots = { path = "crates/boot-slots" }
