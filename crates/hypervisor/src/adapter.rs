@@ -25,7 +25,7 @@ use crate::process::{is_running_vm_process, send_signal};
 use crate::runtime::{RuntimeDirectory, VmDirectory};
 use crate::sandbox::{
     FIRST_VM_USER_ID, Restrictions, VM_GROUP_ID, allocate_user_id, create_cgroup, distinct_paths, give_to,
-    place_in_cgroup, remove_cgroup,
+    is_vm_identity, owner_of, place_in_cgroup, remove_cgroup,
 };
 use crate::sending::{self, SendJob};
 
@@ -206,10 +206,22 @@ impl CloudHypervisor {
     ) -> Result<(), ActionError> {
         let restrictions = self.restrictions(&plan, directory);
         let launch = &plan.launch;
-        let user_id = allocate_user_id(&self.settings.runtime, &launch.vm_id)
+        let writable: Vec<_> = launch.disks.iter().filter(|disk| !disk.is_read_only).collect();
+        let owners: Vec<u32> = writable
+            .iter()
+            .filter_map(|disk| owner_of(&disk.path))
+            .filter(|owner| is_vm_identity(*owner))
+            .collect();
+        let previous = owners.first().copied();
+        let user_id = allocate_user_id(&self.settings.runtime, &launch.vm_id, previous)
             .map_err(io_failure("allocating a VM identity"))?;
+        if matches!(arrival, Arrival::Receive) && owners.iter().any(|owner| *owner != user_id) {
+            return Err(ActionError::invalid(String::from(
+                "the VM's shared disks belong to an identity that is taken on this node",
+            )));
+        }
         prepare_directory(directory, user_id).map_err(io_failure("preparing the VM directory"))?;
-        for disk in launch.disks.iter().filter(|disk| !disk.is_read_only) {
+        for disk in writable {
             give_to(&disk.path, user_id).map_err(io_failure("handing a disk to the VM"))?;
             chmod(&disk.path, Mode::from_raw_mode(PRIVATE_FILE_MODE))
                 .map_err(|error| ActionError::retryable(format!("protecting a disk: {error}")))?;

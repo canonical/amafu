@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use amafu_domain::kinds::image::Image;
 use amafu_domain::kinds::storage_backend::StorageBackend;
-use amafu_domain::kinds::vm::{Vm, VmMigration, VmPhase, VmStatus};
+use amafu_domain::kinds::vm::{MigrationPhase, Vm, VmMigration, VmPhase, VmStatus};
 use amafu_domain::kinds::volume::Volume;
 use amafu_domain::{Change, NodeName, Object, ObjectId, ObjectReference};
 use amafu_interfaces::objects::{apply, get, list, remove, update_status};
@@ -101,6 +101,23 @@ impl ComputeController {
             let current = vm.status.active_migration()?;
             let is_same = current.attempt == migration.attempt && current.phase < migration.phase;
             is_same.then(|| VmStatus { migration: Some(migration.clone()), ..vm.status.clone() })
+        })
+        .await?;
+        Ok(())
+    }
+
+    async fn fail_arrival(&self, key: &ComputeKey, reason: &str) -> Result<(), ActionError> {
+        update_status::<Vm>(self.store(), vm_reference(key)?, |vm| {
+            let current = vm
+                .status
+                .active_migration()
+                .filter(|migration| migration.phase == MigrationPhase::Preparing)?;
+            let failed = VmMigration {
+                phase: MigrationPhase::Failed,
+                message: Some(format!("the destination cannot take the VM: {reason}")),
+                ..current.clone()
+            };
+            Some(VmStatus { migration: Some(failed), ..vm.status.clone() })
         })
         .await?;
         Ok(())
@@ -312,7 +329,13 @@ impl Controller for ComputeController {
             ComputeAction::ReceiveVm(_) | ComputeAction::SendVm { .. } if !self.holds_lease() => {
                 Err(ActionError::retryable("the node holds no valid lease, so it moves no VM"))
             }
-            ComputeAction::ReceiveVm(plan) => self.receive(*plan).await,
+            ComputeAction::ReceiveVm(plan) => match self.receive(*plan).await {
+                Err(ActionError::Invalid(reason)) => {
+                    self.fail_arrival(key, &reason).await?;
+                    Err(ActionError::Invalid(reason))
+                }
+                outcome => outcome,
+            },
             ComputeAction::SendVm { vm_id, target } => self.services.hypervisor.send(&vm_id, &target).await,
             ComputeAction::ReportMigration(migration) => self.report_migration(key, *migration).await,
             ComputeAction::StartWorkload { vm_id, workload } => {

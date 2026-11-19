@@ -49,7 +49,11 @@ pub fn prepare_kvm_access() -> io::Result<()> {
     chmod(KVM_DEVICE, Mode::from_raw_mode(0o660)).map_err(Into::into)
 }
 
-pub fn allocate_user_id(runtime: &RuntimeDirectory, vm_id: &ObjectId) -> io::Result<u32> {
+pub fn allocate_user_id(
+    runtime: &RuntimeDirectory,
+    vm_id: &ObjectId,
+    previous: Option<u32>,
+) -> io::Result<u32> {
     let mut taken: BTreeMap<u32, ObjectId> = BTreeMap::new();
     for (existing, directory) in runtime.vms()? {
         if let Some(user_id) = directory.user_id() {
@@ -59,9 +63,33 @@ pub fn allocate_user_id(runtime: &RuntimeDirectory, vm_id: &ObjectId) -> io::Res
             taken.insert(user_id, existing);
         }
     }
-    (FIRST_VM_USER_ID..FIRST_VM_USER_ID + MAXIMUM_VMS)
+    previous
+        .filter(|user_id| is_vm_identity(*user_id))
+        .into_iter()
+        .chain(std::iter::once(preferred_user_id(vm_id)))
+        .chain(FIRST_VM_USER_ID..FIRST_VM_USER_ID + MAXIMUM_VMS)
         .find(|candidate| !taken.contains_key(candidate))
         .ok_or_else(|| io::Error::other("every VM identity is in use"))
+}
+
+#[must_use]
+pub fn preferred_user_id(vm_id: &ObjectId) -> u32 {
+    let spread = vm_id
+        .to_string()
+        .bytes()
+        .fold(0_u32, |hash, byte| hash.wrapping_mul(31).wrapping_add(u32::from(byte)));
+    FIRST_VM_USER_ID + spread % MAXIMUM_VMS
+}
+
+#[must_use]
+pub fn is_vm_identity(user_id: u32) -> bool {
+    (FIRST_VM_USER_ID..FIRST_VM_USER_ID + MAXIMUM_VMS).contains(&user_id)
+}
+
+#[must_use]
+pub fn owner_of(path: &Path) -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).ok().map(|metadata| metadata.uid())
 }
 
 pub fn give_to(path: &Path, user_id: u32) -> io::Result<()> {
@@ -254,12 +282,47 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let runtime = RuntimeDirectory::new(root.path());
         let first = ObjectId::from_uuid(uuid::Uuid::from_u128(1));
-        assert_eq!(allocate_user_id(&runtime, &first).unwrap(), FIRST_VM_USER_ID);
+        let preferred = preferred_user_id(&first);
+        assert_eq!(allocate_user_id(&runtime, &first, None).unwrap(), preferred);
         let directory = runtime.vm(&first);
         std::fs::create_dir_all(directory.path()).unwrap();
-        directory.record_user_id(FIRST_VM_USER_ID).unwrap();
-        assert_eq!(allocate_user_id(&runtime, &first).unwrap(), FIRST_VM_USER_ID);
+        directory.record_user_id(preferred).unwrap();
+        assert_eq!(allocate_user_id(&runtime, &first, None).unwrap(), preferred);
         let second = ObjectId::from_uuid(uuid::Uuid::from_u128(2));
-        assert_eq!(allocate_user_id(&runtime, &second).unwrap(), FIRST_VM_USER_ID + 1);
+        assert_eq!(allocate_user_id(&runtime, &second, None).unwrap(), preferred_user_id(&second));
+    }
+
+    #[test]
+    fn every_node_prefers_the_same_identity_for_a_vm_and_vms_spread_out() {
+        let identities: std::collections::BTreeSet<u32> = (0..200_u128)
+            .map(|id| preferred_user_id(&ObjectId::from_uuid(uuid::Uuid::from_u128(id))))
+            .collect();
+        assert!(identities.iter().all(|user_id| is_vm_identity(*user_id)));
+        assert!(identities.len() > 190);
+    }
+
+    #[test]
+    fn a_vm_keeps_the_identity_that_owns_its_disks_on_another_node() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = RuntimeDirectory::new(root.path());
+        let arriving = ObjectId::from_uuid(uuid::Uuid::from_u128(7));
+        assert_eq!(
+            allocate_user_id(&runtime, &arriving, Some(FIRST_VM_USER_ID + 41)).unwrap(),
+            FIRST_VM_USER_ID + 41
+        );
+    }
+
+    #[test]
+    fn an_identity_in_use_here_is_not_shared_and_outsiders_are_ignored() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = RuntimeDirectory::new(root.path());
+        let resident = ObjectId::from_uuid(uuid::Uuid::from_u128(1));
+        let directory = runtime.vm(&resident);
+        std::fs::create_dir_all(directory.path()).unwrap();
+        directory.record_user_id(FIRST_VM_USER_ID).unwrap();
+        let arriving = ObjectId::from_uuid(uuid::Uuid::from_u128(2));
+        let preferred = preferred_user_id(&arriving);
+        assert_eq!(allocate_user_id(&runtime, &arriving, Some(FIRST_VM_USER_ID)).unwrap(), preferred);
+        assert_eq!(allocate_user_id(&runtime, &arriving, Some(0)).unwrap(), preferred);
     }
 }
