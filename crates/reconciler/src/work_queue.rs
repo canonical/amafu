@@ -7,7 +7,7 @@ pub struct WorkQueue<Key: Ord + Clone> {
     ready_at: BTreeMap<Key, OffsetDateTime>,
     parked: BTreeSet<Key>,
     consecutive_failures: BTreeMap<Key, u32>,
-    backing_off_until: BTreeMap<Key, OffsetDateTime>,
+    events_wait_until: BTreeMap<Key, OffsetDateTime>,
 }
 
 impl<Key: Ord + Clone> Default for WorkQueue<Key> {
@@ -16,7 +16,7 @@ impl<Key: Ord + Clone> Default for WorkQueue<Key> {
             ready_at: BTreeMap::new(),
             parked: BTreeSet::new(),
             consecutive_failures: BTreeMap::new(),
-            backing_off_until: BTreeMap::new(),
+            events_wait_until: BTreeMap::new(),
         }
     }
 }
@@ -29,14 +29,14 @@ impl<Key: Ord + Clone> WorkQueue<Key> {
 
     pub fn notify_changed(&mut self, key: Key, now: OffsetDateTime) {
         self.parked.remove(&key);
-        let earliest = self.backing_off_until.get(&key).map_or(now, |until| (*until).max(now));
+        let earliest = self.events_wait_until.get(&key).map_or(now, |until| (*until).max(now));
         let ready_at = self.ready_at.entry(key).or_insert(earliest);
         *ready_at = (*ready_at).min(earliest);
     }
 
-    pub fn back_off(&mut self, key: Key, until: OffsetDateTime) {
-        self.backing_off_until.insert(key.clone(), until);
-        self.schedule(key, until);
+    pub fn back_off(&mut self, key: Key, retry_at: OffsetDateTime, events_from: OffsetDateTime) {
+        self.events_wait_until.insert(key.clone(), events_from.min(retry_at));
+        self.schedule(key, retry_at);
     }
 
     pub fn schedule(&mut self, key: Key, at: OffsetDateTime) {
@@ -76,7 +76,7 @@ impl<Key: Ord + Clone> WorkQueue<Key> {
 
     pub fn record_success(&mut self, key: &Key) {
         self.consecutive_failures.remove(key);
-        self.backing_off_until.remove(key);
+        self.events_wait_until.remove(key);
     }
 
     #[must_use]
@@ -140,10 +140,18 @@ mod tests {
     }
 
     #[test]
-    fn a_change_does_not_cut_a_backoff_short() {
+    fn a_change_cuts_a_backoff_short_only_after_the_event_spacing() {
         let mut queue = WorkQueue::new();
-        queue.back_off("operation", at(30));
+        queue.back_off("operation", at(30), at(2));
         queue.notify_changed("operation", at(1));
+        assert_eq!(queue.pop_ready(at(1)), None);
+        assert_eq!(queue.pop_ready(at(2)), Some("operation"));
+    }
+
+    #[test]
+    fn without_a_change_the_key_waits_for_its_backoff() {
+        let mut queue = WorkQueue::new();
+        queue.back_off("operation", at(30), at(2));
         assert_eq!(queue.pop_ready(at(29)), None);
         assert_eq!(queue.pop_ready(at(30)), Some("operation"));
     }
@@ -151,7 +159,7 @@ mod tests {
     #[test]
     fn a_success_ends_the_backoff() {
         let mut queue = WorkQueue::new();
-        queue.back_off("operation", at(30));
+        queue.back_off("operation", at(30), at(2));
         assert_eq!(queue.pop_ready(at(30)), Some("operation"));
         queue.record_success(&"operation");
         queue.notify_changed("operation", at(31));

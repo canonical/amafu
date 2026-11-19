@@ -4,6 +4,7 @@ use std::time::Duration;
 pub struct ReconcilerSettings {
     pub initial_backoff: Duration,
     pub maximum_backoff: Duration,
+    pub event_spacing_after_failure: Duration,
     pub periodic_resynchronization: Duration,
     pub resynchronization_spread: Duration,
 }
@@ -13,6 +14,7 @@ impl Default for ReconcilerSettings {
         Self {
             initial_backoff: Duration::from_millis(100),
             maximum_backoff: Duration::from_secs(30),
+            event_spacing_after_failure: Duration::from_secs(1),
             periodic_resynchronization: Duration::from_secs(30),
             resynchronization_spread: Duration::ZERO,
         }

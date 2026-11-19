@@ -349,6 +349,7 @@ impl Controller for SchedulerController {
         let store = self.store.as_ref();
         match action {
             SchedulingAction::Assign { vm, node, interfaces, observed_generation } => {
+                tracing::info!(vm = %vm, %node, "placing a VM");
                 let status = VmStatus {
                     phase: VmPhase::Scheduled,
                     node: Some(node),
