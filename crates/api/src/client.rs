@@ -47,6 +47,11 @@ impl ClientError {
     }
 
     #[must_use]
+    pub fn is_transient(&self) -> bool {
+        matches!(self, Self::Transport(_)) || self.status() == Some(StatusCode::SERVICE_UNAVAILABLE.as_u16())
+    }
+
+    #[must_use]
     pub fn is_conflict(&self) -> bool {
         self.status() == Some(StatusCode::CONFLICT.as_u16())
     }
@@ -183,6 +188,49 @@ pub struct RawResponse {
 pub enum WatchUpdate<R: Resource> {
     Changed(Object<R>),
     Removed,
+}
+
+pub struct FailoverTransport {
+    transports: Vec<Arc<dyn Transport>>,
+    preferred: std::sync::atomic::AtomicUsize,
+}
+
+impl FailoverTransport {
+    #[must_use]
+    pub fn new(transports: Vec<Arc<dyn Transport>>) -> Self {
+        Self { transports, preferred: std::sync::atomic::AtomicUsize::new(0) }
+    }
+}
+
+fn copy_of(request: &Request<Bytes>) -> Request<Bytes> {
+    let mut copy = Request::new(request.body().clone());
+    *copy.method_mut() = request.method().clone();
+    *copy.uri_mut() = request.uri().clone();
+    *copy.headers_mut() = request.headers().clone();
+    copy
+}
+
+#[async_trait::async_trait]
+impl Transport for FailoverTransport {
+    async fn send(&self, request: Request<Bytes>) -> Result<Response<ResponseBody>, ClientError> {
+        use std::sync::atomic::Ordering;
+        let count = self.transports.len();
+        let first = self.preferred.load(Ordering::Relaxed);
+        let attempts = if request.method() == Method::GET { count } else { 1 };
+        let mut last_error = ClientError::Transport(String::from("no endpoint is configured"));
+        for offset in 0..attempts {
+            let index = (first + offset) % count.max(1);
+            let Some(transport) = self.transports.get(index) else { break };
+            match transport.send(copy_of(&request)).await {
+                Err(error @ ClientError::Transport(_)) => last_error = error,
+                answered => {
+                    self.preferred.store(index, Ordering::Relaxed);
+                    return answered;
+                }
+            }
+        }
+        Err(last_error)
+    }
 }
 
 #[derive(Clone)]
@@ -406,4 +454,65 @@ fn watch_updates<R: Resource>(body: ResponseBody) -> BoxStream<'static, Result<W
         }
     })
     .boxed()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+
+    struct Unreachable(AtomicUsize);
+
+    #[async_trait::async_trait]
+    impl Transport for Unreachable {
+        async fn send(&self, _request: Request<Bytes>) -> Result<Response<ResponseBody>, ClientError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Err(ClientError::Transport(String::from("connection refused")))
+        }
+    }
+
+    fn answering() -> Arc<dyn Transport> {
+        Arc::new(RouterTransport::new(
+            axum::Router::new().route("/v1/ping", axum::routing::any(|| async { "pong" })),
+        ))
+    }
+
+    fn request(method: Method) -> Request<Bytes> {
+        Request::builder().method(method).uri("/v1/ping").body(Bytes::new()).unwrap()
+    }
+
+    #[test]
+    fn an_unreachable_member_or_a_store_without_leader_is_transient() {
+        assert!(ClientError::Transport(String::from("refused")).is_transient());
+        assert!(ClientError::UnexpectedStatus { status: 503, body: String::new() }.is_transient());
+        assert!(!ClientError::UnexpectedStatus { status: 404, body: String::new() }.is_transient());
+    }
+
+    #[tokio::test]
+    async fn a_read_moves_to_the_next_member_and_stays_there() {
+        let dead = Arc::new(Unreachable(AtomicUsize::new(0)));
+        let failover = FailoverTransport::new(vec![dead.clone(), answering()]);
+        for _ in 0..3 {
+            assert_eq!(failover.send(request(Method::GET)).await.unwrap().status(), StatusCode::OK);
+        }
+        assert_eq!(dead.0.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_write_is_never_sent_twice() {
+        let dead = Arc::new(Unreachable(AtomicUsize::new(0)));
+        let failover = FailoverTransport::new(vec![dead.clone(), answering()]);
+        assert!(matches!(failover.send(request(Method::POST)).await, Err(ClientError::Transport(_))));
+        assert_eq!(dead.0.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn every_member_down_reports_the_last_failure() {
+        let failover = FailoverTransport::new(vec![
+            Arc::new(Unreachable(AtomicUsize::new(0))),
+            Arc::new(Unreachable(AtomicUsize::new(0))),
+        ]);
+        assert!(matches!(failover.send(request(Method::GET)).await, Err(ClientError::Transport(_))));
+    }
 }

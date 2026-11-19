@@ -16,7 +16,8 @@ pub mod wire;
 
 pub use authentication::{AuthenticationError, Authenticator, TokenAuthenticator, TokenIdentity};
 pub use client::{
-    ApiClient, ClientError, ClientIdentity, HttpTransport, RawResponse, RouterTransport, Transport,
+    ApiClient, ClientError, ClientIdentity, FailoverTransport, HttpTransport, RawResponse, RouterTransport,
+    Transport,
 };
 pub use identity::Principal;
 pub use node_client::NodeClient;

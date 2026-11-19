@@ -1,14 +1,20 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use amafu_api::{ApiClient, HttpTransport};
+use amafu_api::{ApiClient, FailoverTransport, HttpTransport, Transport};
 use amafu_domain::ProjectName;
 use anyhow::Context;
 use clap::Args;
 
 #[derive(Args)]
 pub struct ConnectionArguments {
-    #[arg(long, global = true, env = "AMAFU_ENDPOINT", default_value = "https://127.0.0.1:7443")]
+    #[arg(
+        long,
+        global = true,
+        env = "AMAFU_ENDPOINT",
+        default_value = "https://127.0.0.1:7443",
+        help = "One or more core members, separated by commas; reads move to the next when one is unreachable"
+    )]
     endpoint: String,
     #[arg(long, global = true, env = "AMAFU_TOKEN", hide_env_values = true)]
     token: Option<String>,
@@ -30,8 +36,17 @@ impl ConnectionArguments {
             .as_ref()
             .map(|path| std::fs::read(path).with_context(|| format!("reading {}", path.display())))
             .transpose()?;
-        let transport = HttpTransport::new(&self.endpoint, certificate_authority.as_deref())?;
-        let client = ApiClient::new(Arc::new(transport), self.token.clone());
+        let transports = self
+            .endpoint
+            .split(',')
+            .map(str::trim)
+            .filter(|endpoint| !endpoint.is_empty())
+            .map(|endpoint| {
+                HttpTransport::new(endpoint, certificate_authority.as_deref())
+                    .map(|transport| Arc::new(transport) as Arc<dyn Transport>)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let client = ApiClient::new(Arc::new(FailoverTransport::new(transports)), self.token.clone());
         Ok(match &self.project {
             Some(project) => client.in_project(project.clone()),
             None => client,
