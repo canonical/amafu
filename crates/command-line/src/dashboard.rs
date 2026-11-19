@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use amafu_api::{HttpTransport, Transport};
+use amafu_api::{ApiClient, HttpTransport, Transport};
 use amafu_dashboard::{DashboardState, SessionKey, dashboard_router};
 use amafu_domain::Sha256Digest;
 use amafu_installer::configuration::{ClusterCredentials, api_endpoint};
@@ -14,6 +14,8 @@ use anyhow::Context;
 use clap::Subcommand;
 
 const SECONDS_PER_HOUR: u64 = 3600;
+const ANSWER_TIMEOUT: Duration = Duration::from_secs(900);
+const ANSWER_POLL: Duration = Duration::from_secs(5);
 
 #[derive(Subcommand)]
 pub enum DashboardCommand {
@@ -136,8 +138,29 @@ pub async fn run(command: DashboardCommand, certificate_authority: Option<&PathB
                 session_key: read(&session_key_file)?.trim().to_owned(),
             };
             enable_dashboard(&plan, &credentials.authority, provisioner).await?;
-            println!("the dashboard answers on {}", plan.virtual_address);
+            let address = plan.virtual_address.split('/').next().unwrap_or_default();
+            println!("the machines are deployed; waiting for the dashboard to answer on {address}");
+            wait_until_answering(address, &credentials.authority.certificate_pem).await?;
+            println!("the dashboard answers on https://{address}/");
             Ok(())
         }
+    }
+}
+
+async fn wait_until_answering(address: &str, certificate_authority_pem: &str) -> anyhow::Result<()> {
+    let transport =
+        HttpTransport::new(&format!("https://{address}"), Some(certificate_authority_pem.as_bytes()))?;
+    let client = ApiClient::new(Arc::new(transport), None);
+    let deadline = tokio::time::Instant::now() + ANSWER_TIMEOUT;
+    loop {
+        let failure = match client.raw(http::Method::GET, "/", None).await {
+            Ok(response) if (200..300).contains(&response.status) => return Ok(()),
+            Ok(response) => format!("it answered {}", response.status),
+            Err(error) => error.to_string(),
+        };
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("the dashboard does not answer on {address} after {ANSWER_TIMEOUT:?}: {failure}");
+        }
+        tokio::time::sleep(ANSWER_POLL).await;
     }
 }
