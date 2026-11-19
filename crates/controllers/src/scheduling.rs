@@ -153,14 +153,30 @@ fn occupies(vm: &Object<Vm>, node: &NodeName) -> bool {
     vm.status.node.as_ref() == Some(node) || is_arriving
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DestinationRefusal {
+    Immovable(String),
+    NoRoom(String),
+}
+
+impl std::fmt::Display for DestinationRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Immovable(reason) | Self::NoRoom(reason) => formatter.write_str(reason),
+        }
+    }
+}
+
 pub fn choose_destination(
     observation: &SchedulingObservation,
     vm: &Object<Vm>,
     settings: SchedulingSettings,
-) -> Result<NodeName, String> {
-    let requirements = storage_requirements(vm, observation)?;
+) -> Result<NodeName, DestinationRefusal> {
+    let requirements = storage_requirements(vm, observation).map_err(DestinationRefusal::Immovable)?;
     if requirements.node.is_some() {
-        return Err(String::from("a VM with a local disk volume cannot move to another node"));
+        return Err(DestinationRefusal::Immovable(String::from(
+            "a VM with a local disk volume cannot move to another node",
+        )));
     }
     let source = vm.status.node.clone();
     let mut elsewhere = observation.clone();
@@ -172,8 +188,8 @@ pub fn choose_destination(
     let cluster = cluster_capacity(&elsewhere, settings);
     match place(&Scheduler::standard(), cluster, vec![workload(vm, requirements)]).into_iter().next() {
         Some(PlacementDecision::Place(_, node)) => Ok(node),
-        Some(PlacementDecision::Unschedulable(_, reason)) => Err(reason),
-        None => Err(String::from("no placement was decided")),
+        Some(PlacementDecision::Unschedulable(_, reason)) => Err(DestinationRefusal::NoRoom(reason)),
+        None => Err(DestinationRefusal::NoRoom(String::from("no placement was decided"))),
     }
 }
 

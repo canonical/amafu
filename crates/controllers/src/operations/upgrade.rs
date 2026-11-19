@@ -30,6 +30,21 @@ pub fn planned_image<'context>(
         .ok_or_else(|| ActionError::fatal("the operation carries no image"))
 }
 
+fn within_deadline(
+    context: &OperationContext<'_>,
+    failure: impl FnOnce() -> String,
+) -> Result<(), ActionError> {
+    let deadline = context
+        .operation
+        .specification
+        .upgrade_plan()
+        .map_or(DEFAULT_HEALTH_DEADLINE_SECONDS, |plan| plan.health_deadline_seconds);
+    if step_age(context) > Duration::from_secs(deadline) {
+        return Err(ActionError::invalid(format!("{} within {deadline} seconds", failure())));
+    }
+    Ok(())
+}
+
 fn step_age(context: &OperationContext<'_>) -> Duration {
     context
         .operation
@@ -168,7 +183,7 @@ impl Step for Evacuate {
             apply::<Operation>(context.store, &reference, Change::Delete).await?;
             return match failure {
                 Some(reason) => {
-                    Err(ActionError::retryable(format!("evacuating {} failed: {reason}", self.node)))
+                    Err(ActionError::invalid(format!("evacuating {} failed: {reason}", self.node)))
                 }
                 None => Ok(()),
             };
@@ -251,7 +266,11 @@ impl Step for RebootIntoSlot {
         let image = planned_image(context)?;
         let node = node_object(context.store, &self.node).await?;
         fallen_back(&node, image)?;
-        Ok(node.status.boot.as_ref().is_some_and(|boot| boot.runs(image)))
+        if node.status.boot.as_ref().is_some_and(|boot| boot.runs(image)) {
+            return Ok(true);
+        }
+        within_deadline(context, || format!("{} did not restart into {}", self.node, image.identity()))?;
+        Ok(false)
     }
 
     async fn run(&self, context: &OperationContext<'_>) -> Result<(), ActionError> {
@@ -274,18 +293,7 @@ impl Step for AwaitHealthy {
                 return Ok(true);
             }
         }
-        let deadline = context
-            .operation
-            .specification
-            .upgrade_plan()
-            .map_or(DEFAULT_HEALTH_DEADLINE_SECONDS, |plan| plan.health_deadline_seconds);
-        if step_age(context) > Duration::from_secs(deadline) {
-            return Err(ActionError::invalid(format!(
-                "{} did not run {} healthily within {deadline} seconds",
-                self.node,
-                image.identity()
-            )));
-        }
+        within_deadline(context, || format!("{} did not run {} healthily", self.node, image.identity()))?;
         Ok(false)
     }
 

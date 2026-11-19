@@ -14,7 +14,7 @@ use amafu_interfaces::{ActionError, Consistency, Identifiers, ObjectStoreError, 
 use amafu_reconciler::{OperationContext, Step};
 
 use crate::operations::node_specification::{change_node_specification, node_reference};
-use crate::scheduling::{SchedulingSettings, choose_destination, observe_cluster};
+use crate::scheduling::{DestinationRefusal, SchedulingSettings, choose_destination, observe_cluster};
 
 pub const DOWNTIME_TARGET_MILLISECONDS: u64 = 100;
 
@@ -88,8 +88,13 @@ impl PrepareDestination {
                 Err(ActionError::invalid(format!("there is no node named {chosen}")))
             };
         }
-        choose_destination(&cluster, vm, self.scheduling)
-            .map_err(|reason| ActionError::retryable(format!("no node can take {}: {reason}", self.vm)))
+        choose_destination(&cluster, vm, self.scheduling).map_err(|refusal| {
+            let message = format!("no node can take {}: {refusal}", self.vm);
+            match refusal {
+                DestinationRefusal::Immovable(_) => ActionError::invalid(message),
+                DestinationRefusal::NoRoom(_) => ActionError::retryable(message),
+            }
+        })
     }
 }
 
@@ -317,7 +322,7 @@ impl Step for MigrateVm {
         };
         let evacuated = evacuated_node(context)?;
         let has_left = vm.status.node.as_ref() != Some(&evacuated) && !vm.status.is_migrating();
-        if has_left {
+        if has_left || vm.status.phase == VmPhase::Stopped {
             return Ok(true);
         }
         let reference =
@@ -325,12 +330,41 @@ impl Step for MigrateVm {
         match get::<Operation>(context.store, &reference, Consistency::Linearizable).await? {
             Some(child) => match &child.status.outcome {
                 Some(OperationOutcome::Failed { reason }) => {
-                    Err(ActionError::retryable(format!("moving {} failed: {reason}", self.vm)))
+                    Err(ActionError::invalid(format!("moving {} failed: {reason}", self.vm)))
                 }
                 _ => Ok(false),
             },
             None => Ok(false),
         }
+    }
+
+    async fn undo(&self, context: &OperationContext<'_>) -> Result<(), ActionError> {
+        let Some(vm) = get::<Vm>(context.store, &vm_reference(&self.vm), Consistency::Linearizable).await?
+        else {
+            return Ok(());
+        };
+        let reference =
+            ObjectReference::of::<Operation>(None, migration_child_name(context, vm.metadata.id)?);
+        let Some(child) = get::<Operation>(context.store, &reference, Consistency::Linearizable).await?
+        else {
+            return Ok(());
+        };
+        if child.status.is_finished() {
+            return Ok(());
+        }
+        if !child.specification.is_cancelled {
+            let specification = OperationSpecification { is_cancelled: true, ..child.specification.clone() };
+            apply::<Operation>(
+                context.store,
+                &reference,
+                Change::UpdateSpecification {
+                    expected_generation: Some(child.metadata.generation),
+                    specification,
+                },
+            )
+            .await?;
+        }
+        Err(ActionError::retryable(format!("waiting for the move of {} to stop", self.vm)))
     }
 
     async fn run(&self, context: &OperationContext<'_>) -> Result<(), ActionError> {
