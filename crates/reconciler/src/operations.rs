@@ -1,6 +1,6 @@
 use amafu_domain::kinds::operation::{
-    Operation, OperationOutcome, OperationSpecification, OperationStatus, Rollback, RollbackReason,
-    StepProgress, StepSpecification,
+    FinishedStep, Operation, OperationOutcome, OperationStatus, Rollback, RollbackReason, StepProgress,
+    StepSpecification,
 };
 use amafu_domain::{Object, ObjectReference};
 use amafu_interfaces::objects::update_status_fenced;
@@ -49,12 +49,12 @@ pub async fn advance(
         return roll_back(context, registry, rollback).await;
     }
     let index = status.completed_steps;
-    let touched = touched_steps(status);
-    if specification.is_cancelled && can_undo(specification, touched) {
+    let touched = status.touched_steps();
+    if specification.is_cancelled && specification.can_undo_first(touched) {
         start_rollback(context, RollbackReason::Cancelled, touched).await?;
         return Ok(Progress::Advanced);
     }
-    if specification.is_cancelled && can_abandon(specification, index) {
+    if specification.is_cancelled && specification.can_abandon_at(index) {
         finish(context, OperationOutcome::Cancelled).await?;
         return Ok(Progress::Finished);
     }
@@ -75,7 +75,7 @@ pub async fn advance(
             Ok(Progress::Advanced)
         }
         Ok(false) => Ok(Progress::Waiting),
-        Err(error) if !error.is_retryable() && can_undo(specification, index + 1) => {
+        Err(error) if !error.is_retryable() && specification.can_undo_first(index + 1) => {
             start_rollback(context, RollbackReason::Failed { error: error.to_string() }, index + 1).await?;
             Ok(Progress::Advanced)
         }
@@ -93,18 +93,6 @@ pub async fn advance(
             )))
         }
     }
-}
-
-fn touched_steps(status: &OperationStatus) -> usize {
-    status.completed_steps + usize::from(status.current_step.is_some())
-}
-
-fn can_abandon(specification: &OperationSpecification, index: usize) -> bool {
-    specification.steps.get(index).is_some_and(StepSpecification::can_be_abandoned)
-}
-
-fn can_undo(specification: &OperationSpecification, steps: usize) -> bool {
-    specification.steps.iter().take(steps).all(StepSpecification::can_be_undone)
 }
 
 async fn attempt(step: &dyn Step, context: &OperationContext<'_>) -> Result<bool, ActionError> {
@@ -175,11 +163,23 @@ async fn start_step(context: &OperationContext<'_>, index: usize) -> Result<(), 
 }
 
 async fn complete_step(context: &OperationContext<'_>, index: usize) -> Result<(), ActionError> {
+    let finished_at = context.clock.now();
     record(context, |status| {
-        (status.completed_steps == index && status.rollback.is_none()).then(|| OperationStatus {
-            completed_steps: index + 1,
-            current_step: None,
-            ..status.clone()
+        (status.completed_steps == index && status.rollback.is_none()).then(|| {
+            let mut finished_steps = status.finished_steps.clone();
+            if let Some(progress) = &status.current_step {
+                finished_steps.push(FinishedStep {
+                    started_at: progress.started_at,
+                    finished_at,
+                    attempts: progress.attempts,
+                });
+            }
+            OperationStatus {
+                completed_steps: index + 1,
+                current_step: None,
+                finished_steps,
+                ..status.clone()
+            }
         })
     })
     .await

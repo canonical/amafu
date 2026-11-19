@@ -172,6 +172,7 @@ impl StepSpecification {
                 | Self::PrepareDestination { .. }
                 | Self::CopyMemory { .. }
                 | Self::Cordon { .. }
+                | Self::MigrateVm { .. }
                 | Self::VerifyImage
         )
     }
@@ -440,6 +441,17 @@ pub struct OperationStatus {
     pub rollback: Option<Rollback>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<OperationOutcome>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub finished_steps: Vec<FinishedStep>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FinishedStep {
+    #[serde(with = "time::serde::rfc3339")]
+    pub started_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub finished_at: OffsetDateTime,
+    pub attempts: u32,
 }
 
 impl OperationStatus {
@@ -447,11 +459,63 @@ impl OperationStatus {
     pub fn is_finished(&self) -> bool {
         self.outcome.is_some()
     }
+
+    #[must_use]
+    pub fn touched_steps(&self) -> usize {
+        self.completed_steps + usize::from(self.current_step.is_some())
+    }
+}
+
+impl OperationSpecification {
+    #[must_use]
+    pub fn can_undo_first(&self, steps: usize) -> bool {
+        self.steps.iter().take(steps).all(StepSpecification::can_be_undone)
+    }
+
+    #[must_use]
+    pub fn can_abandon_at(&self, index: usize) -> bool {
+        self.steps.get(index).is_some_and(StepSpecification::can_be_abandoned)
+    }
+
+    #[must_use]
+    pub fn can_stop_now(&self, status: &OperationStatus) -> bool {
+        self.can_undo_first(status.touched_steps()) || self.can_abandon_at(status.completed_steps)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn progressed(completed_steps: usize) -> OperationStatus {
+        OperationStatus { completed_steps, ..OperationStatus::default() }
+    }
+
+    #[test]
+    fn an_evacuation_can_stop_between_any_two_vms() {
+        let vm = |name: &str| VmReference {
+            project: ProjectName::new("project-a").unwrap(),
+            name: ObjectName::new(name).unwrap(),
+        };
+        let evacuation =
+            OperationSpecification::evacuation(NodeName::new("node-1").unwrap(), vec![vm("a"), vm("b")]);
+        for completed in 0..evacuation.steps.len() {
+            assert!(evacuation.can_stop_now(&progressed(completed)), "after {completed} steps");
+        }
+    }
+
+    #[test]
+    fn a_migration_past_its_switch_over_cannot_stop() {
+        let migration = OperationSpecification::migration(
+            VmReference {
+                project: ProjectName::new("project-a").unwrap(),
+                name: ObjectName::new("web").unwrap(),
+            },
+            None,
+        );
+        assert!(migration.can_stop_now(&progressed(1)));
+        assert!(!migration.can_stop_now(&progressed(3)));
+    }
 
     fn node(name: &str) -> NodeName {
         NodeName::new(name).unwrap()
