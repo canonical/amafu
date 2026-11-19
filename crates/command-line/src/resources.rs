@@ -9,6 +9,10 @@ pub trait Tabulated: Resource + Sized {
     const HEADINGS: &'static [&'static str];
 
     fn row(object: &Object<Self>) -> Vec<String>;
+
+    fn holder(_object: &Object<Self>) -> Option<String> {
+        None
+    }
 }
 
 #[derive(Subcommand)]
@@ -69,6 +73,12 @@ where
     match command {
         CommonCommand::List => print_objects(&client.list::<R>().await?, format),
         CommonCommand::Show { name } => print_structured(&client.get::<R>(&name).await?, format),
-        CommonCommand::Delete { name } => print_objects(&[client.delete::<R>(&name).await?], format),
+        CommonCommand::Delete { name } => {
+            let deleting = client.delete::<R>(&name).await?;
+            if let Some(holder) = R::holder(&deleting) {
+                eprintln!("{name} is in use by {holder}; it will be deleted once {holder} releases it");
+            }
+            print_objects(&[deleting], format)
+        }
     }
 }

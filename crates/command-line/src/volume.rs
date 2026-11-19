@@ -35,6 +35,10 @@ impl Tabulated for Volume {
             or_dash(volume.status.attached_to.as_ref().map(ToString::to_string)),
         ]
     }
+
+    fn holder(volume: &Object<Self>) -> Option<String> {
+        volume.status.attached_to.as_ref().map(|vm| format!("VM {vm}"))
+    }
 }
 
 pub async fn run(client: &ApiClient, command: VolumeCommand, format: OutputFormat) -> anyhow::Result<()> {
