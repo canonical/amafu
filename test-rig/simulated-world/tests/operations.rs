@@ -192,6 +192,14 @@ mod resuming {
     }
 
     #[test]
+    fn every_finished_step_records_when_it_ran() {
+        let harness = Harness::new(evacuation_of_three(), BTreeMap::new());
+        let finished = harness.advance_until_finished();
+        assert_eq!(finished.status.finished_steps.len(), finished.status.completed_steps);
+        assert!(finished.status.finished_steps.iter().all(|step| step.finished_at >= step.started_at));
+    }
+
+    #[test]
     fn a_permanent_failure_before_the_switch_over_undoes_the_steps_in_reverse() {
         let migration = OperationSpecification::migration(vm("web-1"), None);
         let harness = Harness::new(migration, BTreeMap::from([(1, Behaviour::FailsPermanently)]));
@@ -249,6 +257,40 @@ mod resuming {
         let finished = harness.advance_until_finished();
         assert_eq!(finished.status.outcome, Some(OperationOutcome::Cancelled));
         assert_eq!(harness.ledger.lock().unwrap().undos, vec![0]);
+    }
+
+    fn cancel(harness: &Harness) {
+        let mut operation = harness.operation();
+        operation.specification.is_cancelled = true;
+        block_on(apply::<Operation>(
+            harness.store.as_ref(),
+            &reference(),
+            Change::UpdateSpecification { expected_generation: None, specification: operation.specification },
+        ))
+        .unwrap();
+    }
+
+    #[test]
+    fn a_cancelled_evacuation_stops_between_vms_and_uncordons_the_node() {
+        let harness = Harness::new(evacuation_of_three(), BTreeMap::new());
+        harness.advance_once().unwrap();
+        harness.advance_once().unwrap();
+        cancel(&harness);
+        let finished = harness.advance_until_finished();
+        assert_eq!(finished.status.outcome, Some(OperationOutcome::Cancelled));
+        let ledger = harness.ledger.lock().unwrap();
+        assert_eq!(ledger.runs, vec![0, 1]);
+        assert_eq!(ledger.undos, vec![1, 0]);
+    }
+
+    #[test]
+    fn a_vm_that_cannot_move_fails_the_evacuation_instead_of_retrying_it() {
+        let harness = Harness::new(evacuation_of_three(), BTreeMap::from([(2, Behaviour::FailsPermanently)]));
+        let finished = harness.advance_until_finished();
+        assert!(matches!(finished.status.outcome, Some(OperationOutcome::Failed { .. })));
+        let ledger = harness.ledger.lock().unwrap();
+        assert_eq!(ledger.runs, vec![0, 1, 2]);
+        assert_eq!(ledger.undos, vec![2, 1, 0]);
     }
 
     fn upgrade_of_two_nodes() -> OperationSpecification {
@@ -331,5 +373,175 @@ mod resuming {
         assert_eq!(finished.status.outcome, Some(OperationOutcome::Cancelled));
         assert_eq!(finished.status.completed_steps, reached);
         assert_eq!(harness.ledger.lock().unwrap().undos, Vec::<usize>::new());
+    }
+}
+
+#[cfg(test)]
+mod deadlines {
+    use std::collections::BTreeMap;
+
+    use amafu_controllers::operations::upgrade::{AwaitHealthy, RebootIntoSlot};
+    use amafu_domain::kinds::node::{Node, NodeSpecification};
+    use amafu_domain::kinds::operation::{Operation, OperationSpecification, StepProgress};
+    use amafu_domain::{Change, NodeName, Object, ObjectId, ObjectName, ObjectReference};
+    use amafu_interfaces::objects::{apply, get};
+    use amafu_interfaces::{ActionError, Consistency, Fence};
+    use amafu_reconciler::{OperationContext, Step};
+    use amafu_simulated_world::VirtualClock;
+    use amafu_simulated_world::fakes::store::MemoryStore;
+    use futures::executor::block_on;
+    use time::{Duration, OffsetDateTime};
+
+    const DEADLINE_SECONDS: u64 = 600;
+
+    fn node() -> NodeName {
+        NodeName::new("node-1").unwrap()
+    }
+
+    fn create<R: amafu_domain::Resource>(store: &MemoryStore, name: &str, specification: R::Specification) {
+        let name = ObjectName::new(name).unwrap();
+        block_on(apply::<R>(
+            store,
+            &ObjectReference::of::<R>(None, name.clone()),
+            Change::Create {
+                id: ObjectId::from_uuid(uuid::Uuid::new_v4()),
+                name,
+                project: None,
+                labels: BTreeMap::new(),
+                specification,
+            },
+        ))
+        .unwrap();
+    }
+
+    fn upgrade() -> OperationSpecification {
+        let image = amafu_domain::node_image::NodeImage {
+            version: String::from("26.11.2"),
+            feature_level: amafu_domain::features::FeatureLevel(1),
+            digest: "d".repeat(64).parse().unwrap(),
+            size_bytes: 1024,
+            url: String::from("https://images.example/node-image.tar"),
+            signature: "0".repeat(128),
+        };
+        OperationSpecification::upgrade(amafu_domain::upgrade::UpgradePlan {
+            image,
+            waves: vec![amafu_domain::upgrade::UpgradeWave { nodes: vec![node()] }],
+            health_deadline_seconds: DEADLINE_SECONDS,
+            soak_seconds: 30,
+            is_rollback: false,
+        })
+    }
+
+    fn waited(step: &dyn Step, seconds: i64) -> Result<bool, ActionError> {
+        let store = MemoryStore::new();
+        create::<Node>(&store, "node-1", NodeSpecification::default());
+        create::<Operation>(&store, "upgrade-1", upgrade());
+        let reference = ObjectReference::of::<Operation>(None, ObjectName::new("upgrade-1").unwrap());
+        let mut operation: Object<Operation> =
+            block_on(get::<Operation>(&store, &reference, Consistency::Linearizable)).unwrap().unwrap();
+        operation.status.current_step = Some(StepProgress::started(OffsetDateTime::UNIX_EPOCH));
+        let clock = VirtualClock::starting_at(OffsetDateTime::UNIX_EPOCH + Duration::seconds(seconds));
+        let fence = Fence { name: String::from("operations"), token: 1 };
+        let context = OperationContext { operation: &operation, store: &store, clock: &clock, fence: &fence };
+        block_on(step.is_complete(&context))
+    }
+
+    #[test]
+    fn a_node_that_never_restarts_fails_the_reboot_step_after_the_deadline() {
+        let step = RebootIntoSlot { node: node() };
+        assert_eq!(waited(&step, 60), Ok(false));
+        let failure = waited(&step, 601).unwrap_err();
+        assert!(!failure.is_retryable());
+        assert!(failure.to_string().contains("did not restart into"), "{failure}");
+    }
+
+    #[test]
+    fn a_node_that_never_becomes_healthy_fails_after_the_same_deadline() {
+        let step = AwaitHealthy { node: node() };
+        assert_eq!(waited(&step, 60), Ok(false));
+        assert!(waited(&step, 601).unwrap_err().to_string().contains("healthily within 600 seconds"));
+    }
+}
+
+#[cfg(test)]
+mod lease_expiry_across_members {
+    use std::collections::BTreeMap;
+
+    use amafu_controllers::operations::recovery::MarkNodeLost;
+    use amafu_domain::kinds::node_lease::{LeaseTerms, NodeLease, NodeLeaseSpecification};
+    use amafu_domain::kinds::operation::{Operation, OperationSpecification, StepProgress};
+    use amafu_domain::{Change, NodeName, Object, ObjectId, ObjectName, ObjectReference};
+    use amafu_interfaces::objects::{apply, get};
+    use amafu_interfaces::{ActionError, Consistency, Fence};
+    use amafu_reconciler::{OperationContext, Step};
+    use amafu_simulated_world::VirtualClock;
+    use amafu_simulated_world::fakes::store::MemoryStore;
+    use futures::executor::block_on;
+    use time::{Duration, OffsetDateTime};
+
+    fn node() -> NodeName {
+        NodeName::new("node-1").unwrap()
+    }
+
+    fn at(seconds: i64) -> OffsetDateTime {
+        OffsetDateTime::UNIX_EPOCH + Duration::seconds(seconds)
+    }
+
+    fn create<R: amafu_domain::Resource>(store: &MemoryStore, name: &str, specification: R::Specification) {
+        let name = ObjectName::new(name).unwrap();
+        block_on(apply::<R>(
+            store,
+            &ObjectReference::of::<R>(None, name.clone()),
+            Change::Create {
+                id: ObjectId::from_uuid(uuid::Uuid::new_v4()),
+                name,
+                project: None,
+                labels: BTreeMap::new(),
+                specification,
+            },
+        ))
+        .unwrap();
+    }
+
+    fn mark_lost(renewed_at: i64, step_started_at: i64, member_clock: i64) -> Result<(), ActionError> {
+        let store = MemoryStore::new();
+        let terms = LeaseTerms::new(std::time::Duration::from_secs(8), std::time::Duration::from_secs(8));
+        create::<NodeLease>(
+            &store,
+            "node-1",
+            NodeLeaseSpecification {
+                epoch: 7,
+                renewed_at: at(renewed_at),
+                terms,
+                is_lost: false,
+                is_released: false,
+            },
+        );
+        create::<Operation>(&store, "recovery-node-1-7", OperationSpecification::recovery(node()));
+        let reference = ObjectReference::of::<Operation>(None, ObjectName::new("recovery-node-1-7").unwrap());
+        let mut operation: Object<Operation> =
+            block_on(get::<Operation>(&store, &reference, Consistency::Linearizable)).unwrap().unwrap();
+        operation.status.current_step = Some(StepProgress::started(at(step_started_at)));
+        let clock = VirtualClock::starting_at(at(member_clock));
+        let fence = Fence { name: String::from("operations"), token: 1 };
+        let context = OperationContext { operation: &operation, store: &store, clock: &clock, fence: &fence };
+        block_on(MarkNodeLost { node: node() }.run(&context))
+    }
+
+    #[test]
+    fn a_member_whose_clock_lags_waits_instead_of_failing_the_recovery() {
+        let refusal = mark_lost(100, 109, 105).unwrap_err();
+        assert!(refusal.is_retryable(), "{refusal}");
+    }
+
+    #[test]
+    fn a_lease_renewed_after_the_recovery_started_proves_the_node_alive() {
+        let refusal = mark_lost(110, 109, 111).unwrap_err();
+        assert!(!refusal.is_retryable(), "{refusal}");
+    }
+
+    #[test]
+    fn an_expired_lease_is_marked_lost() {
+        assert_eq!(mark_lost(100, 109, 120), Ok(()));
     }
 }
