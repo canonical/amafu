@@ -5,6 +5,7 @@ pub mod digest;
 pub mod features;
 pub mod install;
 pub mod kinds;
+pub mod labels;
 pub mod name;
 pub mod node_image;
 pub mod object;

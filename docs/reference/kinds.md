@@ -19,3 +19,8 @@ Generated from the kind registry by `cargo rig reference`. Do not edit it by han
 | SecurityGroup | `/v1/security-groups` | 1 | project | members of the project |
 | NetworkEndpoint | `/v1/network-endpoints` | 1 | project | nodes |
 | FloatingIp | `/v1/floating-ips` | 1 | project | members of the project |
+| ServiceAccount | `/v1/service-accounts` | 1 | project | members of the project |
+| KubernetesCluster | `/v1/kubernetes-clusters` | 1 | project | nodes |
+| KubernetesClusterChange | `/v1/kubernetes-cluster-changes` | 1 | project | members of the project |
+| JujuController | `/v1/juju-controllers` | 1 | project | nodes |
+| JujuControllerChange | `/v1/juju-controller-changes` | 1 | project | members of the project |

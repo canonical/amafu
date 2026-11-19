@@ -11,12 +11,15 @@ use crate::kinds::cluster_version::ClusterVersion;
 use crate::kinds::external_network::ExternalNetwork;
 use crate::kinds::floating_ip::FloatingIp;
 use crate::kinds::image::Image;
+use crate::kinds::juju_controller::{JujuController, JujuControllerChange};
+use crate::kinds::kubernetes_cluster::{KubernetesCluster, KubernetesClusterChange};
 use crate::kinds::network::Network;
 use crate::kinds::network_endpoint::NetworkEndpoint;
 use crate::kinds::node::Node;
 use crate::kinds::node_lease::NodeLease;
 use crate::kinds::operation::Operation;
 use crate::kinds::security_group::SecurityGroup;
+use crate::kinds::service_account::ServiceAccount;
 use crate::kinds::storage_backend::StorageBackend;
 use crate::kinds::vm::Vm;
 use crate::kinds::volume::Volume;
@@ -96,7 +99,7 @@ impl KindDescriptor {
 }
 
 #[must_use]
-pub fn kinds() -> [KindDescriptor; 15] {
+pub fn kinds() -> [KindDescriptor; 20] {
     [
         KindDescriptor::of::<Node>(),
         KindDescriptor::of::<NodeLease>(),
@@ -113,6 +116,11 @@ pub fn kinds() -> [KindDescriptor; 15] {
         KindDescriptor::of::<SecurityGroup>(),
         KindDescriptor::of::<NetworkEndpoint>(),
         KindDescriptor::of::<FloatingIp>(),
+        KindDescriptor::of::<ServiceAccount>(),
+        KindDescriptor::of::<KubernetesCluster>(),
+        KindDescriptor::of::<KubernetesClusterChange>(),
+        KindDescriptor::of::<JujuController>(),
+        KindDescriptor::of::<JujuControllerChange>(),
     ]
 }
 
