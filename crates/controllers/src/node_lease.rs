@@ -39,6 +39,13 @@ impl LeaseKeeper<'_> {
         }
     }
 
+    fn warn_if_slow(&self, sent_at: OffsetDateTime) {
+        let took = self.clock.now() - sent_at;
+        if took > self.settings.terms.duration() / 2 {
+            tracing::warn!(took = %took, "renewing the node's lease took more than half the lease");
+        }
+    }
+
     fn valid_until(&self, sent_at: OffsetDateTime) -> OffsetDateTime {
         sent_at + self.settings.terms.duration()
     }
@@ -68,7 +75,9 @@ impl LeaseKeeper<'_> {
                 return NodeLeaseError::Refused(amafu_domain::kinds::node_lease::LeaseRefusal::Lost);
             }
             let sent_at = self.clock.now();
-            match self.authority.renew(epoch).await {
+            let renewal = self.authority.renew(epoch).await;
+            self.warn_if_slow(sent_at);
+            match renewal {
                 Ok(grant) => self
                     .state
                     .hold(HeldNodeLease { epoch: grant.epoch, valid_until: self.valid_until(sent_at) }),
