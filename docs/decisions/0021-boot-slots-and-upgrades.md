@@ -55,3 +55,5 @@ What the lab and MAAS allow, checked while designing:
 - The two features named by the plan are gates with nothing behind them yet; each is wired when its behaviour lands.
 - A node that cannot boot at all and has no watchdog armed (a hang before PID 1 starts) relies on the kernel's
   `panic=10`; a hardware watchdog on real nodes covers the rest.
+- Kernel arguments travel with the image: each slot carries `kernel-arguments.cfg`, which the boot loader sources
+  before booting it, so an upgrade can change them. Nodes installed before this change need the new boot loader once.

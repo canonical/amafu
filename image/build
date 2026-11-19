@@ -260,6 +260,7 @@ pack() {
     cp "${cache}/extracted/boot/vmlinuz-${kernel_release}" "${slot}/vmlinuz"
     cp "${guest_kernel}" "${slot}/vmlinux"
     cp -r "${boot_staging}"/. "${slot}/"
+    cp "${image_directory}/kernel-arguments.cfg" "${slot}/kernel-arguments.cfg"
     git -C "${repository}" describe --always --dirty 2>/dev/null > "${slot}/release" || echo unknown > "${slot}/release"
     cp "${cache}/extracted/usr/lib/shim/shimx64.efi.signed.latest" "${output}/esp/EFI/BOOT/BOOTX64.EFI"
     cp "${cache}/extracted/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed" "${output}/esp/EFI/BOOT/grubx64.efi"

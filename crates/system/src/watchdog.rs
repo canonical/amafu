@@ -56,8 +56,8 @@ mod tests {
 
     #[test]
     fn the_kernel_keeps_the_watchdog_running_while_the_node_restarts() {
-        let boot_entry = include_str!("../../../image/grub.cfg");
-        assert!(boot_entry.contains("watchdog.stop_on_reboot=0"));
+        let kernel_arguments = include_str!("../../../image/kernel-arguments.cfg");
+        assert!(kernel_arguments.contains("watchdog.stop_on_reboot=0"));
     }
 
     #[test]
