@@ -317,6 +317,16 @@ pub async fn delete_object(
     let operation = Operation::new(kind, Verb::Delete, context, &target, Some(name))?;
     operation.authorize()?;
     let reference = operation.reference()?;
+    let holders = crate::deletion_guard::holders(state.store.as_ref(), &reference)
+        .await
+        .map_err(|error| operation.store_error(error))?;
+    if !holders.is_empty() {
+        return Err(operation.error(
+            StatusCode::CONFLICT,
+            ErrorCode::Conflict,
+            format!("{} is in use by {}", reference.name, holders.join(", ")),
+        ));
+    }
     let deleting = apply_untyped(state.store.as_ref(), &kind, &reference, UntypedChange::Delete)
         .await
         .map_err(|error| operation.store_error(error))?;

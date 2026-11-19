@@ -1,3 +1,4 @@
+use amafu_api::client::ClientError;
 use amafu_checkers::invariants::a_volume_is_attached_on_at_most_one_node;
 use amafu_domain::access::Role;
 use amafu_domain::kinds::image::Image;
@@ -83,6 +84,10 @@ async fn a_vm_boots_from_a_cloned_volume(cluster: &dyn Cluster) -> ScenarioResul
         String::from("the VM process was given the volume as a disk")
     })?;
     always_during(cluster, SETTLING, a_volume_is_attached_on_at_most_one_node).await?;
+    let refusal = member.delete::<Volume>("noble-root").await.err();
+    ensure(refusal.as_ref().is_some_and(ClientError::is_conflict), || {
+        format!("deleting a volume a VM uses is refused, got {refusal:?}")
+    })?;
     let node = instance(cluster, created.id()).await?.node;
     let provisioned = member.get::<Volume>("noble-root").await?.status.provisioned;
     ensure(provisioned.as_ref().and_then(|provisioned| provisioned.node.as_ref()) == Some(&node), || {

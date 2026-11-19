@@ -2,6 +2,7 @@ pub mod admission;
 pub mod authentication;
 pub mod authorization;
 pub mod client;
+mod deletion_guard;
 pub mod diagnostics;
 mod handlers;
 pub mod identity;
