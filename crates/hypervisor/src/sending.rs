@@ -87,12 +87,12 @@ async fn put_api(socket: &Path, path: &str, body: &str) -> io::Result<()> {
     }
 }
 
-fn send_request(job: &SendJob) -> String {
+fn send_request(destination: &Path, downtime_milliseconds: u64) -> String {
     serde_json::json!({
-        "destination_url": format!("unix:{}", job.directory.outgoing_socket().display()),
-        "downtime_ms": job.downtime_milliseconds.max(1),
+        "destination_url": format!("unix:{}", destination.display()),
+        "downtime_ms": downtime_milliseconds.max(1),
         "timeout_s": MIGRATION_TIMEOUT_SECONDS,
-        "timeout_strategy": "cancel",
+        "timeout_strategy": vmm::api::TimeoutStrategy::Cancel,
     })
     .to_string()
 }
@@ -134,7 +134,12 @@ async fn send(job: &SendJob) -> io::Result<u64> {
     if let Some(user_id) = job.directory.user_id() {
         give_to(&outgoing, user_id)?;
     }
-    put_api(&job.directory.api_socket(), "/api/v1/vm.send-migration", &send_request(job)).await?;
+    put_api(
+        &job.directory.api_socket(),
+        "/api/v1/vm.send-migration",
+        &send_request(&outgoing, job.downtime_milliseconds),
+    )
+    .await?;
     let throttle = tokio::spawn(throttle_while_sending(job.cgroup.clone(), job.cpu_count, job.vm_id));
     let relayed = relay_once(job, listener).await;
     throttle.abort();
@@ -169,6 +174,14 @@ pub async fn run(job: SendJob) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_send_request_is_one_the_vmm_accepts() {
+        let request = send_request(Path::new("/run/amafu/outgoing.sock"), 0);
+        let accepted: vmm::api::VmSendMigrationData = serde_json::from_str(&request).unwrap();
+        assert_eq!(accepted.timeout_strategy, vmm::api::TimeoutStrategy::Cancel);
+        assert_eq!(accepted.destination_url, "unix:/run/amafu/outgoing.sock");
+    }
 
     #[tokio::test]
     async fn an_answer_is_read_without_waiting_for_the_connection_to_close() {
