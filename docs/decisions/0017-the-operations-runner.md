@@ -28,8 +28,9 @@ Status: accepted for milestone 4
 - The simulator proves resumption by crashing between every pair of steps of an evacuation and by making a step's
   effect land just before a crash (`test-rig/simulated-world/tests/operations.rs`).
 - Milestone 5's install and upgrade become new operation kinds with their own steps on the same runner.
-- A failing step backs off exponentially up to 30 s; the runner's own status write does not wake it early. A pause or
-  cancellation of an operation that is backing off therefore takes effect at its next attempt.
+- A failing step backs off exponentially up to 30 s. A change to the operation, including the runner's own status
+  write, retries it no sooner than one second after the failure, so a step fails at most once a second while a pause
+  or cancellation still takes effect within about a second.
 - An evacuation moves each VM in a step that can be undone: cancelling or failing it stops between VMs, leaves moved
   VMs where they are and uncordons the node. A VM that is assigned but not running cannot be moved live, so it fails
   the evacuation at once; a stopped VM needs no move.
