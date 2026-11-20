@@ -8,27 +8,17 @@ import CollectionNotice from "../components/CollectionNotice";
 import Command from "../components/Command";
 import DeleteConfirmation from "../components/DeleteConfirmation";
 import IconAction from "../components/IconAction";
-import Meter from "../components/Meter";
 import PageHeader from "../components/PageHeader";
 import Panel from "../components/Panel";
 import Status from "../components/Status";
+import StepPlan, { PlanProgress, currentStep, planPhase } from "../components/StepPlan";
 import SubjectLink from "../components/SubjectLink";
 import { usePanel } from "../components/panels";
 import { useSubmission } from "../components/submission";
-import { describeStep, sentence, sinceNow } from "../format";
+import { describeStep, sentence } from "../format";
 
 export function operationPhase(operation: Operation): { phase: string; label?: string; detail?: string } {
-  const outcome = operation.status.outcome;
-  if (outcome) {
-    return { phase: outcome.outcome, detail: outcome.outcome === "failed" ? outcome.reason : undefined };
-  }
-  if (operation.status.rollback) {
-    return { phase: "stopping", label: "Rolling back", detail: `${operation.status.rollback.remaining_steps} steps to undo` };
-  }
-  if (operation.specification.is_paused) {
-    return { phase: "paused" };
-  }
-  return { phase: "in-progress", label: "In progress", detail: operation.status.current_step?.last_error };
+  return planPhase(operation);
 }
 
 export function targetOf(operation: Operation): string {
@@ -40,9 +30,7 @@ export function targetOf(operation: Operation): string {
 }
 
 export function currentStepOf(operation: Operation): string {
-  const completed = operation.status.completed_steps ?? 0;
-  const step = operation.specification.steps[completed];
-  return operation.status.outcome || !step ? "" : describeStep(step);
+  return currentStep(operation, describeStep);
 }
 
 function change(operation: Operation, edit: Partial<OperationSpecification>): Promise<unknown> {
@@ -50,29 +38,13 @@ function change(operation: Operation, edit: Partial<OperationSpecification>): Pr
 }
 
 function OperationDetail({ operation, onClose }: { operation: Operation; onClose: () => void }) {
-  const completed = operation.status.completed_steps ?? 0;
   return (
     <Panel title={operation.metadata.name} onClose={onClose}>
       <p>
         {sentence(operation.specification.kind)} of {targetOf(operation)}
       </p>
       <Status {...operationPhase(operation)} />
-      <ol className="step-list">
-        {operation.specification.steps.map((step, index) => {
-          const state = index < completed ? "done" : index === completed && !operation.status.outcome ? "current" : "waiting";
-          return (
-            <li key={`${step.step}-${index}`} className={`step-list__step step-list__step--${state}`}>
-              {describeStep(step)}
-              {state === "current" && operation.status.current_step && (
-                <span className="secondary-line">
-                  {" "}
-                  started {sinceNow(operation.status.current_step.started_at)}, attempt {operation.status.current_step.attempts}
-                </span>
-              )}
-            </li>
-          );
-        })}
-      </ol>
+      <StepPlan plan={operation} describe={describeStep} />
       <Command words={["amafu", "operation", "show", operation.metadata.name]} />
     </Panel>
   );
@@ -112,8 +84,6 @@ export default function Operations() {
           { content: "Actions", className: "u-align--right" },
         ]}
         rows={ordered.map((operation) => {
-          const steps = operation.specification.steps.length;
-          const completed = operation.status.completed_steps ?? 0;
           const isFinished = Boolean(operation.status.outcome);
           return {
             key: operation.metadata.name,
@@ -122,12 +92,7 @@ export default function Operations() {
               { content: sentence(operation.specification.kind) },
               { content: targetOf(operation) },
               {
-                content: (
-                  <>
-                    <Meter used={completed} total={steps} label={`${completed} of ${steps} steps`} />
-                    <div className="secondary-line">{currentStepOf(operation)}</div>
-                  </>
-                ),
+                content: <PlanProgress plan={operation} describe={describeStep} />,
               },
               { content: <Status {...operationPhase(operation)} /> },
               {
