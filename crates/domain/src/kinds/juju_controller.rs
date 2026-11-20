@@ -304,6 +304,7 @@ fn creation_steps(controller: &JujuControllerSpecification) -> Vec<JujuStep> {
         ],
         Substrate::Kubernetes { .. } => vec![
             JujuStep::CheckHostCluster,
+            JujuStep::ImportImage,
             JujuStep::CreateClusterServiceAccount,
             JujuStep::Bootstrap,
             JujuStep::AwaitControllerService,
@@ -314,8 +315,8 @@ fn creation_steps(controller: &JujuControllerSpecification) -> Vec<JujuStep> {
         .then_some([JujuStep::AddControllerMachines, JujuStep::EnableHa])
         .into_iter()
         .flatten();
-    substrate_steps
-        .into_iter()
+    std::iter::once(JujuStep::RecordSpecification)
+        .chain(substrate_steps)
         .chain(high_availability)
         .chain([
             JujuStep::CleanUpBootstrap,
@@ -328,6 +329,7 @@ fn creation_steps(controller: &JujuControllerSpecification) -> Vec<JujuStep> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "step", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum JujuStep {
+    RecordSpecification,
     PrepareNetworkAccess,
     ImportImage,
     CreateControllerMachines,
@@ -359,6 +361,7 @@ pub enum JujuStep {
 impl PlannedStep for JujuStep {
     fn name(&self) -> &'static str {
         match self {
+            Self::RecordSpecification => "record-specification",
             Self::PrepareNetworkAccess => "prepare-network-access",
             Self::ImportImage => "import-image",
             Self::CreateControllerMachines => "create-controller-machines",
@@ -517,6 +520,7 @@ mod tests {
         assert_eq!(
             names(&steps),
             [
+                "record-specification",
                 "prepare-network-access",
                 "import-image",
                 "create-controller-machines",
