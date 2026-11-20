@@ -400,8 +400,34 @@ impl PlannedStep for JujuStep {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct RequestedJujuControllerChangeSpecification {
+    controller: ObjectName,
+    request: JujuRequest,
+    #[serde(default)]
+    steps: Option<Vec<JujuStep>>,
+    #[serde(default)]
+    is_paused: bool,
+    #[serde(default)]
+    is_cancelled: bool,
+}
+
+impl From<RequestedJujuControllerChangeSpecification> for JujuControllerChangeSpecification {
+    fn from(requested: RequestedJujuControllerChangeSpecification) -> Self {
+        let steps = requested.steps.unwrap_or_else(|| requested.request.steps());
+        Self {
+            controller: requested.controller,
+            request: requested.request,
+            steps,
+            is_paused: requested.is_paused,
+            is_cancelled: requested.is_cancelled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "RequestedJujuControllerChangeSpecification")]
 pub struct JujuControllerChangeSpecification {
     pub controller: ObjectName,
     pub request: JujuRequest,

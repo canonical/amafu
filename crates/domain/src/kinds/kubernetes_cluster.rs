@@ -383,8 +383,34 @@ impl PlannedStep for KubernetesStep {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct RequestedKubernetesClusterChangeSpecification {
+    cluster: ObjectName,
+    request: KubernetesRequest,
+    #[serde(default)]
+    steps: Option<Vec<KubernetesStep>>,
+    #[serde(default)]
+    is_paused: bool,
+    #[serde(default)]
+    is_cancelled: bool,
+}
+
+impl From<RequestedKubernetesClusterChangeSpecification> for KubernetesClusterChangeSpecification {
+    fn from(requested: RequestedKubernetesClusterChangeSpecification) -> Self {
+        let steps = requested.steps.unwrap_or_else(|| requested.request.steps());
+        Self {
+            cluster: requested.cluster,
+            request: requested.request,
+            steps,
+            is_paused: requested.is_paused,
+            is_cancelled: requested.is_cancelled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "RequestedKubernetesClusterChangeSpecification")]
 pub struct KubernetesClusterChangeSpecification {
     pub cluster: ObjectName,
     pub request: KubernetesRequest,
@@ -491,6 +517,17 @@ mod tests {
 
     fn step_names(steps: &[KubernetesStep]) -> Vec<&'static str> {
         steps.iter().map(PlannedStep::name).collect()
+    }
+
+    #[test]
+    fn a_change_written_without_steps_takes_the_steps_of_its_request() {
+        let change: KubernetesClusterChangeSpecification =
+            serde_json::from_value(serde_json::json!({"cluster": "platform", "request": {"kind": "delete"}}))
+                .unwrap();
+        assert_eq!(change.steps, KubernetesRequest::Delete.steps());
+        let round_trip: KubernetesClusterChangeSpecification =
+            serde_json::from_value(serde_json::to_value(&change).unwrap()).unwrap();
+        assert_eq!(round_trip, change);
     }
 
     #[test]
