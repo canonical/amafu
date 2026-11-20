@@ -7,8 +7,8 @@ use amafu_api::{Principal, TokenIdentity};
 use amafu_domain::ProjectName;
 use amafu_domain::access::Role;
 use amafu_node_configuration::{
-    ApiSection, ComputeSection, Directories, FencingSection, IdentitySection, NodeConfiguration, NodeSection,
-    SUPPORTED_VERSION, SchedulingSection, StateSection, UpgradeSection,
+    ApiSection, ComputeSection, Directories, EnvironmentsSection, FencingSection, IdentitySection,
+    NodeConfiguration, NodeSection, SUPPORTED_VERSION, SchedulingSection, StateSection, UpgradeSection,
 };
 use serde::{Deserialize, Serialize};
 
@@ -130,6 +130,7 @@ pub fn node_configuration(
         compute: ComputeSection { resolvers: cluster.resolvers.clone(), ..ComputeSection::default() },
         fencing: FencingSection::default(),
         scheduling: SchedulingSection::default(),
+        environments: EnvironmentsSection::default(),
         upgrade: UpgradeSection {
             image_keys: cluster.image_keys.clone(),
             confirm_after_seconds: cluster.confirm_after_seconds,

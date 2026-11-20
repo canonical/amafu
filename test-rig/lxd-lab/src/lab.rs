@@ -17,8 +17,9 @@ use amafu_domain::kinds::storage_backend::{PluginBackend, PluginModule, StorageP
 use amafu_domain::{NodeName, ProjectName};
 use amafu_network::{StaticAddress, UnderlayConfiguration};
 use amafu_node_configuration::{
-    ApiSection, ComputeSection, DiagnosticsSection, Directories, FencingSection, IdentitySection,
-    NodeConfiguration, NodeSection, SUPPORTED_VERSION, SchedulingSection, StateSection, UpgradeSection,
+    ApiSection, ComputeSection, DiagnosticsSection, Directories, EnvironmentsSection, FencingSection,
+    IdentitySection, NodeConfiguration, NodeSection, SUPPORTED_VERSION, SchedulingSection, StateSection,
+    UpgradeSection,
 };
 use anyhow::{Context, bail};
 use reqwest::Method;
@@ -157,6 +158,7 @@ fn node_configuration(
             cpu_overcommit_ratio: LAB_CPU_OVERCOMMIT_RATIO,
             ..SchedulingSection::default()
         },
+        environments: EnvironmentsSection::default(),
         upgrade: UpgradeSection {
             image_keys: vec![image_key.to_owned()],
             confirm_after_seconds: LAB_CONFIRM_AFTER_SECONDS,

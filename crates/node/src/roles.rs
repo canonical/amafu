@@ -11,6 +11,7 @@ use amafu_api::{
     Transport, node_router, router,
 };
 use amafu_audit_export::BuiltInAuditSinks;
+use amafu_controllers::environments::kubernetes::{KubernetesEnvironment, KubernetesSteps};
 use amafu_controllers::node_lease::{LeaseKeeper, LeaseKeeperSettings, feed_while_leased};
 use amafu_controllers::{
     AuditExportController, BootSlotsController, BootSlotsServices, BootSlotsSettings,
@@ -22,6 +23,7 @@ use amafu_controllers::{
 };
 use amafu_domain::NodeName;
 use amafu_domain::ObjectId;
+use amafu_domain::kinds::kubernetes_cluster::KubernetesClusterChange;
 use amafu_domain::kinds::node::{CpuBaseline, NodeCapacity, NodeRole};
 use amafu_domain::kinds::node_lease::LeaseTerms;
 use amafu_hypervisor::{
@@ -33,6 +35,7 @@ use amafu_interfaces::{
     ImageStore, Leases, LocalServices, NodeLeaseAuthority, NodeLeaseState, RandomIdentifiers,
     SequencedAuditEntry, Storage, Store, StoreError, Watchdog,
 };
+use amafu_kubernetes_client::HttpKubernetes;
 use amafu_network::{KernelDatapath, LocalServicesServer};
 use amafu_reconciler::{Controller, ReconcilerSettings, StepRegistry, run_controller, run_singleton};
 use amafu_state::{
@@ -41,6 +44,7 @@ use amafu_state::{
 };
 use amafu_storage::plugins::{DownloadedModules, PluginHost, PluginLimits};
 use amafu_storage::{BuiltInStorage, CachedImages};
+use amafu_token_issuer::Keyring;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use uuid::Uuid;
@@ -378,6 +382,41 @@ fn cluster_record_roles(roles: &mut JoinSet<()>, services: &Services, settings: 
     );
 }
 
+fn environment_roles(
+    roles: &mut JoinSet<()>,
+    services: &Services,
+    settings: ReconcilerSettings,
+    configuration: &NodeConfiguration,
+) {
+    let certificate_authority = configuration
+        .identity
+        .as_ref()
+        .map(|identity| identity.certificate_authority.clone())
+        .unwrap_or_default();
+    let environment = KubernetesEnvironment {
+        platform: Arc::new(HttpKubernetes::default()),
+        keyring: Keyring::new(Arc::clone(&services.store)),
+        identifiers: Arc::new(RandomIdentifiers),
+        settings: configuration.environments.kubernetes(&configuration.api, &certificate_authority),
+    };
+    let steps: Arc<dyn StepRegistry<KubernetesClusterChange>> = Arc::new(KubernetesSteps::new(environment));
+    let (store, clock) = (Arc::clone(&services.store), Arc::clone(&services.clock));
+    singleton_role(
+        roles,
+        "kubernetes-changes",
+        move |fence| {
+            OperationsController::<KubernetesClusterChange>::new(
+                Arc::clone(&store),
+                Arc::clone(&clock),
+                Arc::clone(&steps),
+                fence,
+            )
+        },
+        services,
+        settings,
+    );
+}
+
 fn recovery_roles(
     roles: &mut JoinSet<()>,
     services: &Services,
@@ -504,6 +543,7 @@ fn core_roles(
         settings,
     );
     cluster_record_roles(roles, services, settings);
+    environment_roles(roles, services, settings, configuration);
     let floating_store = store();
     singleton_role(
         roles,

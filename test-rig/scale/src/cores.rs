@@ -11,8 +11,8 @@ use amafu_domain::kinds::node::NodeRole;
 use amafu_domain::{NodeName, ProjectName};
 use amafu_installer::certificates::CertificateAuthority;
 use amafu_node_configuration::{
-    ApiSection, ComputeSection, Directories, FencingSection, IdentitySection, NodeConfiguration, NodeSection,
-    SUPPORTED_VERSION, SchedulingSection, StateSection, UpgradeSection,
+    ApiSection, ComputeSection, Directories, EnvironmentsSection, FencingSection, IdentitySection,
+    NodeConfiguration, NodeSection, SUPPORTED_VERSION, SchedulingSection, StateSection, UpgradeSection,
 };
 use anyhow::{Context, bail};
 
@@ -86,6 +86,7 @@ fn configuration(
         compute: ComputeSection::default(),
         fencing: FencingSection::default(),
         scheduling: SchedulingSection { cpu_overcommit_ratio: 16, ..SchedulingSection::default() },
+        environments: EnvironmentsSection::default(),
         upgrade: UpgradeSection::default(),
         diagnostics: None,
     })
