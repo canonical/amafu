@@ -12,6 +12,8 @@ use serde::de::DeserializeOwned;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+pub use amafu_token_issuer::Issued as PlatformToken;
+
 use crate::node_identity::PeerCertificate;
 use crate::server::{crypto_provider, parse_certificates};
 use crate::wire::{
@@ -369,6 +371,10 @@ impl ApiClient {
 
     fn encode(value: &impl serde::Serialize) -> Result<Vec<u8>, ClientError> {
         serde_json::to_vec(value).map_err(|error| ClientError::Decode(error.to_string()))
+    }
+
+    pub async fn platform_token<R: Resource>(&self, name: &str) -> Result<PlatformToken, ClientError> {
+        self.call(Method::POST, &self.object_path::<R>(name, "/tokens"), None).await
     }
 
     pub async fn create<R: Resource>(

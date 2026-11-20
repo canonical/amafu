@@ -156,6 +156,7 @@ dependencies = [
  "amafu-installer",
  "amafu-interfaces",
  "anyhow",
+ "base64",
  "clap",
  "futures",
  "hex",

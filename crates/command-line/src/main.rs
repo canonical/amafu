@@ -5,6 +5,7 @@ mod dashboard;
 mod floating_ip;
 mod image;
 mod install;
+mod kubernetes;
 mod network;
 mod node;
 mod operation;
@@ -71,6 +72,8 @@ enum Command {
     Install(install::InstallArguments),
     #[command(subcommand, about = "Create signing keys and sign node images")]
     Release(release::ReleaseCommand),
+    #[command(subcommand, about = "Create and change Kubernetes clusters, and reach them with kubectl")]
+    Kubernetes(kubernetes::KubernetesCommand),
     #[command(subcommand, about = "Serve or deploy the web dashboard")]
     Dashboard(dashboard::DashboardCommand),
 }
@@ -101,6 +104,7 @@ async fn run(arguments: Arguments) -> anyhow::Result<()> {
         Command::Operation(command) => operation::run(&client, command, arguments.output).await,
         Command::AuditSink(command) => audit_sink::run(&client, command, arguments.output).await,
         Command::Upgrade(command) => upgrade::run(&client, command, arguments.output).await,
+        Command::Kubernetes(command) => kubernetes::run(&client, command, arguments.output).await,
         Command::Install(_) | Command::Release(_) | Command::Dashboard(_) => Ok(()),
     }
 }

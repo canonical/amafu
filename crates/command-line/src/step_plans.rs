@@ -13,6 +13,16 @@ use crate::resources::{Tabulated, print_objects};
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 const LONGEST_SUBJECT: usize = 40;
 
+pub fn seconds(text: &str) -> Result<Duration, String> {
+    text.parse::<u64>().map(Duration::from_secs).map_err(|error| error.to_string())
+}
+
+#[derive(Debug, Clone, Copy, clap::Args)]
+pub struct Waiting {
+    #[arg(long, value_parser = seconds, value_name = "SECONDS", help = "Wait this many seconds for the change to finish")]
+    pub wait: Option<Duration>,
+}
+
 #[must_use]
 pub fn outcome_text<K: Runnable>(plan: &Object<K>) -> String {
     match (&plan.status.outcome, &plan.status.rollback) {

@@ -23,12 +23,8 @@ pub struct PlanArguments {
     soak_seconds: u64,
     #[arg(long, help = "Show the steps without starting them")]
     dry_run: bool,
-    #[arg(long, value_parser = seconds, help = "Wait this many seconds for the operation to finish")]
+    #[arg(long, value_parser = step_plans::seconds, help = "Wait this many seconds for the operation to finish")]
     wait: Option<Duration>,
-}
-
-fn seconds(text: &str) -> Result<Duration, String> {
-    text.parse::<u64>().map(Duration::from_secs).map_err(|error| error.to_string())
 }
 
 impl PlanArguments {
