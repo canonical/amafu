@@ -4,12 +4,13 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use amafu_api::TokenIdentity;
+use amafu_controllers::environments::juju::JujuSettings;
 use amafu_controllers::environments::kubernetes::{IssuerTrust, KubernetesSettings};
 use amafu_controllers::{BootSlotsSettings, SchedulingSettings};
 use amafu_domain::kinds::image::ImageSource;
 use amafu_domain::kinds::node::NodeRole;
 use amafu_domain::kinds::node_lease::LeaseTerms;
-use amafu_domain::{NodeName, ZoneName};
+use amafu_domain::{NodeName, OciReference, ZoneName};
 use amafu_interfaces::{ExternalTool, TrustedImageKeys};
 use amafu_network::UnderlayConfiguration;
 use serde::{Deserialize, Serialize};
@@ -52,13 +53,29 @@ pub struct EnvironmentsSection {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ubuntu_image: Option<ImageSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub juju_runner_image: Option<OciReference>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub api_address: Option<String>,
 }
 
 impl EnvironmentsSection {
+    fn address(&self, api: &ApiSection) -> String {
+        self.api_address.clone().unwrap_or_else(|| api.listen.to_string())
+    }
+
+    #[must_use]
+    pub fn juju(&self, api: &ApiSection, certificate_authority: &str) -> JujuSettings {
+        JujuSettings {
+            ubuntu_image: self.ubuntu_image.clone(),
+            runner_image: self.juju_runner_image.clone(),
+            token_refresh_url: format!("https://{}/v1/jwks", self.address(api)),
+            amafu_certificate_authority: certificate_authority.to_owned(),
+        }
+    }
+
     #[must_use]
     pub fn kubernetes(&self, api: &ApiSection, certificate_authority: &str) -> KubernetesSettings {
-        let address = self.api_address.clone().unwrap_or_else(|| api.listen.to_string());
+        let address = self.address(api);
         KubernetesSettings {
             ubuntu_image: self.ubuntu_image.clone(),
             trust: IssuerTrust {

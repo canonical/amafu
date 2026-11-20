@@ -11,6 +11,8 @@ use amafu_api::{
     Transport, node_router, router,
 };
 use amafu_audit_export::BuiltInAuditSinks;
+use amafu_controllers::RunnerKind;
+use amafu_controllers::environments::juju::{JujuEnvironment, JujuSteps};
 use amafu_controllers::environments::kubernetes::{KubernetesEnvironment, KubernetesSteps};
 use amafu_controllers::node_lease::{LeaseKeeper, LeaseKeeperSettings, feed_while_leased};
 use amafu_controllers::{
@@ -23,6 +25,7 @@ use amafu_controllers::{
 };
 use amafu_domain::NodeName;
 use amafu_domain::ObjectId;
+use amafu_domain::kinds::juju_controller::JujuControllerChange;
 use amafu_domain::kinds::kubernetes_cluster::KubernetesClusterChange;
 use amafu_domain::kinds::node::{CpuBaseline, NodeCapacity, NodeRole};
 use amafu_domain::kinds::node_lease::LeaseTerms;
@@ -30,11 +33,13 @@ use amafu_hypervisor::{
     BootSources, CloudHypervisor, CloudHypervisorSettings, HybridVsockAgents, MIGRATION_PORT,
     MigrationTransport, RuntimeDirectory, prepare_kvm_access,
 };
+use amafu_interfaces::KubernetesPlatform;
 use amafu_interfaces::{
     AuditEntry, AuditLog, BootSlots, Clock, CoreConnection, Datapath, Fence, GuestAgents, Hypervisor,
     ImageStore, Leases, LocalServices, NodeLeaseAuthority, NodeLeaseState, RandomIdentifiers,
     SequencedAuditEntry, Storage, Store, StoreError, Watchdog,
 };
+use amafu_juju_client::WebSocketJuju;
 use amafu_kubernetes_client::HttpKubernetes;
 use amafu_network::{KernelDatapath, LocalServicesServer};
 use amafu_reconciler::{Controller, ReconcilerSettings, StepRegistry, run_controller, run_singleton};
@@ -393,24 +398,37 @@ fn environment_roles(
         .as_ref()
         .map(|identity| identity.certificate_authority.clone())
         .unwrap_or_default();
-    let environment = KubernetesEnvironment {
-        platform: Arc::new(HttpKubernetes::default()),
-        keyring: Keyring::new(Arc::clone(&services.store)),
+    let kubernetes: Arc<dyn KubernetesPlatform> = Arc::new(HttpKubernetes::default());
+    let keyring = Keyring::new(Arc::clone(&services.store));
+    let kubernetes_steps = KubernetesSteps::new(KubernetesEnvironment {
+        platform: Arc::clone(&kubernetes),
+        keyring: keyring.clone(),
         identifiers: Arc::new(RandomIdentifiers),
         settings: configuration.environments.kubernetes(&configuration.api, &certificate_authority),
-    };
-    let steps: Arc<dyn StepRegistry<KubernetesClusterChange>> = Arc::new(KubernetesSteps::new(environment));
+    });
+    let juju_steps = JujuSteps::new(JujuEnvironment {
+        platform: Arc::new(WebSocketJuju::default()),
+        kubernetes,
+        keyring,
+        identifiers: Arc::new(RandomIdentifiers),
+        settings: configuration.environments.juju(&configuration.api, &certificate_authority),
+    });
+    step_runner_role::<KubernetesClusterChange>(roles, services, settings, Arc::new(kubernetes_steps));
+    step_runner_role::<JujuControllerChange>(roles, services, settings, Arc::new(juju_steps));
+}
+
+fn step_runner_role<K: RunnerKind>(
+    roles: &mut JoinSet<()>,
+    services: &Services,
+    settings: ReconcilerSettings,
+    steps: Arc<dyn StepRegistry<K>>,
+) {
     let (store, clock) = (Arc::clone(&services.store), Arc::clone(&services.clock));
     singleton_role(
         roles,
-        "kubernetes-changes",
+        K::RUNNER,
         move |fence| {
-            OperationsController::<KubernetesClusterChange>::new(
-                Arc::clone(&store),
-                Arc::clone(&clock),
-                Arc::clone(&steps),
-                fence,
-            )
+            OperationsController::<K>::new(Arc::clone(&store), Arc::clone(&clock), Arc::clone(&steps), fence)
         },
         services,
         settings,
