@@ -31,7 +31,7 @@ pub use network::{NetworkController, SecurityGroupController};
 pub use node::{NodeAction, NodeController, NodeIdentity, NodeObservation};
 pub use node_health::NodeHealthController;
 pub use node_network::NodeNetworkController;
-pub use operations::OperationsController;
+pub use operations::{OperationsController, RunnerKind};
 pub use operations::steps::OperationSteps;
 pub use retirement::{CertificateRevocationController, ExternalNetworkController};
 pub use scheduling::{SchedulerController, SchedulingAction, SchedulingObservation, SchedulingSettings};

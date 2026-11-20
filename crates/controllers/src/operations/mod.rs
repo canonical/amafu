@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use amafu_domain::kinds::operation::Operation;
+use amafu_domain::step_plan::Runnable;
 use amafu_domain::{Object, ObjectReference};
 use amafu_interfaces::objects::{get, list, remove};
 use amafu_interfaces::{ActionError, Clock, Consistency, Fence, Store};
@@ -33,7 +34,7 @@ pub enum OperationAction {
 }
 
 #[must_use]
-pub fn observe_operation(operation: Option<&Object<Operation>>) -> OperationObservation {
+pub fn observe_operation<K: Runnable>(operation: Option<&Object<K>>) -> OperationObservation {
     match operation {
         None => OperationObservation::Absent,
         Some(operation) if operation.status.is_finished() => {
@@ -61,19 +62,33 @@ pub fn plan_operation(observation: OperationObservation) -> Vec<OperationAction>
     }
 }
 
-pub struct OperationsController {
+pub trait RunnerKind: Runnable {
+    const RUNNER: &'static str;
+    const WATCHES: &'static [WatchedKind<ObjectReference>];
+}
+
+const fn watching(kind: &'static str) -> [WatchedKind<ObjectReference>; 1] {
+    [WatchedKind { kind, mapping: KeyMapping::ObjectKey(|reference| Some(reference.clone())) }]
+}
+
+impl RunnerKind for Operation {
+    const RUNNER: &'static str = "operations";
+    const WATCHES: &'static [WatchedKind<ObjectReference>] = &watching("Operation");
+}
+
+pub struct OperationsController<K: RunnerKind = Operation> {
     store: Arc<dyn Store>,
     clock: Arc<dyn Clock>,
-    steps: Arc<dyn StepRegistry>,
+    steps: Arc<dyn StepRegistry<K>>,
     fence: Fence,
 }
 
-impl OperationsController {
+impl<K: RunnerKind> OperationsController<K> {
     #[must_use]
     pub fn new(
         store: Arc<dyn Store>,
         clock: Arc<dyn Clock>,
-        steps: Arc<dyn StepRegistry>,
+        steps: Arc<dyn StepRegistry<K>>,
         fence: Fence,
     ) -> Self {
         Self { store, clock, steps, fence }
@@ -82,7 +97,7 @@ impl OperationsController {
     async fn advance_until_waiting(&self, key: &ObjectReference) -> Result<(), ActionError> {
         for _ in 0..MAXIMUM_STEPS_PER_PASS {
             let Some(operation) =
-                get::<Operation>(self.store.as_ref(), key, Consistency::Linearizable).await?
+                get::<K>(self.store.as_ref(), key, Consistency::Linearizable).await?
             else {
                 return Ok(());
             };
@@ -94,7 +109,7 @@ impl OperationsController {
             };
             match advance(&context, self.steps.as_ref()).await? {
                 Progress::Advanced => {
-                    tracing::info!(operation = %key, "an operation advanced");
+                    tracing::info!(runner = K::RUNNER, operation = %key, "a step plan advanced");
                 }
                 Progress::Idle | Progress::Waiting | Progress::Finished => return Ok(()),
             }
@@ -103,24 +118,21 @@ impl OperationsController {
     }
 }
 
-impl Controller for OperationsController {
+impl<K: RunnerKind> Controller for OperationsController<K> {
     type Key = ObjectReference;
     type Observation = OperationObservation;
     type Action = OperationAction;
 
-    const NAME: &'static str = "operations";
-    const WATCHES: &'static [WatchedKind<ObjectReference>] = &[WatchedKind {
-        kind: "Operation",
-        mapping: KeyMapping::ObjectKey(|reference| Some(reference.clone())),
-    }];
+    const NAME: &'static str = K::RUNNER;
+    const WATCHES: &'static [WatchedKind<ObjectReference>] = K::WATCHES;
 
     async fn discover_keys(&self) -> Result<Vec<ObjectReference>, ActionError> {
-        let operations = list::<Operation>(self.store.as_ref(), None, Consistency::Linearizable).await?;
+        let operations = list::<K>(self.store.as_ref(), None, Consistency::Linearizable).await?;
         Ok(operations.iter().map(Object::reference).collect())
     }
 
     async fn observe(&self, key: &ObjectReference) -> Result<OperationObservation, ActionError> {
-        let operation = get::<Operation>(self.store.as_ref(), key, Consistency::Linearizable).await?;
+        let operation = get::<K>(self.store.as_ref(), key, Consistency::Linearizable).await?;
         Ok(observe_operation(operation.as_ref()))
     }
 
@@ -131,7 +143,7 @@ impl Controller for OperationsController {
     async fn apply(&self, key: &ObjectReference, action: OperationAction) -> Result<(), ActionError> {
         match action {
             OperationAction::Advance => self.advance_until_waiting(key).await,
-            OperationAction::Remove => Ok(remove::<Operation>(self.store.as_ref(), key).await?),
+            OperationAction::Remove => Ok(remove::<K>(self.store.as_ref(), key).await?),
         }
     }
 
