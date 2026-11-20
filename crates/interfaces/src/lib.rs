@@ -6,6 +6,7 @@ pub mod error;
 pub mod guest;
 pub mod hypervisor;
 pub mod identifiers;
+pub mod image_catalog;
 pub mod images;
 pub mod juju;
 pub mod kubernetes;
@@ -31,6 +32,7 @@ pub use hypervisor::{
     RunningInstance, VmLaunchSpecification,
 };
 pub use identifiers::{Identifiers, RandomIdentifiers};
+pub use image_catalog::{CatalogEntry, CatalogKind, FixedImageCatalog, ImageCatalog};
 pub use images::{CachedImage, ContainerConfiguration, ImageRequest, ImageStore};
 pub use juju::{
     Charm, JujuControllerInfo, JujuEndpoint, JujuMachine, JujuModel, JujuPlatform, ManualMachine,
