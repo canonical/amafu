@@ -1,6 +1,41 @@
+use std::collections::BTreeMap;
+
 use amafu_domain::kinds::image::ImageSource;
 use amafu_interfaces::{CatalogEntry, CatalogKind};
-use serde_json::Value;
+use serde::Deserialize;
+
+#[derive(Debug, Default, Deserialize)]
+pub struct Stream {
+    #[serde(default)]
+    products: BTreeMap<String, Product>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct Product {
+    arch: Option<String>,
+    supported: Option<bool>,
+    version: Option<String>,
+    release_title: Option<String>,
+    distro: Option<String>,
+    os: Option<String>,
+    release: Option<String>,
+    variant: Option<String>,
+    #[serde(default)]
+    versions: BTreeMap<String, Version>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct Version {
+    #[serde(default)]
+    items: BTreeMap<String, Item>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct Item {
+    path: Option<String>,
+    sha256: Option<String>,
+    size: Option<u64>,
+}
 
 pub const UBUNTU_STREAM: &str =
     "https://cloud-images.ubuntu.com/releases/streams/v1/com.ubuntu.cloud:released:download.json";
@@ -19,18 +54,17 @@ pub fn object_name(id: &str) -> String {
         .collect()
 }
 
-fn latest_with<'a>(product: &'a Value, item: &str) -> Option<(&'a String, &'a Value)> {
-    product["versions"]
-        .as_object()?
+fn latest_with<'a>(product: &'a Product, item: &str) -> Option<(&'a String, &'a Item)> {
+    product
+        .versions
         .iter()
-        .filter(|(_, version)| version["items"].get(item).is_some())
+        .filter_map(|(version, details)| details.items.get(item).map(|found| (version, found)))
         .max_by(|(left, _), (right, _)| left.cmp(right))
-        .map(|(version, details)| (version, &details["items"][item]))
 }
 
-fn disk(base: &str, item: &Value) -> Option<ImageSource> {
-    let url = format!("{base}{}", item["path"].as_str()?);
-    let sha256 = format!("sha256:{}", item["sha256"].as_str()?).parse().ok()?;
+fn disk(base: &str, item: &Item) -> Option<ImageSource> {
+    let url = format!("{base}{}", item.path.as_deref()?);
+    let sha256 = format!("sha256:{}", item.sha256.as_deref()?).parse().ok()?;
     Some(ImageSource::Disk { url, sha256 })
 }
 
@@ -40,17 +74,15 @@ fn capitalised(text: &str) -> String {
 }
 
 #[must_use]
-pub fn ubuntu_entries(stream: &Value, architecture: &str) -> Vec<CatalogEntry> {
-    let Some(products) = stream["products"].as_object() else {
-        return Vec::new();
-    };
-    products
+pub fn ubuntu_entries(stream: &Stream, architecture: &str) -> Vec<CatalogEntry> {
+    stream
+        .products
         .values()
-        .filter(|product| product["arch"] == architecture && product["supported"] == true)
+        .filter(|product| product.arch.as_deref() == Some(architecture) && product.supported == Some(true))
         .filter_map(|product| {
-            let version = product["version"].as_str()?;
+            let version = product.version.as_deref()?;
             let (published, item) = latest_with(product, UBUNTU_DISK)?;
-            let title = product["release_title"].as_str().unwrap_or(version);
+            let title = product.release_title.as_deref().unwrap_or(version);
             let id = format!("ubuntu/{version}");
             Some(CatalogEntry {
                 name: object_name(&id),
@@ -59,7 +91,7 @@ pub fn ubuntu_entries(stream: &Value, architecture: &str) -> Vec<CatalogEntry> {
                 distribution: String::from("ubuntu"),
                 kind: CatalogKind::VirtualMachine,
                 source: disk(UBUNTU_BASE, item)?,
-                size_bytes: item["size"].as_u64(),
+                size_bytes: item.size,
                 published: Some(published.clone()),
                 is_long_term: title.contains("LTS"),
             })
@@ -68,20 +100,20 @@ pub fn ubuntu_entries(stream: &Value, architecture: &str) -> Vec<CatalogEntry> {
 }
 
 #[must_use]
-pub fn lxd_entries(stream: &Value, architecture: &str) -> Vec<CatalogEntry> {
-    let Some(products) = stream["products"].as_object() else {
-        return Vec::new();
-    };
-    products
+pub fn lxd_entries(stream: &Stream, architecture: &str) -> Vec<CatalogEntry> {
+    stream
+        .products
         .values()
-        .filter(|product| product["arch"] == architecture && product["variant"] == LXD_VARIANT)
-        .filter(|product| product["distro"] != "ubuntu")
+        .filter(|product| {
+            product.arch.as_deref() == Some(architecture) && product.variant.as_deref() == Some(LXD_VARIANT)
+        })
+        .filter(|product| product.distro.as_deref() != Some("ubuntu"))
         .filter_map(|product| {
-            let distribution = product["distro"].as_str()?;
-            let release = product["release"].as_str()?;
+            let distribution = product.distro.as_deref()?;
+            let release = product.release.as_deref()?;
             let (published, item) = latest_with(product, LXD_DISK)?;
-            let os = product["os"].as_str().map_or_else(|| capitalised(distribution), str::to_owned);
-            let release_title = product["release_title"].as_str().unwrap_or(release);
+            let os = product.os.clone().unwrap_or_else(|| capitalised(distribution));
+            let release_title = product.release_title.as_deref().unwrap_or(release);
             let id = format!("{distribution}/{release}");
             Some(CatalogEntry {
                 name: object_name(&id),
@@ -90,7 +122,7 @@ pub fn lxd_entries(stream: &Value, architecture: &str) -> Vec<CatalogEntry> {
                 distribution: distribution.to_owned(),
                 kind: CatalogKind::VirtualMachine,
                 source: disk(LXD_BASE, item)?,
-                size_bytes: item["size"].as_u64(),
+                size_bytes: item.size,
                 published: Some(published.clone()),
                 is_long_term: false,
             })
@@ -100,15 +132,19 @@ pub fn lxd_entries(stream: &Value, architecture: &str) -> Vec<CatalogEntry> {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
+
+    fn stream(value: Value) -> Stream {
+        serde_json::from_value(value).unwrap()
+    }
 
     const DIGEST: &str = "04e8f2461a16a44e78a370284471f29616cdd9baf1893df25807b71f985b6c94";
 
     #[test]
     fn supported_ubuntu_releases_offer_their_newest_disk() {
-        let stream = json!({"products": {
+        let products = json!({"products": {
             "com.ubuntu.cloud:server:24.04:amd64": {
                 "arch": "amd64", "supported": true, "version": "24.04", "release_title": "24.04 LTS",
                 "versions": {
@@ -120,7 +156,7 @@ mod tests {
             "com.ubuntu.cloud:server:16.04:amd64": {"arch": "amd64", "supported": false, "version": "16.04", "versions": {}},
             "com.ubuntu.cloud:server:24.04:arm64": {"arch": "arm64", "supported": true, "version": "24.04", "versions": {}},
         }});
-        let entries = ubuntu_entries(&stream, "amd64");
+        let entries = ubuntu_entries(&stream(products), "amd64");
         assert_eq!(entries.len(), 1);
         let entry = &entries[0];
         assert_eq!(entry.id, "ubuntu/24.04");
@@ -137,7 +173,7 @@ mod tests {
 
     #[test]
     fn other_distributions_come_from_the_cloud_variant_of_the_lxd_images() {
-        let stream = json!({"products": {
+        let products = json!({"products": {
             "debian:bookworm:amd64:cloud": {
                 "arch": "amd64", "distro": "debian", "os": "Debian", "release": "bookworm", "release_title": "bookworm",
                 "variant": "cloud",
@@ -147,7 +183,7 @@ mod tests {
             "alpine:3.24:amd64:cloud": {"arch": "amd64", "distro": "alpine", "release": "3.24", "variant": "cloud",
                 "versions": {"20261120": {"items": {"rootfs.squashfs": {"path": "x", "sha256": DIGEST}}}}},
         }});
-        let entries = lxd_entries(&stream, "amd64");
+        let entries = lxd_entries(&stream(products), "amd64");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].id, "debian/bookworm");
         assert_eq!(entries[0].name, "debian-bookworm");

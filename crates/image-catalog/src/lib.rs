@@ -56,12 +56,16 @@ impl CanonicalCatalog {
         Ok(Self { client: https_client()?, architecture: architecture.to_owned(), cached: Mutex::new(None) })
     }
 
-    async fn stream(&self, url: &str) -> Result<serde_json::Value, String> {
+    async fn stream(&self, url: &str) -> Result<streams::Stream, String> {
         let response = self.client.get(url).send().await.map_err(|error| error.to_string())?;
         if !response.status().is_success() {
             return Err(format!("{url} answered {}", response.status()));
         }
-        response.json().await.map_err(|error| error.to_string())
+        let body = response.bytes().await.map_err(|error| error.to_string())?;
+        tokio::task::spawn_blocking(move || serde_json::from_slice::<streams::Stream>(&body))
+            .await
+            .map_err(|error| error.to_string())?
+            .map_err(|error| format!("{url}: {error}"))
     }
 
     async fn containers(&self) -> Vec<CatalogEntry> {
