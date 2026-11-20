@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use amafu_domain::kinds::environment::{EnvironmentChange, EnvironmentPhase};
 use amafu_domain::kinds::juju_controller::{
-    JujuController, JujuControllerChange, JujuControllerChangeSpecification, JujuRequest,
+    JujuController, JujuControllerChange, JujuControllerChangeSpecification, JujuRequest, Substrate,
 };
 use amafu_domain::kinds::kubernetes_cluster::{
     KubernetesCluster, KubernetesClusterChange, KubernetesClusterChangeSpecification, KubernetesRequest,
@@ -164,6 +164,9 @@ impl StoreAdmission<'_> {
         project: Option<&ProjectName>,
         change: &JujuControllerChangeSpecification,
     ) -> Result<(), Refusal> {
+        if change.request.needs_machines() {
+            return self.require_controller_on_vms(project, &change.controller).await;
+        }
         let JujuRequest::Create { controller } = &change.request else {
             return Ok(());
         };
@@ -171,6 +174,21 @@ impl StoreAdmission<'_> {
             return Ok(());
         };
         self.require_ready_cluster(project, cluster).await
+    }
+
+    async fn require_controller_on_vms(
+        &self,
+        project: Option<&ProjectName>,
+        controller: &ObjectName,
+    ) -> Result<(), Refusal> {
+        let reference = ObjectReference::of::<JujuController>(project.cloned(), controller.clone());
+        let found = get::<JujuController>(self.store, &reference, Consistency::Linearizable).await?;
+        match found.map(|controller| controller.specification.substrate) {
+            Some(Substrate::Kubernetes { .. }) => Err(Refusal::Unready(format!(
+                "controller {controller} runs on Kubernetes; deploy and scale applications through Juju itself"
+            ))),
+            _ => Ok(()),
+        }
     }
 
     async fn require_ready_cluster(
