@@ -299,6 +299,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "amafu-image-catalog"
+version = "0.1.0"
+dependencies = [
+ "amafu-domain",
+ "amafu-interfaces",
+ "async-trait",
+ "reqwest",
+ "rustls",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "webpki-roots",
+]
+
+[[package]]
 name = "amafu-installer"
 version = "0.1.0"
 dependencies = [
@@ -437,6 +452,7 @@ dependencies = [
  "amafu-controllers",
  "amafu-domain",
  "amafu-hypervisor",
+ "amafu-image-catalog",
  "amafu-interfaces",
  "amafu-juju-client",
  "amafu-kubernetes-client",

@@ -9,6 +9,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ("amafu-token-issuer", &["amafu-domain", "amafu-interfaces"]),
     ("amafu-kubernetes-client", &["amafu-interfaces"]),
     ("amafu-juju-client", &["amafu-interfaces"]),
+    ("amafu-image-catalog", &["amafu-domain", "amafu-interfaces"]),
     (
         "amafu-controllers",
         &["amafu-domain", "amafu-interfaces", "amafu-reconciler", "amafu-scheduler", "amafu-token-issuer"],
@@ -52,6 +53,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "amafu-controllers",
             "amafu-domain",
             "amafu-hypervisor",
+            "amafu-image-catalog",
             "amafu-interfaces",
             "amafu-juju-client",
             "amafu-kubernetes-client",
