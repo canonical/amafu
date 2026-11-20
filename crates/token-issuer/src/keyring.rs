@@ -9,7 +9,7 @@ use time::OffsetDateTime;
 
 use crate::claims::{Claims, Issued};
 use crate::documents::JwkSet;
-use crate::keys::{IssuerError, KeyPair};
+use crate::keys::{IssuerError, KeyPair, PublicKey};
 
 #[derive(Debug, thiserror::Error)]
 pub enum KeyringError {
@@ -33,9 +33,11 @@ impl Keyring {
     }
 
     pub async fn published(&self, now: OffsetDateTime) -> Result<JwkSet, KeyringError> {
-        let keys = self.published_keys(now).await?;
-        let public_keys: Vec<_> = keys.iter().map(|(_, key)| key.public_key()).collect();
-        Ok(JwkSet::of(&public_keys))
+        Ok(JwkSet::of(&self.public_keys(now).await?))
+    }
+
+    pub async fn public_keys(&self, now: OffsetDateTime) -> Result<Vec<PublicKey>, KeyringError> {
+        Ok(self.published_keys(now).await?.iter().map(|(_, key)| key.public_key()).collect())
     }
 
     pub async fn sign(&self, claims: &Claims, now: OffsetDateTime) -> Result<Issued, KeyringError> {

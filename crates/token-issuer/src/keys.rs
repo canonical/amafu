@@ -21,6 +21,8 @@ pub enum IssuerError {
     Malformed,
     #[error("the token signature does not verify")]
     BadSignature,
+    #[error("the token has expired or is not valid yet")]
+    Expired,
 }
 
 pub struct KeyPair {
