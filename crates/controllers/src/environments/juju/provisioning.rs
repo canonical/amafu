@@ -39,6 +39,7 @@ impl<'a> ProvisionedMachine<'a> {
         model: &ObjectName,
         model_uuid: &str,
         shape: MachineShape,
+        application: Option<&ObjectName>,
     ) -> Result<(), ActionError> {
         if self.machine.vm().await?.is_some() {
             return Ok(());
@@ -63,7 +64,7 @@ impl<'a> ProvisionedMachine<'a> {
                 storage_backend: storage_backend.clone(),
                 security_groups: vec![self.scope.named("machines")?],
                 user_data,
-                labels: ControllerScope::machine_labels(model, &id),
+                labels: ControllerScope::machine_labels(model, &id, application),
             })
             .await
     }

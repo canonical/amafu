@@ -594,7 +594,7 @@ impl Step<JujuControllerChange> for AddControllerMachines {
         let model_uuid = scope.model_uuid(&model).await?;
         for suffix in Self::suffixes(count) {
             ProvisionedMachine::new(&scope, &suffix)?
-                .provision(&endpoint, &model, &model_uuid, shape)
+                .provision(&endpoint, &model, &model_uuid, shape, None)
                 .await?;
         }
         Ok(())

@@ -99,7 +99,15 @@ impl Step<JujuControllerChange> for CreateMachines {
         let machines = ChangeMachines::of(&scope, &self.model, &self.application).await?;
         let endpoint = scope.endpoint().await?;
         for machine in &machines.machines {
-            machine.provision(&endpoint, &machines.model, &machines.model_uuid, self.shape).await?;
+            machine
+                .provision(
+                    &endpoint,
+                    &machines.model,
+                    &machines.model_uuid,
+                    self.shape,
+                    Some(&self.application),
+                )
+                .await?;
         }
         Ok(())
     }
@@ -327,7 +335,7 @@ impl Step<JujuControllerChange> for ReplaceMachine {
         };
         let replacement = self.replacement(&scope)?;
         if !replacement.is_started(&machines).await? {
-            return replacement.provision(&endpoint, &self.model, &model_uuid, REPLACEMENT_SHAPE).await;
+            return replacement.provision(&endpoint, &self.model, &model_uuid, REPLACEMENT_SHAPE, None).await;
         }
         let Some(new) = replacement.in_juju(&machines) else {
             return Ok(());

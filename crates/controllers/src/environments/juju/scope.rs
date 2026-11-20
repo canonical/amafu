@@ -8,7 +8,7 @@ use amafu_domain::kinds::juju_controller::{
     Substrate,
 };
 use amafu_domain::kinds::kubernetes_cluster::KubernetesCluster;
-use amafu_domain::labels::{JUJU_CONTROLLER, JUJU_MACHINE, JUJU_MODEL};
+use amafu_domain::labels::{JUJU_APPLICATION, JUJU_CONTROLLER, JUJU_MACHINE, JUJU_MODEL};
 use amafu_domain::platform_access::{ISSUER, SERVICE_SUBJECT, juju_user};
 use amafu_domain::{Object, ObjectName, ObjectReference};
 use amafu_interfaces::{ActionError, JujuEndpoint, KubernetesEndpoint};
@@ -211,11 +211,19 @@ impl<'a> ControllerScope<'a> {
     }
 
     #[must_use]
-    pub fn machine_labels(model: &ObjectName, machine: &str) -> BTreeMap<String, String> {
-        BTreeMap::from([
+    pub fn machine_labels(
+        model: &ObjectName,
+        machine: &str,
+        application: Option<&ObjectName>,
+    ) -> BTreeMap<String, String> {
+        let mut labels = BTreeMap::from([
             (JUJU_MODEL.to_owned(), model.to_string()),
             (JUJU_MACHINE.to_owned(), machine.to_owned()),
-        ])
+        ]);
+        if let Some(application) = application {
+            labels.insert(JUJU_APPLICATION.to_owned(), application.to_string());
+        }
+        labels
     }
 }
 
