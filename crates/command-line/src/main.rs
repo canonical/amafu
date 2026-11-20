@@ -14,6 +14,7 @@ mod output;
 mod release;
 mod resources;
 mod security_group;
+mod service_account;
 mod step_plans;
 mod storage_backend;
 mod upgrade;
@@ -77,6 +78,8 @@ enum Command {
     Kubernetes(kubernetes::KubernetesCommand),
     #[command(subcommand, about = "Bootstrap and change Juju controllers")]
     Juju(juju::JujuCommand),
+    #[command(subcommand, about = "Give automation its own credentials")]
+    ServiceAccount(service_account::ServiceAccountCommand),
     #[command(subcommand, about = "Serve or deploy the web dashboard")]
     Dashboard(dashboard::DashboardCommand),
 }
@@ -109,6 +112,7 @@ async fn run(arguments: Arguments) -> anyhow::Result<()> {
         Command::Upgrade(command) => upgrade::run(&client, command, arguments.output).await,
         Command::Kubernetes(command) => kubernetes::run(&client, command, arguments.output).await,
         Command::Juju(command) => juju::run(&client, command, arguments.output).await,
+        Command::ServiceAccount(command) => service_account::run(&client, command, arguments.output).await,
         Command::Install(_) | Command::Release(_) | Command::Dashboard(_) => Ok(()),
     }
 }

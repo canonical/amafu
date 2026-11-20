@@ -14,13 +14,13 @@ use crate::resources::{CommonCommand, Tabulated, kebab_name, or_dash, print_obje
 use crate::step_plans::{Waiting, plan_columns, submit, unique_name};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum SubstrateKind {
+pub enum SubstrateKind {
     Vms,
     Kubernetes,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum SignIn {
+pub enum SignIn {
     Amafu,
     Jaas,
 }
