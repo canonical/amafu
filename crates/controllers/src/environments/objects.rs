@@ -47,6 +47,7 @@ impl Ownership {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct EnvironmentObjects<'a> {
     pub store: &'a dyn Store,
     pub fence: &'a Fence,

@@ -11,16 +11,11 @@ use amafu_reconciler::Step;
 
 use super::KubernetesEnvironment;
 use super::cloud_init::{self, ControlPlane};
-use super::machines::Machine;
 use super::scope::{CA_CERTIFICATE, CA_KEY, ChangeContext, ClusterScope, K8SD_TOKEN};
-use crate::environments::CertificateAuthority;
+use crate::environments::{CertificateAuthority, Machine};
 
 fn role_of(member: &ClusterMember) -> NodeRole {
     if member.is_control_plane() { NodeRole::ControlPlane } else { NodeRole::Worker }
-}
-
-async fn is_running(machine: &Machine<'_>) -> Result<bool, ActionError> {
-    Ok(machine.vm().await?.is_some_and(|vm| vm.status.phase == VmPhase::Running))
 }
 
 async fn record(
@@ -65,13 +60,13 @@ impl BootstrapControlPlane {
 impl Step<KubernetesClusterChange> for BootstrapControlPlane {
     async fn is_complete(&self, context: &ChangeContext<'_>) -> Result<bool, ActionError> {
         let scope = ClusterScope::new(context, &self.environment)?;
-        let machine = Machine::of(&scope, &self.member)?;
-        Ok(is_running(&machine).await? && Self::points_api_at(&scope, machine.name()).await?)
+        let machine = scope.machine(&self.member)?;
+        Ok(machine.is_running().await? && Self::points_api_at(&scope, machine.name()).await?)
     }
 
     async fn run(&self, context: &ChangeContext<'_>) -> Result<(), ActionError> {
         let scope = ClusterScope::new(context, &self.environment)?;
-        let machine = Machine::of(&scope, &self.member)?;
+        let machine = scope.machine(&self.member)?;
         let cluster = scope.cluster().await?;
         let Some(api_address) = scope.api_address().await? else {
             return Ok(());
@@ -94,7 +89,7 @@ impl Step<KubernetesClusterChange> for BootstrapControlPlane {
                 &authority,
                 token,
             );
-            machine.create(&cluster, &self.member, user_data).await?;
+            machine.create(scope.node_plan(&cluster, &self.member, user_data)?).await?;
             record(&scope, &cluster, &self.member, &machine).await?;
         }
         let target = FloatingIpTarget { vm: machine.name().clone(), interface: 0 };
@@ -120,7 +115,7 @@ pub struct JoinNode {
 impl Step<KubernetesClusterChange> for JoinNode {
     async fn is_complete(&self, context: &ChangeContext<'_>) -> Result<bool, ActionError> {
         let scope = ClusterScope::new(context, &self.environment)?;
-        let machine = Machine::of(&scope, &self.member)?;
+        let machine = scope.machine(&self.member)?;
         if machine.vm().await?.is_none() {
             return Ok(false);
         }
@@ -130,7 +125,7 @@ impl Step<KubernetesClusterChange> for JoinNode {
 
     async fn run(&self, context: &ChangeContext<'_>) -> Result<(), ActionError> {
         let scope = ClusterScope::new(context, &self.environment)?;
-        let machine = Machine::of(&scope, &self.member)?;
+        let machine = scope.machine(&self.member)?;
         if machine.vm().await?.is_some() {
             return Ok(());
         }
@@ -144,7 +139,7 @@ impl Step<KubernetesClusterChange> for JoinNode {
             NodeRole::Worker => None,
         };
         let user_data = cloud_init::join(&version, &token, control_plane.as_ref());
-        machine.create(&cluster, &self.member, user_data).await?;
+        machine.create(scope.node_plan(&cluster, &self.member, user_data)?).await?;
         record(&scope, &cluster, &self.member, &machine).await
     }
 }
@@ -200,7 +195,7 @@ impl RemoveNode {
 impl Step<KubernetesClusterChange> for RemoveNode {
     async fn is_complete(&self, context: &ChangeContext<'_>) -> Result<bool, ActionError> {
         let scope = ClusterScope::new(context, &self.environment)?;
-        let machine = Machine::of(&scope, &self.member)?;
+        let machine = scope.machine(&self.member)?;
         let cluster = scope.cluster().await?;
         Ok(machine.vm().await?.is_none()
             && !cluster.status.nodes.iter().any(|node| node.member == self.member))
@@ -208,7 +203,7 @@ impl Step<KubernetesClusterChange> for RemoveNode {
 
     async fn run(&self, context: &ChangeContext<'_>) -> Result<(), ActionError> {
         let scope = ClusterScope::new(context, &self.environment)?;
-        let machine = Machine::of(&scope, &self.member)?;
+        let machine = scope.machine(&self.member)?;
         if machine.vm().await?.is_some() {
             if !self.leave_kubernetes(&scope, &machine).await? {
                 return Ok(());
@@ -231,7 +226,7 @@ pub struct DrainNode {
 impl Step<KubernetesClusterChange> for DrainNode {
     async fn is_complete(&self, context: &ChangeContext<'_>) -> Result<bool, ActionError> {
         let scope = ClusterScope::new(context, &self.environment)?;
-        let machine = Machine::of(&scope, &self.member)?;
+        let machine = scope.machine(&self.member)?;
         let endpoint = scope.endpoint(&scope.cluster().await?).await?;
         Ok(self.environment.platform.drain_state(&endpoint, machine.name().as_str()).await?
             == DrainState::Drained)
@@ -239,7 +234,7 @@ impl Step<KubernetesClusterChange> for DrainNode {
 
     async fn run(&self, context: &ChangeContext<'_>) -> Result<(), ActionError> {
         let scope = ClusterScope::new(context, &self.environment)?;
-        let machine = Machine::of(&scope, &self.member)?;
+        let machine = scope.machine(&self.member)?;
         let endpoint = scope.endpoint(&scope.cluster().await?).await?;
         self.environment.platform.drain(&endpoint, machine.name().as_str()).await
     }
@@ -254,13 +249,13 @@ pub struct StopNode {
 impl Step<KubernetesClusterChange> for StopNode {
     async fn is_complete(&self, context: &ChangeContext<'_>) -> Result<bool, ActionError> {
         let scope = ClusterScope::new(context, &self.environment)?;
-        let machine = Machine::of(&scope, &self.member)?;
+        let machine = scope.machine(&self.member)?;
         Ok(machine.vm().await?.is_none_or(|vm| vm.status.phase == VmPhase::Stopped))
     }
 
     async fn run(&self, context: &ChangeContext<'_>) -> Result<(), ActionError> {
         let scope = ClusterScope::new(context, &self.environment)?;
-        Machine::of(&scope, &self.member)?.set_power(PowerState::Stopped).await
+        scope.machine(&self.member)?.set_power(PowerState::Stopped).await
     }
 }
 
@@ -273,8 +268,8 @@ pub struct StartNode {
 impl Step<KubernetesClusterChange> for StartNode {
     async fn is_complete(&self, context: &ChangeContext<'_>) -> Result<bool, ActionError> {
         let scope = ClusterScope::new(context, &self.environment)?;
-        let machine = Machine::of(&scope, &self.member)?;
-        if !is_running(&machine).await? {
+        let machine = scope.machine(&self.member)?;
+        if !machine.is_running().await? {
             return Ok(false);
         }
         let endpoint = scope.endpoint(&scope.cluster().await?).await?;
@@ -286,8 +281,8 @@ impl Step<KubernetesClusterChange> for StartNode {
 
     async fn run(&self, context: &ChangeContext<'_>) -> Result<(), ActionError> {
         let scope = ClusterScope::new(context, &self.environment)?;
-        let machine = Machine::of(&scope, &self.member)?;
-        if !is_running(&machine).await? {
+        let machine = scope.machine(&self.member)?;
+        if !machine.is_running().await? {
             return machine.set_power(PowerState::Running).await;
         }
         let endpoint = scope.endpoint(&scope.cluster().await?).await?;

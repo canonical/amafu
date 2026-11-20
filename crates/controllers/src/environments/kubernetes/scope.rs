@@ -16,7 +16,7 @@ use amafu_token_issuer::Claims;
 use time::Duration;
 
 use super::KubernetesEnvironment;
-use crate::environments::{EnvironmentObjects, Ownership};
+use crate::environments::{EnvironmentObjects, Machine, MachinePlan, Ownership};
 
 pub const UBUNTU_IMAGE: &str = "ubuntu-24-04";
 pub const K8SD_TOKEN: &str = "k8sd-token";
@@ -55,6 +55,29 @@ impl<'a> ClusterScope<'a> {
             fence: self.context.fence,
             identifiers: self.environment.identifiers.as_ref(),
         }
+    }
+
+    pub fn machine(&self, member: &ClusterMember) -> Result<Machine<'_>, ActionError> {
+        let name =
+            ObjectName::new(member.vm_name(self.ownership.environment())).map_err(ActionError::fatal)?;
+        Ok(Machine::new(self.objects(), &self.ownership, name))
+    }
+
+    pub fn node_plan(
+        &self,
+        cluster: &Object<KubernetesCluster>,
+        member: &ClusterMember,
+        user_data: String,
+    ) -> Result<MachinePlan, ActionError> {
+        Ok(MachinePlan {
+            shape: self.shape_of(cluster, member),
+            image: ObjectName::new(UBUNTU_IMAGE).map_err(ActionError::fatal)?,
+            network: cluster.specification.network.clone(),
+            storage_backend: cluster.specification.storage_backend.clone(),
+            security_groups: vec![self.security_group()?],
+            user_data,
+            labels: std::collections::BTreeMap::new(),
+        })
     }
 
     #[must_use]

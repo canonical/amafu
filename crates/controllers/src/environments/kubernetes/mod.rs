@@ -1,7 +1,6 @@
 mod add_ons;
 mod cloud_init;
 mod lifecycle;
-mod machines;
 mod nodes;
 mod scope;
 
