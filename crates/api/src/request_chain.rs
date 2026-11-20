@@ -59,7 +59,7 @@ pub async fn request_chain(State(state): State<ApiState>, mut request: Request, 
     let is_read = request.method() == axum::http::Method::GET;
     let method = request.method().to_string();
     let path = request.uri().path().to_owned();
-    let authenticated = state.authenticator.authenticate(request.headers(), state.clock.now());
+    let authenticated = state.authenticator.authenticate(request.headers(), state.clock.now()).await;
     let principal = authenticated.as_ref().ok().cloned();
     let mut response = match authenticated {
         Ok(principal) => {

@@ -25,12 +25,48 @@ pub enum AuthenticationError {
     ExpiredCredentials,
 }
 
+#[async_trait::async_trait]
 pub trait Authenticator: Send + Sync {
-    fn authenticate(
+    async fn authenticate(
         &self,
         headers: &HeaderMap,
         now: OffsetDateTime,
     ) -> Result<Principal, AuthenticationError>;
+}
+
+pub fn bearer_token(headers: &HeaderMap) -> Result<&str, AuthenticationError> {
+    let header = headers.get(AUTHORIZATION).ok_or(AuthenticationError::MissingCredentials)?;
+    let header = header.to_str().map_err(|_| AuthenticationError::MalformedCredentials)?;
+    header.strip_prefix(BEARER_PREFIX).ok_or(AuthenticationError::MalformedCredentials)
+}
+
+pub struct ChainedAuthenticator {
+    authenticators: Vec<std::sync::Arc<dyn Authenticator>>,
+}
+
+impl ChainedAuthenticator {
+    #[must_use]
+    pub fn new(authenticators: Vec<std::sync::Arc<dyn Authenticator>>) -> Self {
+        Self { authenticators }
+    }
+}
+
+#[async_trait::async_trait]
+impl Authenticator for ChainedAuthenticator {
+    async fn authenticate(
+        &self,
+        headers: &HeaderMap,
+        now: OffsetDateTime,
+    ) -> Result<Principal, AuthenticationError> {
+        let mut outcome = Err(AuthenticationError::MalformedCredentials);
+        for authenticator in &self.authenticators {
+            outcome = authenticator.authenticate(headers, now).await;
+            if outcome != Err(AuthenticationError::MalformedCredentials) {
+                return outcome;
+            }
+        }
+        outcome
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -101,15 +137,14 @@ impl TokenAuthenticator {
     }
 }
 
+#[async_trait::async_trait]
 impl Authenticator for TokenAuthenticator {
-    fn authenticate(
+    async fn authenticate(
         &self,
         headers: &HeaderMap,
         now: OffsetDateTime,
     ) -> Result<Principal, AuthenticationError> {
-        let header = headers.get(AUTHORIZATION).ok_or(AuthenticationError::MissingCredentials)?;
-        let header = header.to_str().map_err(|_| AuthenticationError::MalformedCredentials)?;
-        let token = header.strip_prefix(BEARER_PREFIX).ok_or(AuthenticationError::MalformedCredentials)?;
+        let token = bearer_token(headers)?;
         if !token.starts_with(TOKEN_PREFIX) {
             return Err(AuthenticationError::MalformedCredentials);
         }
@@ -149,43 +184,46 @@ mod tests {
         OffsetDateTime::UNIX_EPOCH + Duration::from_secs(1_000)
     }
 
-    #[test]
-    fn a_known_token_authenticates_its_principal() {
+    #[tokio::test]
+    async fn a_known_token_authenticates_its_principal() {
         let token = generate_token();
         let authenticator =
             TokenAuthenticator::new(vec![TokenIdentity::for_token(principal(), &token, None)]);
-        assert_eq!(authenticator.authenticate(&headers(&format!("Bearer {token}")), now()), Ok(principal()));
+        assert_eq!(
+            authenticator.authenticate(&headers(&format!("Bearer {token}")), now()).await,
+            Ok(principal())
+        );
     }
 
-    #[test]
-    fn missing_malformed_and_unknown_tokens_are_refused() {
+    #[tokio::test]
+    async fn missing_malformed_and_unknown_tokens_are_refused() {
         let authenticator =
             TokenAuthenticator::new(vec![TokenIdentity::for_token(principal(), &generate_token(), None)]);
         assert_eq!(
-            authenticator.authenticate(&HeaderMap::new(), now()),
+            authenticator.authenticate(&HeaderMap::new(), now()).await,
             Err(AuthenticationError::MissingCredentials)
         );
         assert_eq!(
-            authenticator.authenticate(&headers("Basic abc"), now()),
+            authenticator.authenticate(&headers("Basic abc"), now()).await,
             Err(AuthenticationError::MalformedCredentials)
         );
         assert_eq!(
-            authenticator.authenticate(&headers("Bearer abc"), now()),
+            authenticator.authenticate(&headers("Bearer abc"), now()).await,
             Err(AuthenticationError::MalformedCredentials)
         );
         assert_eq!(
-            authenticator.authenticate(&headers(&format!("Bearer {}", generate_token())), now()),
+            authenticator.authenticate(&headers(&format!("Bearer {}", generate_token())), now()).await,
             Err(AuthenticationError::UnknownCredentials)
         );
     }
 
-    #[test]
-    fn an_expired_token_is_refused() {
+    #[tokio::test]
+    async fn an_expired_token_is_refused() {
         let token = generate_token();
         let identity = TokenIdentity::for_token(principal(), &token, Some(now()));
         let authenticator = TokenAuthenticator::new(vec![identity]);
         assert_eq!(
-            authenticator.authenticate(&headers(&format!("Bearer {token}")), now()),
+            authenticator.authenticate(&headers(&format!("Bearer {token}")), now()).await,
             Err(AuthenticationError::ExpiredCredentials)
         );
     }
