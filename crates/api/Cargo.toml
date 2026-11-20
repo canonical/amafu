@@ -7,7 +7,6 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
-base64.workspace = true
 amafu-token-issuer.workspace = true
 amafu-domain.workspace = true
 amafu-interfaces.workspace = true

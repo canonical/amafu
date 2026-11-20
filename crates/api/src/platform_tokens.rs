@@ -1,19 +1,18 @@
 use amafu_domain::access::Verb;
 use amafu_domain::kinds::juju_controller::JujuController;
 use amafu_domain::kinds::kubernetes_cluster::KubernetesCluster;
-use amafu_domain::kinds::signing_key::{SigningKey, SigningKeySpecification};
 use amafu_domain::platform_access::{ISSUER, juju_access, juju_user, kubernetes_group};
 use amafu_domain::registry::KindDescriptor;
 use amafu_domain::{Object, ObjectReference, Resource};
-use amafu_interfaces::objects::{get, list};
-use amafu_interfaces::{Consistency, Store};
-use amafu_token_issuer::{Claims, JwkSet, KeyPair, discovery_document};
+use std::sync::Arc;
+
+use amafu_interfaces::Consistency;
+use amafu_interfaces::objects::get;
+use amafu_token_issuer::{Claims, Keyring, KeyringError, discovery_document};
 use axum::Json;
 use axum::response::{IntoResponse, Response};
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
 use http::{HeaderMap, StatusCode, Uri};
-use time::{Duration, OffsetDateTime};
+use time::Duration;
 
 use crate::handlers::{ApiError, ApiSuccess, Operation};
 use crate::request_chain::RequestContext;
@@ -24,12 +23,9 @@ const TOKEN_LIFETIME: Duration = Duration::minutes(5);
 const JWKS_PATH: &str = "/v1/jwks";
 
 pub async fn json_web_keys(state: ApiState) -> Response {
-    match published_keys(state.store.as_ref(), state.clock.now()).await {
-        Ok(keys) => {
-            let public_keys: Vec<_> = keys.iter().map(|(_, key)| key.public_key()).collect();
-            Json(JwkSet::of(&public_keys)).into_response()
-        }
-        Err(message) => (StatusCode::SERVICE_UNAVAILABLE, message).into_response(),
+    match Keyring::new(Arc::clone(&state.store)).published(state.clock.now()).await {
+        Ok(keys) => Json(keys).into_response(),
+        Err(error) => (StatusCode::SERVICE_UNAVAILABLE, error.to_string()).into_response(),
     }
 }
 
@@ -97,44 +93,22 @@ async fn readable<R: Resource>(
 }
 
 async fn sign(state: &ApiState, operation: &Operation, claims: &Claims) -> Result<ApiSuccess, ApiError> {
-    let now = state.clock.now();
-    let key = published_keys(state.store.as_ref(), now)
-        .await
-        .map_err(|message| operation.error(StatusCode::SERVICE_UNAVAILABLE, ErrorCode::Unavailable, message))?
-        .into_iter()
-        .find(|(specification, _)| specification.signs_at(now))
-        .map(|(_, key)| key)
-        .ok_or_else(|| {
-            operation.error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                ErrorCode::Unavailable,
-                String::from("no signing key is active yet"),
-            )
+    let issued =
+        Keyring::new(Arc::clone(&state.store)).sign(claims, state.clock.now()).await.map_err(|error| {
+            match error {
+                KeyringError::Issuer(_) => {
+                    operation.error(StatusCode::INTERNAL_SERVER_ERROR, ErrorCode::Internal, error.to_string())
+                }
+                KeyringError::Unreadable(_) | KeyringError::NoActiveKey => operation.error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    ErrorCode::Unavailable,
+                    error.to_string(),
+                ),
+            }
         })?;
-    let issued = claims.sign(&key).map_err(|error| {
-        operation.error(StatusCode::INTERNAL_SERVER_ERROR, ErrorCode::Internal, error.to_string())
-    })?;
     operation.json(StatusCode::CREATED, &issued)
 }
 
 fn not_ready(operation: &Operation, message: &str) -> ApiError {
     operation.error(StatusCode::CONFLICT, ErrorCode::Conflict, message.to_owned())
-}
-
-async fn published_keys(
-    store: &dyn Store,
-    now: OffsetDateTime,
-) -> Result<Vec<(SigningKeySpecification, KeyPair)>, String> {
-    let keys = list::<SigningKey>(store, None, Consistency::Linearizable)
-        .await
-        .map_err(|error| error.to_string())?;
-    Ok(keys
-        .into_iter()
-        .map(|key| key.specification)
-        .filter(|specification| specification.is_published_at(now))
-        .filter_map(|specification| {
-            let pkcs8 = STANDARD.decode(&specification.private_key_pkcs8).ok()?;
-            KeyPair::from_pkcs8(&pkcs8).ok().map(|key| (specification, key))
-        })
-        .collect())
 }

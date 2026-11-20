@@ -96,9 +96,7 @@ impl<K: RunnerKind> OperationsController<K> {
 
     async fn advance_until_waiting(&self, key: &ObjectReference) -> Result<(), ActionError> {
         for _ in 0..MAXIMUM_STEPS_PER_PASS {
-            let Some(operation) =
-                get::<K>(self.store.as_ref(), key, Consistency::Linearizable).await?
-            else {
+            let Some(operation) = get::<K>(self.store.as_ref(), key, Consistency::Linearizable).await? else {
                 return Ok(());
             };
             let context = OperationContext {

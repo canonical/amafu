@@ -63,7 +63,6 @@ dependencies = [
  "amafu-token-issuer",
  "async-trait",
  "axum",
- "base64",
  "bytes",
  "futures",
  "hex",
@@ -637,6 +636,8 @@ dependencies = [
 name = "amafu-token-issuer"
 version = "0.1.0"
 dependencies = [
+ "amafu-domain",
+ "amafu-interfaces",
  "base64",
  "ring",
  "serde",
