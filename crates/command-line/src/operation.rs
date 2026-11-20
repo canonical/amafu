@@ -1,17 +1,16 @@
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use amafu_api::ApiClient;
-use amafu_domain::kinds::operation::{Operation, OperationOutcome, OperationSpecification, VmReference};
+use amafu_domain::kinds::operation::{Operation, OperationSpecification, VmReference};
 use amafu_domain::kinds::vm::Vm;
 use amafu_domain::step_plan::StepPlan;
 use amafu_domain::{NodeName, Object, ObjectName};
-use anyhow::{Context, bail};
+use anyhow::Context;
 use clap::Subcommand;
 
-use crate::output::{OutputFormat, Table, print_structured};
-
-const POLL_INTERVAL: Duration = Duration::from_millis(500);
-const LONGEST_SUBJECT: usize = 40;
+use crate::output::{OutputFormat, print_structured};
+use crate::resources::{Tabulated, print_objects};
+use crate::step_plans::{self, plan_columns, unique_name};
 
 #[derive(Subcommand)]
 pub enum OperationCommand {
@@ -29,57 +28,19 @@ pub enum OperationCommand {
     Delete { name: String },
 }
 
-fn outcome_text(operation: &Object<Operation>) -> String {
-    match (&operation.status.outcome, &operation.status.rollback) {
-        (Some(OperationOutcome::Succeeded), _) => String::from("succeeded"),
-        (Some(OperationOutcome::Cancelled), _) => String::from("cancelled"),
-        (Some(OperationOutcome::Failed { reason }), _) => format!("failed: {reason}"),
-        (None, Some(_)) => String::from("rolling back"),
-        (None, None) if operation.specification.is_paused => String::from("paused"),
-        (None, None) => String::from("running"),
-    }
-}
+impl Tabulated for Operation {
+    const HEADINGS: &'static [&'static str] = &["NAME", "KIND", "PROGRESS", "STEP", "STATE"];
 
-fn current_step(operation: &Object<Operation>) -> String {
-    let specification = &operation.specification;
-    let Some(step) = specification.steps.get(operation.status.completed_steps) else {
-        return String::from("-");
-    };
-    let error = operation
-        .status
-        .current_step
-        .as_ref()
-        .and_then(|progress| progress.last_error.as_ref())
-        .map(|error| format!(" ({error})"))
-        .unwrap_or_default();
-    format!("{}{error}", step.name())
-}
-
-fn print_operations(operations: &[Object<Operation>], format: OutputFormat) -> anyhow::Result<()> {
-    if format != OutputFormat::Table {
-        return print_structured(&operations, format);
-    }
-    let mut table = Table::new(vec!["NAME", "KIND", "PROGRESS", "STEP", "STATE"]);
-    for operation in operations {
-        table.add(vec![
+    fn row(operation: &Object<Self>) -> Vec<String> {
+        let [progress, step, state] = plan_columns(operation);
+        vec![
             operation.metadata.name.to_string(),
             operation.specification.kind.to_string(),
-            format!("{}/{}", operation.status.completed_steps, operation.specification.steps.len()),
-            current_step(operation),
-            outcome_text(operation),
-        ]);
+            progress,
+            step,
+            state,
+        ]
     }
-    crate::output::emit(&table.render())?;
-    Ok(())
-}
-
-pub fn unique_name(prefix: &str, subject: &str) -> anyhow::Result<ObjectName> {
-    let stamp =
-        SystemTime::now().duration_since(UNIX_EPOCH).map(|elapsed| elapsed.as_millis()).unwrap_or_default();
-    let subject: String = amafu_domain::label_fragment(subject).chars().take(LONGEST_SUBJECT).collect();
-    let stamp = format!("{:x}", stamp & 0xff_ffff_ffff);
-    let parts = [prefix, subject.trim_end_matches('-'), &stamp];
-    Ok(ObjectName::new(parts.iter().filter(|part| !part.is_empty()).copied().collect::<Vec<_>>().join("-"))?)
 }
 
 async fn change(
@@ -93,26 +54,6 @@ async fn change(
     Ok(client.update::<Operation>(name, &specification, Some(operation.metadata.generation)).await?)
 }
 
-pub async fn wait_until_finished(
-    client: &ApiClient,
-    name: &str,
-    timeout: Duration,
-) -> anyhow::Result<Object<Operation>> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        let progress = match client.get::<Operation>(name).await {
-            Ok(operation) if operation.status.is_finished() => return Ok(operation),
-            Ok(operation) => current_step(&operation),
-            Err(error) if error.is_transient() => format!("the cluster could not answer: {error}"),
-            Err(error) => return Err(error.into()),
-        };
-        if tokio::time::Instant::now() >= deadline {
-            bail!("operation {name} has not finished after {timeout:?}: {progress}");
-        }
-        tokio::time::sleep(POLL_INTERVAL).await;
-    }
-}
-
 pub async fn start(
     client: &ApiClient,
     name: &ObjectName,
@@ -120,16 +61,7 @@ pub async fn start(
     wait: Option<Duration>,
     format: OutputFormat,
 ) -> anyhow::Result<()> {
-    let created = client.create::<Operation>(name, specification).await?;
-    let Some(timeout) = wait else {
-        return print_operations(&[created], format);
-    };
-    let finished = wait_until_finished(client, name.as_str(), timeout).await?;
-    print_operations(std::slice::from_ref(&finished), format)?;
-    match finished.status.outcome {
-        Some(OperationOutcome::Succeeded) => Ok(()),
-        _ => bail!("operation {name} did not succeed"),
-    }
+    step_plans::submit::<Operation>(client, name, specification, wait, format).await
 }
 
 pub async fn migrate(
@@ -165,13 +97,13 @@ pub async fn evacuate(
 
 pub async fn run(client: &ApiClient, command: OperationCommand, format: OutputFormat) -> anyhow::Result<()> {
     match command {
-        OperationCommand::List => print_operations(&client.list::<Operation>().await?, format),
+        OperationCommand::List => print_objects(&client.list::<Operation>().await?, format),
         OperationCommand::Show { name } => print_structured(&client.get::<Operation>(&name).await?, format),
-        OperationCommand::Pause { name } => print_operations(
+        OperationCommand::Pause { name } => print_objects(
             &[change(client, &name, |specification| specification.is_paused = true).await?],
             format,
         ),
-        OperationCommand::Resume { name } => print_operations(
+        OperationCommand::Resume { name } => print_objects(
             &[change(client, &name, |specification| specification.is_paused = false).await?],
             format,
         ),
@@ -182,27 +114,10 @@ pub async fn run(client: &ApiClient, command: OperationCommand, format: OutputFo
                     "{name} is past a point of no return; it stops at the first later step it can undo or abandon"
                 );
             }
-            print_operations(&[cancelled], format)
+            print_objects(&[cancelled], format)
         }
         OperationCommand::Delete { name } => {
-            print_operations(&[client.delete::<Operation>(&name).await?], format)
+            print_objects(&[client.delete::<Operation>(&name).await?], format)
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn versions_with_dots_name_an_operation() {
-        for version in ["0.1.1", "26.04.1+git3d3a433", "lab-2", "..."] {
-            assert!(unique_name("rollback", version).is_ok(), "{version}");
-        }
-    }
-
-    #[test]
-    fn a_long_subject_still_names_an_operation() {
-        assert!(unique_name("migrate", &"a.".repeat(60)).is_ok());
     }
 }

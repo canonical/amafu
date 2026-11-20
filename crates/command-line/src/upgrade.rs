@@ -10,8 +10,8 @@ use amafu_domain::upgrade::{UpgradePlan, WavePolicy, inventory};
 use anyhow::{Context, bail};
 use clap::{Args, Subcommand};
 
-use crate::operation;
 use crate::output::{OutputFormat, Table, print_structured};
+use crate::{operation, step_plans};
 
 #[derive(Args)]
 pub struct PlanArguments {
@@ -113,7 +113,7 @@ async fn start(
     }
     ensure_no_upgrade_runs(client).await?;
     let prefix = if plan.is_rollback { "rollback" } else { "upgrade" };
-    let name = operation::unique_name(prefix, &plan.image.version)?;
+    let name = step_plans::unique_name(prefix, &plan.image.version)?;
     operation::start(client, &name, &OperationSpecification::upgrade(plan), arguments.wait, format).await
 }
 

@@ -12,6 +12,7 @@ mod output;
 mod release;
 mod resources;
 mod security_group;
+mod step_plans;
 mod storage_backend;
 mod upgrade;
 mod vm;
