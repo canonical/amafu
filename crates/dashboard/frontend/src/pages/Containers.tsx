@@ -4,12 +4,14 @@ import { useState } from "react";
 import { create } from "../cluster/client";
 import type { Image, Vm, VmSpecification } from "../cluster/kinds";
 import { isContainer } from "../cluster/kinds";
+import { chosenImage, ensureImage, imageChoices, useCatalog } from "../cluster/catalog";
 import { useCollection } from "../cluster/live";
 import CollectionNotice from "../components/CollectionNotice";
 import Command from "../components/Command";
 import DeleteConfirmation from "../components/DeleteConfirmation";
 import PageHeader from "../components/PageHeader";
-import Panel, { SubmitFooter } from "../components/Panel";
+import SearchSelect from "../components/SearchSelect";
+import Wizard from "../components/Wizard";
 import SearchHeader, { matches } from "../components/SearchHeader";
 import SubjectLink from "../components/SubjectLink";
 import { usePanel } from "../components/panels";
@@ -29,7 +31,9 @@ import {
   vmScope,
   zoneOf,
 } from "./instances";
-import { MEMORY_CHOICES, NetworkChoices, SecurityGroupChoices } from "./VirtualMachines";
+import { NetworkChoices, SecurityGroupChoices } from "./attachments";
+import { MEMORY_CHOICES } from "./CreateVmWizard";
+import { nameProblem } from "./environmentForms";
 
 const CONTAINER_CPU_COUNT = 1;
 const CONTAINER_MEMORY_MEBIBYTES = 256;
@@ -51,10 +55,10 @@ function environmentOf(text: string): Record<string, string> {
   );
 }
 
-function CreateContainerPanel({ onClose }: { onClose: () => void }) {
+function CreateContainerWizard({ taken, onClose }: { taken: string[]; onClose: () => void }) {
   const project = useProject();
   const images = useCollection<Image>({ plural: "images", project });
-  const containerImages = images.items.filter((image) => image.specification.source.type === "container");
+  const catalog = useCatalog();
   const [name, setName] = useState("");
   const [image, setImage] = useState("");
   const [cpus, setCpus] = useState(CONTAINER_CPU_COUNT);
@@ -64,80 +68,97 @@ function CreateContainerPanel({ onClose }: { onClose: () => void }) {
   const [environment, setEnvironment] = useState("");
   const [command, setCommand] = useState("");
   const { isBusy, problem, submit } = useSubmission();
-  const chosenImage = image || containerImages[0]?.metadata.name || "";
+  const picked = chosenImage(image, catalog.entries, "container");
   const commandWords = command.trim() ? command.trim().split(/\s+/) : [];
   const variables = environmentOf(environment);
-  const reference = containerImages.find((candidate) => candidate.metadata.name === chosenImage)?.specification.source;
-
-  const specification: VmSpecification = {
+  const specification = (imageName: string): VmSpecification => ({
     cpu_count: cpus,
     memory_mebibytes: memory,
-    boot: { type: "container", image: chosenImage, command: commandWords, environment: variables },
+    boot: { type: "container", image: imageName, command: commandWords, environment: variables },
     network_interfaces: networks.map((network) => ({ network, security_groups: securityGroups })),
     power_state: "running",
+  });
+  const run = async () => {
+    if (!picked) {
+      throw new Error("Choose an image");
+    }
+    return create(vmScope(project), name, specification(await ensureImage(project, picked)));
   };
-
   return (
-    <Panel
+    <Wizard
       title="Create container"
-      onClose={onClose}
+      submitLabel="Create container"
+      isBusy={isBusy}
       problem={problem}
-      onSubmit={() => void submit(() => create(vmScope(project), name, specification), onClose)}
-      footer={<SubmitFooter label="Create" isBusy={isBusy} onCancel={onClose} />}
-    >
-      <Input type="text" id="container-name" label="Name" required value={name} onChange={(event) => setName(event.target.value)} />
-      <Select
-        id="container-image"
-        label="Image"
-        value={chosenImage}
-        onChange={(event) => setImage(event.target.value)}
-        options={containerImages.map((candidate) => ({ value: candidate.metadata.name, label: candidate.metadata.name }))}
-        help={
-          reference?.type === "container"
-            ? `Runs ${reference.reference} as an application container in its own small VM.`
-            : "Register container images on the Images page."
-        }
-      />
-      <div className="field-pair">
-        <Input id="container-cpus" label="vCPU" type="number" min={1} value={cpus} onChange={(event) => setCpus(Number(event.target.value))} />
-        <Select
-          id="container-memory"
-          label="Memory"
-          value={memory}
-          onChange={(event) => setMemory(Number(event.target.value))}
-          options={[256, ...MEMORY_CHOICES].map((choice) => ({ value: choice, label: mebibytes(choice) }))}
-        />
-      </div>
-      <NetworkChoices chosen={networks} onChange={setNetworks} />
-      <SecurityGroupChoices chosen={securityGroups} onChange={setSecurityGroups} />
-      <Textarea
-        id="container-environment"
-        label="Environment"
-        help="One NAME=VALUE per line."
-        rows={3}
-        value={environment}
-        onChange={(event) => setEnvironment(event.target.value)}
-      />
-      <Input type="text" id="container-command" label="Command" help="Replaces the image's own command." value={command} onChange={(event) => setCommand(event.target.value)} />
-      <Command
-        words={[
-          "amafu",
-          "container",
-          "run",
-          name || "NAME",
-          "--image",
-          chosenImage || "IMAGE",
-          cpus !== CONTAINER_CPU_COUNT && "--cpus",
-          cpus !== CONTAINER_CPU_COUNT && String(cpus),
-          memory !== CONTAINER_MEMORY_MEBIBYTES && "--memory",
-          memory !== CONTAINER_MEMORY_MEBIBYTES && String(memory),
-          ...networks.flatMap((network) => ["--network", network]),
-          ...securityGroups.flatMap((group) => ["--security-group", group]),
-          ...Object.entries(variables).flatMap(([variable, value]) => ["--env", `${variable}=${value}`]),
-          ...(commandWords.length > 0 ? ["--", ...commandWords] : []),
-        ]}
-      />
-    </Panel>
+      onClose={onClose}
+      onSubmit={() => void submit(run, onClose)}
+      steps={[
+        {
+          title: "Image",
+          summary: picked?.entry?.title ?? picked?.name,
+          isReady: Boolean(name) && !nameProblem(name, taken) && Boolean(picked),
+          content: (
+            <>
+              <Input type="text" id="container-name" label="Name" required value={name} error={nameProblem(name, taken)} onChange={(event) => setName(event.target.value)} />
+              <SearchSelect
+                id="container-image"
+                label="Image"
+                required
+                value={image}
+                choices={imageChoices(images.items, catalog.entries, "container")}
+                onChange={setImage}
+                placeholder={catalog.state === "loading" ? "Loading Canonical's images…" : "Search images"}
+                help="Runs as an application container in its own small VM. Images from Canonical are pinned by digest."
+              />
+            </>
+          ),
+        },
+        {
+          title: "Resources",
+          summary: `${cpus} vCPU, ${mebibytes(memory)}`,
+          isReady: true,
+          content: (
+            <>
+              <div className="field-pair">
+                <Input id="container-cpus" label="vCPU" type="number" min={1} value={cpus} onChange={(event) => setCpus(Number(event.target.value))} />
+                <Select
+                  id="container-memory"
+                  label="Memory"
+                  value={memory}
+                  onChange={(event) => setMemory(Number(event.target.value))}
+                  options={[256, ...MEMORY_CHOICES].map((choice) => ({ value: choice, label: mebibytes(choice) }))}
+                />
+              </div>
+              <NetworkChoices chosen={networks} onChange={setNetworks} />
+              <SecurityGroupChoices chosen={securityGroups} onChange={setSecurityGroups} />
+            </>
+          ),
+        },
+        {
+          title: "Command",
+          isReady: true,
+          content: (
+            <div className="wizard__review">
+              <div>
+                <Input type="text" id="container-command" label="Command" help="Replaces the image's own command." value={command} onChange={(event) => setCommand(event.target.value)} />
+                <Textarea id="container-environment" label="Environment" help="One NAME=VALUE per line." rows={4} value={environment} onChange={(event) => setEnvironment(event.target.value)} />
+              </div>
+              <Command
+                words={[
+                  "amafu", "container", "run", name || "NAME", "--image", picked?.entry?.id ?? picked?.name ?? "IMAGE",
+                  cpus !== CONTAINER_CPU_COUNT && "--cpus", cpus !== CONTAINER_CPU_COUNT && String(cpus),
+                  memory !== CONTAINER_MEMORY_MEBIBYTES && "--memory", memory !== CONTAINER_MEMORY_MEBIBYTES && String(memory),
+                  ...networks.flatMap((network) => ["--network", network]),
+                  ...securityGroups.flatMap((group) => ["--security-group", group]),
+                  ...Object.entries(variables).flatMap(([variable, value]) => ["--env", `${variable}=${value}`]),
+                  ...(commandWords.length > 0 ? ["--", ...commandWords] : []),
+                ]}
+              />
+            </div>
+          ),
+        },
+      ]}
+    />
   );
 }
 
@@ -217,7 +238,7 @@ export default function Containers() {
           sortData: { name: vm.metadata.name, image: imageOf(vm), status: phaseOf(vm), node: vm.status.node ?? "" },
         }))}
       />
-      {panel.panel === "create" && <CreateContainerPanel onClose={panel.close} />}
+      {panel.panel === "create" && <CreateContainerWizard taken={vms.items.map((vm) => vm.metadata.name)} onClose={panel.close} />}
       {panel.panel === "detail" && subject && (
         <InstanceDetail vm={subject} floatingAddresses={floatingAddresses.get(subject.metadata.name) ?? []} onClose={panel.close} />
       )}

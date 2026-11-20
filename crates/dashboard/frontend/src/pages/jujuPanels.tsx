@@ -1,10 +1,13 @@
-import { CheckboxInput, ConfirmationModal, Input, Notification, RadioInput, Select } from "@canonical/react-components";
+import { ConfirmationModal, Input, Notification, Select, Switch } from "@canonical/react-components";
 import { useState } from "react";
 
 import type { JujuController, JujuRequest, KubernetesCluster, MachineShape, Substrate } from "../cluster/environments";
 import { requestJujuChange } from "../cluster/environments";
 import Command from "../components/Command";
 import Panel, { SubmitFooter } from "../components/Panel";
+import SearchSelect from "../components/SearchSelect";
+import Segments from "../components/Segments";
+import Wizard from "../components/Wizard";
 import { useSubmission } from "../components/submission";
 import { useProject } from "../session";
 import { NumberField, PlacementFields, ShapeSelect, chosen, nameProblem, usePlacementChoices } from "./environmentForms";
@@ -48,59 +51,93 @@ export function CreateControllerPanel({
       : { on, cluster: hostCluster };
   const problemWithName = nameProblem(name, taken);
   const controller = { version, substrate, first_model: firstModel, sign_in: "amafu" as const };
+  const isPlaced = on === "vms" ? Boolean(where.network && where.storageBackend && where.externalNetwork) : Boolean(hostCluster);
   return (
-    <Panel
+    <Wizard
       title="Create Juju controller"
-      isWide
-      onClose={onClose}
+      submitLabel="Create controller"
+      isBusy={isBusy}
       problem={problem}
+      onClose={onClose}
       onSubmit={() => void submit(() => requestJujuChange(project, name, { kind: "create", controller }), onClose)}
-      footer={<SubmitFooter label="Create controller" isBusy={isBusy || Boolean(problemWithName)} onCancel={onClose} />}
-    >
-      <Input id="controller-name" type="text" label="Name" required value={name} error={problemWithName} onChange={(event) => setName(event.target.value)} />
-      <Select id="controller-version" label="Juju version" value={version} onChange={(event) => setVersion(event.target.value)} options={VERSIONS.map((value) => ({ value, label: value }))} />
-      <RadioInput
-        label="On Amafu VMs: machine charms on a manual cloud; Amafu creates every machine as a VM"
-        checked={on === "vms"}
-        onChange={() => setOn("vms")}
-      />
-      <RadioInput
-        label="On a Kubernetes cluster: Kubernetes charms; models are namespaces and units are pods"
-        checked={on === "kubernetes"}
-        disabled={readyClusters.length === 0}
-        onChange={() => setOn("kubernetes")}
-      />
-      {on === "vms" ? (
-        <>
-          <ShapeSelect id="controller-shape" label="Controller size" value={shape} onChange={setShape} />
-          <CheckboxInput label="High availability (3 controllers)" checked={isHighlyAvailable} onChange={() => setHighlyAvailable(!isHighlyAvailable)} />
-          <PlacementFields prefix="controller" placement={where} choices={choices} onChange={setPlacement} />
-        </>
-      ) : (
-        <Select
-          id="controller-cluster"
-          label="Kubernetes cluster"
-          value={hostCluster}
-          onChange={(event) => setCluster(event.target.value)}
-          options={readyClusters.map((value) => ({ value, label: value }))}
-        />
-      )}
-      <Input id="controller-model" type="text" label={on === "vms" ? "First model" : "First model (namespace)"} value={firstModel} onChange={(event) => setFirstModel(event.target.value)} />
-      <p className="u-text--muted">Sign-in uses Amafu accounts; access follows each person's role in this project.</p>
-      <Command
-        words={[
-          "amafu", "juju", "create", name || "NAME", "--version", version, "--on", on,
-          ...(on === "vms"
-            ? [
-                isHighlyAvailable && "--controllers", isHighlyAvailable && "3", "--shape", shape,
-                "--network", where.network || "NETWORK", "--storage-backend", where.storageBackend || "BACKEND",
-                "--external-network", where.externalNetwork || "NETWORK",
-              ]
-            : ["--cluster", hostCluster || "CLUSTER"]),
-          firstModel !== "default" && "--first-model", firstModel !== "default" && firstModel,
-        ]}
-      />
-    </Panel>
+      steps={[
+        {
+          title: "Controller",
+          summary: `${name} · Juju ${version}`,
+          isReady: Boolean(name) && !problemWithName,
+          content: (
+            <>
+              <Input id="controller-name" type="text" label="Name" required value={name} error={problemWithName} onChange={(event) => setName(event.target.value)} />
+              <Select id="controller-version" label="Juju version" value={version} onChange={(event) => setVersion(event.target.value)} options={VERSIONS.map((value) => ({ value, label: value }))} />
+              <Segments<"vms" | "kubernetes">
+                label="Runs on"
+                value={on}
+                onChange={setOn}
+                segments={[
+                  { value: "vms", label: "Amafu VMs" },
+                  { value: "kubernetes", label: "A Kubernetes cluster" },
+                ]}
+              />
+              <p className="u-text--muted">
+                {on === "vms"
+                  ? "Machine charms on a manual cloud: Amafu creates every machine as a VM and hands it to Juju."
+                  : readyClusters.length > 0
+                    ? "Kubernetes charms: models are namespaces and units are pods on the cluster."
+                    : "No Kubernetes cluster of this project is ready yet; create one on the Kubernetes page first."}
+              </p>
+            </>
+          ),
+        },
+        {
+          title: "Placement",
+          summary: on === "vms" ? `${isHighlyAvailable ? 3 : 1} × ${shape}` : `on ${hostCluster}`,
+          isReady: isPlaced,
+          content:
+            on === "vms" ? (
+              <div className="field-pair">
+                <div>
+                  <ShapeSelect id="controller-shape" label="Controller size" value={shape} onChange={setShape} />
+                  <Switch label="High availability (3 controllers)" checked={isHighlyAvailable} onChange={() => setHighlyAvailable(!isHighlyAvailable)} />
+                </div>
+                <div>
+                  <PlacementFields prefix="controller" placement={where} choices={choices} onChange={setPlacement} />
+                </div>
+              </div>
+            ) : (
+              <SearchSelect
+                id="controller-cluster"
+                label="Kubernetes cluster"
+                value={hostCluster}
+                onChange={setCluster}
+                choices={readyClusters.map((value) => ({ value, label: value }))}
+              />
+            ),
+        },
+        {
+          title: "Review",
+          isReady: isPlaced && Boolean(firstModel),
+          content: (
+            <>
+              <Input id="controller-model" type="text" label={on === "vms" ? "First model" : "First model (namespace)"} value={firstModel} onChange={(event) => setFirstModel(event.target.value)} />
+              <p className="u-text--muted">Sign-in uses Amafu accounts; access follows each person's role in this project.</p>
+              <Command
+                words={[
+                  "amafu", "juju", "create", name || "NAME", "--version", version, "--on", on,
+                  ...(on === "vms"
+                    ? [
+                        isHighlyAvailable && "--controllers", isHighlyAvailable && "3", "--shape", shape,
+                        "--network", where.network || "NETWORK", "--storage-backend", where.storageBackend || "BACKEND",
+                        "--external-network", where.externalNetwork || "NETWORK",
+                      ]
+                    : ["--cluster", hostCluster || "CLUSTER"]),
+                  firstModel !== "default" && "--first-model", firstModel !== "default" && firstModel,
+                ]}
+              />
+            </>
+          ),
+        },
+      ]}
+    />
   );
 }
 
@@ -131,7 +168,7 @@ export function DeployPanel({ controller, onClose }: { controller: JujuControlle
       <Input id="deploy-channel" type="text" label="Channel" placeholder="latest/stable" value={channel} onChange={(event) => setChannel(event.target.value)} />
       <NumberField id="deploy-units" label="Units" value={units} minimum={1} maximum={MAXIMUM_UNITS} onChange={setUnits} help="Amafu starts one VM per unit and hands it to Juju." />
       <ShapeSelect id="deploy-shape" label="Machine size" value={shape} onChange={setShape} />
-      <CheckboxInput label="Expose (open its ports through a floating IP)" checked={expose} onChange={() => setExpose(!expose)} />
+      <Switch label="Expose (open its ports through a floating IP)" checked={expose} onChange={() => setExpose(!expose)} />
       <Command
         words={[
           "amafu", "juju", "deploy", controller.metadata.name, "--model", model || "MODEL", "--application", name || "APPLICATION",

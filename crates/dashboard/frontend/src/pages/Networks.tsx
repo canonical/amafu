@@ -1,4 +1,4 @@
-import { Button, CheckboxInput, Input, MainTable, Tabs } from "@canonical/react-components";
+import { Button, Input, MainTable, Switch, Tabs } from "@canonical/react-components";
 import { useState } from "react";
 
 import { create } from "../cluster/client";
@@ -37,10 +37,11 @@ function CreateNetworkPanel({ onClose }: { onClose: () => void }) {
     >
       <Input type="text" id="network-name" label="Name" required value={name} onChange={(event) => setName(event.target.value)} />
       <Input type="text" id="network-subnet" label="Subnet" required value={subnet} onChange={(event) => setSubnet(event.target.value)} />
-      <CheckboxInput
-        label="Keep VMs on this network from reaching outside it"
-        checked={isIsolated}
+      <Switch
+        label="Let VMs on this network reach outside it"
+        checked={!isIsolated}
         onChange={() => setIsolated(!isIsolated)}
+        help="Outbound traffic leaves through the node's address."
       />
       <Command words={["amafu", "network", "create", name || "NAME", "--subnet", subnet, isIsolated && "--no-outbound-access"]} />
     </Panel>

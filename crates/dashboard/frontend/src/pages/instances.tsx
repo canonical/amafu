@@ -9,6 +9,7 @@ import { projectScope } from "../cluster/scopes";
 import Command from "../components/Command";
 import IconAction from "../components/IconAction";
 import Panel from "../components/Panel";
+import PanelTabs from "../components/PanelTabs";
 import Status from "../components/Status";
 import { useSubmission } from "../components/submission";
 import { mebibytes, sentence } from "../format";
@@ -196,35 +197,64 @@ export function InstanceDetail({ vm, floatingAddresses, onClose }: InstanceDetai
           {vm.status.message}
         </Notification>
       )}
-      <DetailList
-        rows={[
-          { label: "Status", value: <InstanceStatus vm={vm} /> },
-          { label: "Node", value: vm.status.node },
+      <PanelTabs
+        tabs={[
           {
-            label: isContainer ? "Image" : "Boots",
-            value: boot.type === "container" ? boot.image : boot.type === "kernel" ? `kernel ${boot.bundle}` : "first volume",
+            label: "Overview",
+            content: (
+              <DetailList
+                rows={[
+                  { label: "Status", value: <InstanceStatus vm={vm} /> },
+                  { label: "Node", value: vm.status.node },
+                  {
+                    label: isContainer ? "Image" : "Boots",
+                    value: boot.type === "container" ? boot.image : boot.type === "kernel" ? `kernel ${boot.bundle}` : (vm.specification.volumes ?? [])[0] ?? "first volume",
+                  },
+                  { label: "vCPU", value: vm.specification.cpu_count },
+                  { label: "Memory", value: mebibytes(vm.specification.memory_mebibytes) },
+                ]}
+              />
+            ),
           },
-          { label: "vCPU", value: vm.specification.cpu_count },
-          { label: "Memory", value: mebibytes(vm.specification.memory_mebibytes) },
-          { label: "Volumes", value: (vm.specification.volumes ?? []).join(", ") || "—" },
           {
-            label: "Interfaces",
-            value:
-              interfaces.length === 0
-                ? (vm.specification.network_interfaces ?? []).map((nic) => nic.network).join(", ") || "—"
-                : interfaces.map((nic) => `${nic.network} ${nic.address}`).join(", "),
+            label: "Network and storage",
+            content: (
+              <DetailList
+                rows={[
+                  {
+                    label: "Interfaces",
+                    value:
+                      interfaces.length === 0
+                        ? (vm.specification.network_interfaces ?? []).map((nic) => nic.network).join(", ") || "—"
+                        : interfaces.map((nic) => `${nic.network} ${nic.address}`).join(", "),
+                  },
+                  { label: "Floating IPs", value: floatingAddresses.join(", ") || "—" },
+                  { label: "Volumes", value: (vm.specification.volumes ?? []).join(", ") || "—" },
+                ]}
+              />
+            ),
           },
-          { label: "Floating IPs", value: floatingAddresses.join(", ") || "—" },
-          { label: "Priority", value: vm.specification.priority ?? 0 },
-          { label: "Anti-affinity", value: vm.specification.anti_affinity_group },
+          {
+            label: "Placement",
+            content: (
+              <>
+                <DetailList
+                  rows={[
+                    { label: "Priority", value: vm.specification.priority ?? 0 },
+                    { label: "Anti-affinity", value: vm.specification.anti_affinity_group },
+                  ]}
+                />
+                {vm.status.migration?.report && (
+                  <p className="u-text--muted">
+                    Last migration took {vm.status.migration.report.duration_milliseconds} ms with a{" "}
+                    {vm.status.migration.report.downtime_milliseconds} ms pause.
+                  </p>
+                )}
+              </>
+            ),
+          },
         ]}
       />
-      {vm.status.migration?.report && (
-        <p className="u-text--muted">
-          Last migration took {vm.status.migration.report.duration_milliseconds} ms with a{" "}
-          {vm.status.migration.report.downtime_milliseconds} ms pause.
-        </p>
-      )}
       <Command words={["amafu", "vm", "show", vm.metadata.name]} />
     </Panel>
   );

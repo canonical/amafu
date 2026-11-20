@@ -10,6 +10,7 @@ import IconAction from "../components/IconAction";
 import Meter from "../components/Meter";
 import PageHeader from "../components/PageHeader";
 import Panel from "../components/Panel";
+import PanelTabs from "../components/PanelTabs";
 import Status from "../components/Status";
 import StepPlan, { PlanProgress, planPhase } from "../components/StepPlan";
 import SubjectLink from "../components/SubjectLink";
@@ -57,7 +58,6 @@ function NodePools({ cluster, panel, isBusy }: { cluster: KubernetesCluster; pan
   const name = cluster.metadata.name;
   return (
     <>
-      <h3 className="p-heading--5">Node pools</h3>
       <MainTable
         emptyStateMsg="No node pools; workloads run on the control plane."
         headers={[{ content: "Pool" }, { content: "Nodes" }, { content: "Size" }, { content: "Actions", className: "u-align--right" }]}
@@ -90,7 +90,6 @@ function Nodes({ cluster, panel, isBusy }: { cluster: KubernetesCluster; panel: 
   const name = cluster.metadata.name;
   return (
     <>
-      <h3 className="p-heading--5">Nodes</h3>
       <MainTable
         emptyStateMsg="No nodes yet."
         headers={[{ content: "Node" }, { content: "Role" }, { content: "Version" }, { content: "Status" }, { content: "Actions", className: "u-align--right" }]}
@@ -134,27 +133,36 @@ function ClusterDetail({
         Canonical Kubernetes {cluster.specification.version} · API {cluster.status.endpoint ?? "not reachable yet"}
       </p>
       <Status phase={cluster.status.phase} detail={cluster.status.message} />
-      {running && (
-        <>
-          <h3 className="p-heading--5">Running: {running.specification.request.kind.replaceAll("-", " ")}</h3>
-          <StepPlan plan={running} describe={describer(name)} />
-        </>
-      )}
-      <NodePools cluster={cluster} panel={panel} isBusy={Boolean(running)} />
-      <Nodes cluster={cluster} panel={panel} isBusy={Boolean(running)} />
-      {(cluster.status.hosted_juju_controllers ?? []).length > 0 && (
-        <p>Hosts the Juju controllers {cluster.status.hosted_juju_controllers?.join(", ")}.</p>
-      )}
-      <h3 className="p-heading--5">Changes</h3>
-      <ChangeList changes={changes} />
-      <Command
-        title={`Use ${name} from kubectl`}
-        words={["amafu", "kubernetes", "kubeconfig", name]}
+      <PanelTabs
+        tabs={[
+          {
+            label: "Overview",
+            content: (
+              <>
+                {running ? (
+                  <>
+                    <h3 className="p-heading--5">Running: {running.specification.request.kind.replaceAll("-", " ")}</h3>
+                    <StepPlan plan={running} describe={describer(name)} />
+                  </>
+                ) : (
+                  <p className="u-text--muted">No change is running.</p>
+                )}
+                {(cluster.status.hosted_juju_controllers ?? []).length > 0 && (
+                  <p>Hosts the Juju controllers {cluster.status.hosted_juju_controllers?.join(", ")}.</p>
+                )}
+                <Command title={`Use ${name} from kubectl`} words={["amafu", "kubernetes", "kubeconfig", name]} />
+                <p className="u-text--muted">
+                  The kubeconfig holds no secret: kubectl asks <code>amafu kubernetes token {name}</code> for a five-minute token
+                  signed by this cluster, and your role in the project decides what you may do.
+                </p>
+              </>
+            ),
+          },
+          { label: `Node pools (${Object.keys(cluster.specification.node_pools ?? {}).length})`, content: <NodePools cluster={cluster} panel={panel} isBusy={Boolean(running)} /> },
+          { label: `Nodes (${cluster.status.nodes?.length ?? 0})`, content: <Nodes cluster={cluster} panel={panel} isBusy={Boolean(running)} /> },
+          { label: `Changes (${changes.length})`, content: <ChangeList changes={changes} /> },
+        ]}
       />
-      <p className="u-text--muted">
-        The kubeconfig holds no secret: kubectl asks <code>amafu kubernetes token {name}</code> for a five-minute token
-        signed by this cluster, and your role in the project decides what you may do.
-      </p>
     </Panel>
   );
 }

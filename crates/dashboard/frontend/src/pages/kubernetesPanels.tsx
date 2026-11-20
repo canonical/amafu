@@ -5,6 +5,7 @@ import type { KubernetesCluster, KubernetesClusterSpecification, MachineShape, N
 import { requestKubernetesChange } from "../cluster/environments";
 import Command from "../components/Command";
 import Panel, { SubmitFooter } from "../components/Panel";
+import Wizard from "../components/Wizard";
 import { useSubmission } from "../components/submission";
 import { countOf } from "../format";
 import { useProject } from "../session";
@@ -41,42 +42,80 @@ export function CreateClusterPanel({ taken, onClose }: { taken: string[]; onClos
     storage_backend: where.storageBackend,
     external_network: where.externalNetwork,
   };
+  const isPlaced = Boolean(where.network && where.storageBackend && where.externalNetwork);
   return (
-    <Panel
+    <Wizard
       title="Create Kubernetes cluster"
-      isWide
-      onClose={onClose}
+      submitLabel="Create cluster"
+      isBusy={isBusy}
       problem={problem}
+      onClose={onClose}
       onSubmit={() => void submit(() => requestKubernetesChange(project, name, { kind: "create", cluster }), onClose)}
-      footer={<SubmitFooter label="Create cluster" isBusy={isBusy || Boolean(problemWithName)} onCancel={onClose} />}
-    >
-      <Input id="cluster-name" type="text" label="Name" required value={name} error={problemWithName} onChange={(event) => setName(event.target.value)} />
-      <Select id="cluster-version" label="Kubernetes version" value={version} onChange={(event) => setVersion(event.target.value)} options={VERSIONS.map((value) => ({ value, label: value }))} />
-      <Select
-        id="cluster-control-plane"
-        label="Control plane"
-        value={controlPlane}
-        onChange={(event) => setControlPlane(Number(event.target.value))}
-        options={CONTROL_PLANE_SIZES.map((value) => ({ value, label: countOf(value, "node") }))}
-      />
-      <ShapeSelect id="cluster-control-plane-shape" label="Control plane size" value={controlPlaneShape} onChange={setControlPlaneShape} />
-      <NumberField id="cluster-workers" label="Workers in pool general" value={workers} minimum={0} maximum={MAXIMUM_POOL_NODES} onChange={setWorkers} />
-      <ShapeSelect id="cluster-worker-shape" label="Worker size" value={workerShape} onChange={setWorkerShape} />
-      <PlacementFields prefix="cluster" placement={where} choices={choices} onChange={setPlacement} />
-      <p className="u-text--muted">
-        This creates {countOf(controlPlane + workers, "VM")}, a floating IP for the API and a security group. Sign-in uses
-        Amafu accounts: your role in this project becomes a Kubernetes group.
-      </p>
-      <Command
-        words={[
-          "amafu", "kubernetes", "create", name || "NAME", "--version", version,
-          "--control-plane-nodes", String(controlPlane), "--control-plane-shape", controlPlaneShape,
-          workers > 0 && "--pool", workers > 0 && `general=${workers}:${workerShape}`,
-          "--network", where.network || "NETWORK", "--storage-backend", where.storageBackend || "BACKEND",
-          "--external-network", where.externalNetwork || "NETWORK",
-        ]}
-      />
-    </Panel>
+      steps={[
+        {
+          title: "Cluster",
+          summary: `${name} · Kubernetes ${version}`,
+          isReady: Boolean(name) && !problemWithName,
+          content: (
+            <>
+              <Input id="cluster-name" type="text" label="Name" required value={name} error={problemWithName} onChange={(event) => setName(event.target.value)} />
+              <Select id="cluster-version" label="Kubernetes version" value={version} onChange={(event) => setVersion(event.target.value)} options={VERSIONS.map((value) => ({ value, label: `Canonical Kubernetes ${value}` }))} />
+            </>
+          ),
+        },
+        {
+          title: "Nodes",
+          summary: `${countOf(controlPlane, "control-plane node")}, ${countOf(workers, "worker")}`,
+          isReady: true,
+          content: (
+            <div className="field-pair">
+              <div>
+                <Select
+                  id="cluster-control-plane"
+                  label="Control plane"
+                  value={controlPlane}
+                  onChange={(event) => setControlPlane(Number(event.target.value))}
+                  options={CONTROL_PLANE_SIZES.map((value) => ({ value, label: countOf(value, "node") }))}
+                  help="Three or five keep the API up when a node fails."
+                />
+                <ShapeSelect id="cluster-control-plane-shape" label="Control-plane size" value={controlPlaneShape} onChange={setControlPlaneShape} />
+              </div>
+              <div>
+                <NumberField id="cluster-workers" label="Workers in pool general" value={workers} minimum={0} maximum={MAXIMUM_POOL_NODES} onChange={setWorkers} help="Add more pools once the cluster is ready." />
+                <ShapeSelect id="cluster-worker-shape" label="Worker size" value={workerShape} onChange={setWorkerShape} />
+              </div>
+            </div>
+          ),
+        },
+        {
+          title: "Placement",
+          summary: where.network,
+          isReady: isPlaced,
+          content: <PlacementFields prefix="cluster" placement={where} choices={choices} onChange={setPlacement} />,
+        },
+        {
+          title: "Review",
+          isReady: isPlaced,
+          content: (
+            <>
+              <p>
+                This creates {countOf(controlPlane + workers, "VM")}, a floating IP for the API and a security group. Sign-in uses
+                Amafu accounts: your role in this project becomes a Kubernetes group.
+              </p>
+              <Command
+                words={[
+                  "amafu", "kubernetes", "create", name || "NAME", "--version", version,
+                  "--control-plane-nodes", String(controlPlane), "--control-plane-shape", controlPlaneShape,
+                  workers > 0 && "--pool", workers > 0 && `general=${workers}:${workerShape}`,
+                  "--network", where.network || "NETWORK", "--storage-backend", where.storageBackend || "BACKEND",
+                  "--external-network", where.externalNetwork || "NETWORK",
+                ]}
+              />
+            </>
+          ),
+        },
+      ]}
+    />
   );
 }
 

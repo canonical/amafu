@@ -4,6 +4,7 @@ import type { ExternalNetwork, Network, StorageBackend } from "../cluster/kinds"
 import { SHAPES } from "../cluster/environments";
 import type { MachineShape } from "../cluster/environments";
 import { useCollection } from "../cluster/live";
+import SearchSelect from "../components/SearchSelect";
 import { useProject } from "../session";
 
 const NAME_PATTERN = /^[a-z][a-z0-9-]*$/;
@@ -80,26 +81,26 @@ export function PlacementFields({
   const options = (names: string[]) => names.map((name) => ({ value: name, label: name }));
   return (
     <>
-      <Select
+      <SearchSelect
         id={`${prefix}-network`}
         label="Network"
         value={placement.network}
-        onChange={(event) => onChange({ ...placement, network: event.target.value })}
-        options={options(choices.networks)}
+        onChange={(network) => onChange({ ...placement, network })}
+        choices={options(choices.networks)}
       />
-      <Select
+      <SearchSelect
         id={`${prefix}-storage`}
         label="Storage backend"
         value={placement.storageBackend}
-        onChange={(event) => onChange({ ...placement, storageBackend: event.target.value })}
-        options={options(choices.backends)}
+        onChange={(storageBackend) => onChange({ ...placement, storageBackend })}
+        choices={options(choices.backends)}
       />
-      <Select
+      <SearchSelect
         id={`${prefix}-external`}
         label="Floating IPs from"
         value={placement.externalNetwork}
-        onChange={(event) => onChange({ ...placement, externalNetwork: event.target.value })}
-        options={options(choices.externalNetworks)}
+        onChange={(externalNetwork) => onChange({ ...placement, externalNetwork })}
+        choices={options(choices.externalNetworks)}
       />
     </>
   );

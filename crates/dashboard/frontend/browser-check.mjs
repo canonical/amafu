@@ -38,6 +38,11 @@ function check(condition, description) {
   }
 }
 
+async function choose(page, label, option) {
+  await page.getByLabel(label, { exact: true }).click();
+  await page.getByRole("option", { name: new RegExp(option) }).first().click();
+}
+
 async function attempt(description, action) {
   try {
     await action();
@@ -100,17 +105,52 @@ async function darkTheme(browser) {
 async function workloads(browser) {
   const { context, page, problems } = await session(browser, ADMIN_TOKEN);
 
-  await attempt("a container created in the panel starts running", async () => {
+  await attempt("a container created in the wizard starts running", async () => {
     await page.goto(`${base}/containers`);
     await page.getByRole("button", { name: "Create container" }).click();
     await page.getByLabel("Name").fill("api-3");
-    await page.getByLabel("Image").selectOption("acme-api");
-    await page.getByText(/^app ·/).click();
+    await choose(page, "Image", "acme-api");
+    await page.getByRole("button", { name: "Next" }).click();
+    await choose(page, "Networks", "app");
+    await page.locator(".p-chip").getByText("app").waitFor();
+    await choose(page, "Security groups", "web");
+    await page.getByLabel("Networks", { exact: true }).click();
+    await shoot(page, "containers-network");
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "Next" }).click();
     await page.getByLabel("Environment").fill("PORT=8080");
     await page.getByText("--env PORT=8080").waitFor();
     await shoot(page, "containers-create");
-    await page.getByRole("button", { name: "Create", exact: true }).click();
+    await page.locator(".amafu-panel").getByRole("button", { name: "Create container", exact: true }).click();
     await row(page, "api-3").getByText("Running").waitFor({ timeout: SETTLE_MILLISECONDS });
+  });
+
+  await attempt("a VM created from a Canonical image gets its own disk", async () => {
+    await page.goto(`${base}/virtual-machines`);
+    await page.getByRole("button", { name: "Create VM" }).click();
+    await page.getByLabel("Name").fill("web-9");
+    await choose(page, "Image", "Ubuntu 24.04 LTS");
+    await page.getByLabel("Disk size in GiB").fill("30");
+    await shoot(page, "virtual-machines-create");
+    await page.getByRole("button", { name: "Next" }).click();
+    await page.getByRole("button", { name: "Next" }).click();
+    await choose(page, "Networks", "app");
+    await page.getByRole("button", { name: "Next" }).click();
+    await page.getByText("--image ubuntu/24.04").waitFor();
+    await shoot(page, "virtual-machines-review");
+    await page.locator(".amafu-panel").getByRole("button", { name: "Create VM", exact: true }).click();
+    await row(page, "web-9").waitFor({ timeout: SETTLE_MILLISECONDS });
+    await shoot(page, "virtual-machines-created");
+    await page.goto(`${base}/volumes`);
+    await row(page, "web-9-root").getByText("30 GiB").waitFor({ timeout: SETTLE_MILLISECONDS });
+  });
+
+  await attempt("an image from Canonical's catalog is added to the project", async () => {
+    await page.goto(`${base}/images`);
+    await page.getByRole("tab", { name: "From Canonical" }).click();
+    await row(page, "Debian bookworm").getByRole("button", { name: "Add to project" }).click();
+    await row(page, "Debian bookworm").getByText("In project").waitFor({ timeout: SETTLE_MILLISECONDS });
+    await shoot(page, "images-catalog");
   });
 
   await attempt("stopping a VM from its row stops it", async () => {
@@ -144,28 +184,35 @@ async function workloads(browser) {
   await attempt("a Kubernetes cluster panel shows its pools, nodes and the running change", async () => {
     await page.goto(`${base}/kubernetes?panel=detail&subject=platform`);
     await page.getByText("amafu kubernetes kubeconfig platform").waitFor();
-    await page.locator(".amafu-panel").getByText("platform-general-1", { exact: true }).waitFor();
     await page.locator(".amafu-panel").getByText("Running: scale pool").waitFor();
+    await page.getByRole("tab", { name: "Nodes (3)" }).click();
+    await page.locator(".amafu-panel").getByText("platform-general-1", { exact: true }).waitFor();
     await shoot(page, "kubernetes-detail");
   });
 
   await attempt("creating a cluster previews its command", async () => {
     await page.goto(`${base}/kubernetes?panel=create`);
     await page.getByLabel("Name").fill("analytics");
+    await page.getByRole("button", { name: "Next" }).click();
+    await page.getByRole("button", { name: "Next" }).click();
+    await page.getByRole("button", { name: "Next" }).click();
     await page.getByText("--pool general=2:large").waitFor();
     await shoot(page, "kubernetes-create");
   });
 
   await attempt("a Juju controller panel shows its models and changes", async () => {
     await page.goto(`${base}/juju?panel=detail&subject=observability`);
-    await page.locator(".amafu-panel").getByText("monitoring", { exact: true }).first().waitFor();
     await page.getByText("amafu juju token observability").waitFor();
+    await page.getByRole("tab", { name: "Models (2)" }).click();
+    await page.locator(".amafu-panel").getByText("monitoring", { exact: true }).first().waitFor();
     await shoot(page, "juju-detail");
   });
 
   await attempt("creating a controller previews its command", async () => {
     await page.goto(`${base}/juju?panel=create`);
     await page.getByLabel("Name", { exact: true }).fill("apps");
+    await page.getByRole("button", { name: "Next" }).click();
+    await page.getByRole("button", { name: "Next" }).click();
     await page.getByText("amafu juju create apps").waitFor();
     await shoot(page, "juju-create");
   });

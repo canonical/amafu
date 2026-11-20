@@ -251,6 +251,7 @@ $neutral: #999;
 }
 
 .panel-footer {
+  white-space: nowrap;
   display: flex;
   gap: 0.5rem;
   justify-content: flex-end;
@@ -376,4 +377,80 @@ $neutral: #999;
 
 .u-text--monospace {
   font-family: "Ubuntu Mono variable", "Ubuntu Mono", monospace;
+}
+
+.choice {
+  display: flex;
+  flex-direction: column;
+}
+
+.choice__detail {
+  color: var(--vf-color-text-muted);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+
+.choice__group {
+  color: var(--vf-color-text-muted);
+  font-size: 0.75rem;
+  font-weight: 550;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.chip-select {
+  margin-bottom: 1.5rem;
+
+  .p-form__group,
+  .p-form-validation {
+    margin-bottom: 0.5rem;
+  }
+}
+
+.chip-select__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+
+  .p-chip {
+    margin: 0;
+  }
+}
+
+.segments {
+  margin-bottom: 1.5rem;
+}
+
+.segments__label {
+  display: block;
+  margin-bottom: 0.5rem;
+}
+
+.wizard__steps {
+  border-bottom: 1px solid var(--vf-color-border-low-contrast);
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+}
+
+.wizard__content {
+  min-height: 22rem;
+}
+
+.wizard__review {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+}
+
+.panel-tabs {
+  margin-bottom: 1rem;
+}
+
+.panel-tabs__content {
+  min-height: 12rem;
+}
+
+.panel-actions {
+  justify-content: flex-start;
+  margin: 1rem 0;
 }

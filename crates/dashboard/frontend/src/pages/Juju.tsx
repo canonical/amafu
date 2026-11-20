@@ -20,6 +20,7 @@ import Command from "../components/Command";
 import IconAction from "../components/IconAction";
 import PageHeader from "../components/PageHeader";
 import Panel from "../components/Panel";
+import PanelTabs from "../components/PanelTabs";
 import Status from "../components/Status";
 import StepPlan, { PlanProgress, planPhase } from "../components/StepPlan";
 import SubjectLink from "../components/SubjectLink";
@@ -81,6 +82,37 @@ function ControllerDetail({
   const isBusy = Boolean(running) || controller.status.phase !== "ready";
   const isOnVms = controller.specification.substrate.on === "vms";
   const canEnableHa = controller.specification.substrate.on === "vms" && controller.specification.substrate.controllers === 1;
+  const changeTable = (
+    <MainTable
+      emptyStateMsg="No changes yet."
+      headers={[{ content: "Change" }, { content: "Progress" }, { content: "Status" }]}
+      rows={changes.map((change) => ({
+        key: change.metadata.name,
+        columns: [
+          { content: change.specification.request.kind.replaceAll("-", " ") },
+          { content: <PlanProgress plan={change} describe={describe} /> },
+          { content: <Status {...planPhase(change)} /> },
+        ],
+      }))}
+    />
+  );
+  const modelTable = (
+    <MainTable
+      emptyStateMsg="Models appear once the controller is ready."
+      headers={[{ content: "Model" }, { content: "UUID" }, { content: "Actions", className: "u-align--right" }]}
+      rows={(controller.status.models ?? []).map((model) => ({
+        key: model.name,
+        columns: [
+          { content: model.name },
+          { content: <code>{model.uuid}</code> },
+          {
+            className: "u-align--right",
+            content: <IconAction icon="delete" label={`Destroy model ${model.name}`} isDisabled={isBusy} onClick={() => panel.open("destroy-model", `${name}/${model.name}`)} />,
+          },
+        ],
+      }))}
+    />
+  );
   return (
     <Panel title={name} isWide onClose={panel.close}>
       <p>
@@ -88,13 +120,7 @@ function ControllerDetail({
         {controller.status.addresses?.[0] ?? "not reachable yet"}
       </p>
       <Status phase={controller.status.phase} detail={controller.status.message} />
-      {running && (
-        <>
-          <h3 className="p-heading--5">Running: {running.specification.request.kind.replaceAll("-", " ")}</h3>
-          <StepPlan plan={running} describe={describe} />
-        </>
-      )}
-      <div className="row-actions">
+      <div className="row-actions panel-actions">
         <Button type="button" disabled={isBusy} onClick={() => panel.open("add-model", name)}>
           Add model
         </Button>
@@ -114,45 +140,32 @@ function ControllerDetail({
           </Button>
         )}
       </div>
-      <h3 className="p-heading--5">Models ({controller.status.models?.length ?? 0})</h3>
-      <MainTable
-        emptyStateMsg="Models appear once the controller is ready."
-        headers={[{ content: "Model" }, { content: "UUID" }, { content: "Actions", className: "u-align--right" }]}
-        rows={(controller.status.models ?? []).map((model) => ({
-          key: model.name,
-          columns: [
-            { content: model.name },
-            { content: <code>{model.uuid}</code> },
-            {
-              className: "u-align--right",
-              content: <IconAction icon="delete" label={`Destroy model ${model.name}`} isDisabled={isBusy} onClick={() => panel.open("destroy-model", `${name}/${model.name}`)} />,
-            },
-          ],
-        }))}
+      <PanelTabs
+        tabs={[
+          {
+            label: "Overview",
+            content: (
+              <>
+                {running ? (
+                  <>
+                    <h3 className="p-heading--5">Running: {running.specification.request.kind.replaceAll("-", " ")}</h3>
+                    <StepPlan plan={running} describe={describe} />
+                  </>
+                ) : (
+                  <p className="u-text--muted">No change is running.</p>
+                )}
+                <Command title={`Sign in to ${name} as yourself`} words={["amafu", "juju", "token", name]} />
+                <p className="u-text--muted">
+                  The controller trusts five-minute tokens that Amafu signs; your role in this project decides your access to its models.
+                </p>
+              </>
+            ),
+          },
+          { label: `Models (${controller.status.models?.length ?? 0})`, content: modelTable },
+          ...(isOnVms ? [{ label: `Machines (${vms.length})`, content: <Machines vms={vms} /> }] : []),
+          { label: `Changes (${changes.length})`, content: changeTable },
+        ]}
       />
-      {isOnVms && (
-        <>
-          <h3 className="p-heading--5">Machines ({vms.length})</h3>
-          <Machines vms={vms} />
-        </>
-      )}
-      <h3 className="p-heading--5">Changes</h3>
-      <MainTable
-        emptyStateMsg="No changes yet."
-        headers={[{ content: "Change" }, { content: "Progress" }, { content: "Status" }]}
-        rows={changes.map((change) => ({
-          key: change.metadata.name,
-          columns: [
-            { content: change.specification.request.kind.replaceAll("-", " ") },
-            { content: <PlanProgress plan={change} describe={describe} /> },
-            { content: <Status {...planPhase(change)} /> },
-          ],
-        }))}
-      />
-      <Command title={`Sign in to ${name} as yourself`} words={["amafu", "juju", "token", name]} />
-      <p className="u-text--muted">
-        The controller trusts five-minute tokens that Amafu signs; your role in this project decides your access to its models.
-      </p>
     </Panel>
   );
 }

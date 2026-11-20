@@ -97,7 +97,16 @@ export function objectPath({ plural, project }: Scope, name: string): string {
 }
 
 export function create<Specification>(scope: Scope, name: string, specification: Specification): Promise<unknown> {
-  return call("POST", collectionPath(scope), { metadata: { name }, specification });
+  return createLabelled(scope, name, {}, specification);
+}
+
+export function createLabelled<Specification>(
+  scope: Scope,
+  name: string,
+  labels: Record<string, string>,
+  specification: Specification,
+): Promise<unknown> {
+  return call("POST", collectionPath(scope), { metadata: { name, labels }, specification });
 }
 
 export function update<Specification>(
