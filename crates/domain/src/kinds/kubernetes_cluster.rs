@@ -5,7 +5,7 @@ use std::net::Ipv4Addr;
 use serde::{Deserialize, Serialize};
 
 use crate::access::ProjectPolicy;
-use crate::kinds::environment::EnvironmentPhase;
+use crate::kinds::environment::{EnvironmentChange, EnvironmentPhase};
 use crate::kinds::machine_shape::MachineShape;
 use crate::kinds::operation::OperationStatus;
 use crate::name::ObjectName;
@@ -205,6 +205,8 @@ pub struct KubernetesClusterStatus {
     pub endpoint: Option<Ipv4Addr>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certificate_authority: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nodes: Vec<KubernetesNodeStatus>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -268,7 +270,11 @@ impl KubernetesRequest {
                 removal_steps(nodes).chain([KubernetesStep::RecordShape]).collect()
             }
             Self::DrainNode { member } => vec![KubernetesStep::DrainNode { member: member.clone() }],
-            Self::RestartNode { member } => vec![KubernetesStep::RestartNode { member: member.clone() }],
+            Self::RestartNode { member } => vec![
+                KubernetesStep::DrainNode { member: member.clone() },
+                KubernetesStep::StopNode { member: member.clone() },
+                KubernetesStep::StartNode { member: member.clone() },
+            ],
         }
     }
 }
@@ -277,7 +283,7 @@ fn creation_steps(cluster: &KubernetesClusterSpecification) -> Vec<KubernetesSte
     let members = cluster.members();
     let (bootstrap, joining) =
         members.split_first().map_or((None, &[][..]), |(first, rest)| (Some(first), rest));
-    [KubernetesStep::PrepareNetworkAccess, KubernetesStep::ImportImage]
+    [KubernetesStep::RecordCluster, KubernetesStep::PrepareNetworkAccess, KubernetesStep::ImportImage]
         .into_iter()
         .chain(bootstrap.map(|member| KubernetesStep::BootstrapControlPlane { member: member.clone() }))
         .chain([KubernetesStep::AwaitApi])
@@ -328,6 +334,7 @@ fn removal_steps(nodes: &[ClusterMember]) -> impl Iterator<Item = KubernetesStep
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "step", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum KubernetesStep {
+    RecordCluster,
     PrepareNetworkAccess,
     ImportImage,
     BootstrapControlPlane { member: ClusterMember },
@@ -337,7 +344,8 @@ pub enum KubernetesStep {
     MarkReady,
     RemoveNode { member: ClusterMember },
     DrainNode { member: ClusterMember },
-    RestartNode { member: ClusterMember },
+    StopNode { member: ClusterMember },
+    StartNode { member: ClusterMember },
     RecordVersion { version: KubernetesVersion },
     RecordShape,
     RefuseWhileHosting,
@@ -347,6 +355,7 @@ pub enum KubernetesStep {
 impl PlannedStep for KubernetesStep {
     fn name(&self) -> &'static str {
         match self {
+            Self::RecordCluster => "record-cluster",
             Self::PrepareNetworkAccess => "prepare-network-access",
             Self::ImportImage => "import-image",
             Self::BootstrapControlPlane { .. } => "bootstrap-control-plane",
@@ -356,7 +365,8 @@ impl PlannedStep for KubernetesStep {
             Self::MarkReady => "mark-ready",
             Self::RemoveNode { .. } => "remove-node",
             Self::DrainNode { .. } => "drain-node",
-            Self::RestartNode { .. } => "restart-node",
+            Self::StopNode { .. } => "stop-node",
+            Self::StartNode { .. } => "start-node",
             Self::RecordVersion { .. } => "record-version",
             Self::RecordShape => "record-shape",
             Self::RefuseWhileHosting => "refuse-while-hosting",
@@ -390,6 +400,16 @@ impl KubernetesClusterChangeSpecification {
     pub fn new(cluster: ObjectName, request: KubernetesRequest) -> Self {
         let steps = request.steps();
         Self { cluster, request, steps, is_paused: false, is_cancelled: false }
+    }
+}
+
+impl EnvironmentChange for KubernetesClusterChangeSpecification {
+    fn environment(&self) -> &ObjectName {
+        &self.cluster
+    }
+
+    fn creates_environment(&self) -> bool {
+        matches!(self.request, KubernetesRequest::Create { .. })
     }
 }
 
@@ -479,6 +499,7 @@ mod tests {
         assert_eq!(
             step_names(&steps),
             [
+                "record-cluster",
                 "prepare-network-access",
                 "import-image",
                 "bootstrap-control-plane",
@@ -492,7 +513,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            steps[2],
+            steps[3],
             KubernetesStep::BootstrapControlPlane { member: ClusterMember::control_plane(0) }
         );
     }
