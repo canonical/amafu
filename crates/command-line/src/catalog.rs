@@ -103,9 +103,15 @@ pub async fn create_root_volume(
         VolumeSpecification { size_gibibytes: disk.size_gibibytes, backend, source_image: Some(image) };
     let labels =
         if disk.is_kept { BTreeMap::new() } else { BTreeMap::from([(ROOT_OF.to_owned(), vm.to_string())]) };
-    client
-        .create_labelled::<Volume>(&name, labels, &specification)
-        .await
-        .with_context(|| format!("creating {name}"))?;
+    match client.create_labelled::<Volume>(&name, labels.clone(), &specification).await {
+        Ok(_) => {}
+        Err(error) if error.is_conflict() => {
+            let existing = client.get::<Volume>(name.as_str()).await?;
+            if existing.specification != specification || existing.metadata.labels != labels {
+                anyhow::bail!("{name} already exists and is not the disk this VM asks for");
+            }
+        }
+        Err(error) => return Err(error).with_context(|| format!("creating {name}")),
+    }
     Ok(name)
 }
