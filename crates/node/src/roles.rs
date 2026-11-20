@@ -22,6 +22,7 @@ use amafu_controllers::environments::outcomes::{
 };
 use amafu_controllers::environments::rotation::CredentialRotationController;
 use amafu_controllers::node_lease::{LeaseKeeper, LeaseKeeperSettings, feed_while_leased};
+use amafu_controllers::root_volumes::RootVolumeController;
 use amafu_controllers::{
     AuditExportController, BootSlotsController, BootSlotsServices, BootSlotsSettings,
     CertificateRevocationController, ComputeController, ComputeServices, ExternalNetworkController,
@@ -635,6 +636,14 @@ fn core_roles(
         settings,
     );
     cluster_record_roles(roles, services, settings);
+    let root_volume_store = store();
+    singleton_role(
+        roles,
+        "root-volumes",
+        move |_| RootVolumeController::new(Arc::clone(&root_volume_store)),
+        services,
+        settings,
+    );
     environment_roles(roles, services, settings, configuration);
     let floating_store = store();
     singleton_role(

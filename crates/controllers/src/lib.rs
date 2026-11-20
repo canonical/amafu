@@ -15,6 +15,7 @@ pub mod node_network;
 pub mod operations;
 mod references;
 pub mod retirement;
+pub mod root_volumes;
 pub mod scheduling;
 pub mod signing_keys;
 pub mod storage_backend;

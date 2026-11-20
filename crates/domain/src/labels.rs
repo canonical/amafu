@@ -5,6 +5,7 @@ pub const JUJU_CONTROLLER: &str = "amafu.io/juju-controller";
 pub const JUJU_MODEL: &str = "amafu.io/juju-model";
 pub const JUJU_MACHINE: &str = "amafu.io/juju-machine";
 pub const JUJU_APPLICATION: &str = "amafu.io/juju-application";
+pub const ROOT_OF: &str = "amafu.io/root-of";
 
 const ENVIRONMENT_LABELS: [&str; 2] = [KUBERNETES_CLUSTER, JUJU_CONTROLLER];
 
