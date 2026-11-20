@@ -1,12 +1,13 @@
 use std::collections::BTreeMap;
 
-use amafu_domain::kinds::environment::EnvironmentPhase;
+use amafu_domain::kinds::environment::{EnvironmentChange, EnvironmentPhase};
 use amafu_domain::kinds::juju_controller::{
     JujuController, JujuControllerChange, JujuControllerChangeSpecification, JujuRequest,
 };
 use amafu_domain::kinds::kubernetes_cluster::{
     KubernetesCluster, KubernetesClusterChange, KubernetesClusterChangeSpecification, KubernetesRequest,
 };
+use amafu_domain::kinds::operation::OperationStatus;
 use amafu_domain::kinds::vm::Vm;
 use amafu_domain::labels::owning_environment;
 use amafu_domain::{ObjectName, ObjectReference, ProjectName, Resource};
@@ -43,11 +44,21 @@ impl StoreAdmission<'_> {
         match reference.kind.as_str() {
             kind if kind == KubernetesClusterChange::KIND => {
                 let change = decode::<KubernetesClusterChangeSpecification>(specification)?;
-                self.admit_kubernetes_change(reference.project.as_ref(), &change).await
+                self.admit_kubernetes_change(reference.project.as_ref(), &change).await?;
+                self.admit_in_order::<KubernetesClusterChange, KubernetesCluster>(
+                    reference.project.as_ref(),
+                    &change,
+                )
+                .await
             }
             kind if kind == JujuControllerChange::KIND => {
                 let change = decode::<JujuControllerChangeSpecification>(specification)?;
-                self.admit_juju_change(reference.project.as_ref(), &change).await
+                self.admit_juju_change(reference.project.as_ref(), &change).await?;
+                self.admit_in_order::<JujuControllerChange, JujuController>(
+                    reference.project.as_ref(),
+                    &change,
+                )
+                .await
             }
             _ => Ok(()),
         }
@@ -87,6 +98,39 @@ impl StoreAdmission<'_> {
             .filter(|vm| vm.specification.volumes.contains(&volume.name))
             .map(|vm| format!("VM {}", vm.metadata.name))
             .collect())
+    }
+
+    async fn admit_in_order<Change, Environment>(
+        &self,
+        project: Option<&ProjectName>,
+        change: &Change::Specification,
+    ) -> Result<(), Refusal>
+    where
+        Change: Resource<Status = OperationStatus, Specification: EnvironmentChange>,
+        Environment: Resource,
+    {
+        let environment = change.environment();
+        let changes = list::<Change>(self.store, project, Consistency::Linearizable).await?;
+        if let Some(running) = changes
+            .iter()
+            .find(|other| other.specification.environment() == environment && !other.status.is_finished())
+        {
+            return Err(Refusal::InUse(format!(
+                "{environment} is still being changed by {}; changes run one at a time",
+                running.metadata.name
+            )));
+        }
+        let reference = ObjectReference::of::<Environment>(project.cloned(), environment.clone());
+        let exists = get::<Environment>(self.store, &reference, Consistency::Linearizable).await?.is_some();
+        match (change.creates_environment(), exists) {
+            (true, true) => {
+                Err(Refusal::InUse(format!("{} {environment} already exists", Environment::KIND)))
+            }
+            (false, false) => {
+                Err(Refusal::Unready(format!("there is no {} {environment}", Environment::KIND)))
+            }
+            _ => Ok(()),
+        }
     }
 
     async fn admit_kubernetes_change(

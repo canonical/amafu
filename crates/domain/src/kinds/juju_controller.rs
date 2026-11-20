@@ -3,7 +3,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::access::ProjectPolicy;
-use crate::kinds::environment::EnvironmentPhase;
+use crate::kinds::environment::{EnvironmentChange, EnvironmentPhase};
 use crate::kinds::machine_shape::MachineShape;
 use crate::kinds::operation::OperationStatus;
 use crate::name::ObjectName;
@@ -414,6 +414,16 @@ impl JujuControllerChangeSpecification {
     pub fn new(controller: ObjectName, request: JujuRequest) -> Self {
         let steps = request.steps();
         Self { controller, request, steps, is_paused: false, is_cancelled: false }
+    }
+}
+
+impl EnvironmentChange for JujuControllerChangeSpecification {
+    fn environment(&self) -> &ObjectName {
+        &self.controller
+    }
+
+    fn creates_environment(&self) -> bool {
+        matches!(self.request, JujuRequest::Create { .. })
     }
 }
 

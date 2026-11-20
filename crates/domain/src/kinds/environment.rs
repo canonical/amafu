@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::name::ObjectName;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum EnvironmentPhase {
@@ -10,4 +12,10 @@ pub enum EnvironmentPhase {
     Degraded,
     Deleting,
     Failed,
+}
+
+pub trait EnvironmentChange {
+    fn environment(&self) -> &ObjectName;
+
+    fn creates_environment(&self) -> bool;
 }
