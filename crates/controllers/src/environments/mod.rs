@@ -1,8 +1,11 @@
 mod authority;
+pub mod failover;
+pub mod host_health;
 pub mod juju;
 pub mod kubernetes;
 mod machines;
 mod objects;
+pub mod rotation;
 mod ssh;
 
 use amafu_domain::ObjectReference;

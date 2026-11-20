@@ -376,6 +376,8 @@ impl Step<JujuControllerChange> for CreateClusterServiceAccount {
         if decoded_token(&secret).is_some() {
             let name = manifests[2]["metadata"]["name"].as_str().unwrap_or_default().to_owned();
             scope.remember(CREDENTIAL_SECRET, name).await?;
+            let now = context.clock.now();
+            scope.update_status(|status| status.credential_rotated_at = Some(now)).await?;
         }
         Ok(())
     }

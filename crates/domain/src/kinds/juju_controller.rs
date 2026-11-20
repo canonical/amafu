@@ -164,6 +164,8 @@ pub struct JujuControllerStatus {
     pub models: Vec<JujuModelStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<JujuVersion>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "time::serde::rfc3339::option")]
+    pub credential_rotated_at: Option<time::OffsetDateTime>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }

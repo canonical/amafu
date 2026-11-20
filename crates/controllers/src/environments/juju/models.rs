@@ -208,7 +208,9 @@ impl Step<JujuControllerChange> for RotateCredential {
         if let Some(previous) = previous {
             kubernetes.delete(&kubernetes_endpoint, &token_secret(&controller, &previous)).await?;
         }
-        scope.remember(CREDENTIAL_SECRET, Self::rotated_name(&scope)).await
+        scope.remember(CREDENTIAL_SECRET, Self::rotated_name(&scope)).await?;
+        let now = context.clock.now();
+        scope.update_status(|status| status.credential_rotated_at = Some(now)).await
     }
 }
 

@@ -13,8 +13,11 @@ use amafu_api::{
 };
 use amafu_audit_export::BuiltInAuditSinks;
 use amafu_controllers::RunnerKind;
+use amafu_controllers::environments::failover::ApiFailoverController;
+use amafu_controllers::environments::host_health::HostHealthController;
 use amafu_controllers::environments::juju::{JujuEnvironment, JujuSteps};
 use amafu_controllers::environments::kubernetes::{KubernetesEnvironment, KubernetesSteps};
+use amafu_controllers::environments::rotation::CredentialRotationController;
 use amafu_controllers::node_lease::{LeaseKeeper, LeaseKeeperSettings, feed_while_leased};
 use amafu_controllers::{
     AuditExportController, BootSlotsController, BootSlotsServices, BootSlotsSettings,
@@ -420,6 +423,40 @@ fn environment_roles(
     });
     step_runner_role::<KubernetesClusterChange>(roles, services, settings, Arc::new(kubernetes_steps));
     step_runner_role::<JujuControllerChange>(roles, services, settings, Arc::new(juju_steps));
+    environment_loops(roles, services, settings);
+}
+
+fn environment_loops(roles: &mut JoinSet<()>, services: &Services, settings: ReconcilerSettings) {
+    let failover_store = Arc::clone(&services.store);
+    singleton_role(
+        roles,
+        "kubernetes-api-failover",
+        move |_| ApiFailoverController::new(Arc::clone(&failover_store)),
+        services,
+        settings,
+    );
+    let health_store = Arc::clone(&services.store);
+    singleton_role(
+        roles,
+        "juju-host-health",
+        move |_| HostHealthController::new(Arc::clone(&health_store)),
+        services,
+        settings,
+    );
+    let (rotation_store, rotation_clock) = (Arc::clone(&services.store), Arc::clone(&services.clock));
+    singleton_role(
+        roles,
+        "juju-credential-rotation",
+        move |_| {
+            CredentialRotationController::new(
+                Arc::clone(&rotation_store),
+                Arc::clone(&rotation_clock),
+                Arc::new(RandomIdentifiers),
+            )
+        },
+        services,
+        settings,
+    );
 }
 
 fn step_runner_role<K: RunnerKind>(
