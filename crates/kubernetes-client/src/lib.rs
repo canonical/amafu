@@ -99,6 +99,18 @@ impl KubernetesPlatform for HttpKubernetes {
         Ok(())
     }
 
+    async fn read(
+        &self,
+        endpoint: &KubernetesEndpoint,
+        manifest: &Value,
+    ) -> Result<Option<Value>, ActionError> {
+        self.api(endpoint)?.read(manifest).await
+    }
+
+    async fn delete(&self, endpoint: &KubernetesEndpoint, manifest: &Value) -> Result<(), ActionError> {
+        self.api(endpoint)?.delete(manifest).await
+    }
+
     async fn is_applied(
         &self,
         endpoint: &KubernetesEndpoint,
@@ -106,7 +118,7 @@ impl KubernetesPlatform for HttpKubernetes {
     ) -> Result<bool, ActionError> {
         let api = self.api(endpoint)?;
         for manifest in manifests {
-            if !api.exists(manifest).await? {
+            if api.read(manifest).await?.is_none() {
                 return Ok(false);
             }
         }

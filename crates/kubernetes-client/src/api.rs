@@ -11,6 +11,11 @@ const FIELD_MANAGER: &str = "amafu";
 const APPLY_PATCH: &str = "application/apply-patch+yaml";
 const MERGE_PATCH: &str = "application/merge-patch+json";
 
+fn object_path(manifest: &Value) -> Result<String, ActionError> {
+    resources::object_path(manifest)
+        .ok_or_else(|| ActionError::fatal("a manifest needs an apiVersion, a kind and a name"))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PodReference {
     namespace: String,
@@ -115,8 +120,7 @@ impl KubernetesApi {
     }
 
     pub async fn apply(&self, manifest: &Value) -> Result<(), ActionError> {
-        let path = resources::object_path(manifest)
-            .ok_or_else(|| ActionError::fatal("a manifest needs an apiVersion, a kind and a name"))?;
+        let path = object_path(manifest)?;
         let request = self
             .request(Method::PATCH, &path)
             .query(&[("fieldManager", FIELD_MANAGER), ("force", "true")])
@@ -126,9 +130,12 @@ impl KubernetesApi {
         Ok(())
     }
 
-    pub async fn exists(&self, manifest: &Value) -> Result<bool, ActionError> {
-        let path = resources::object_path(manifest)
-            .ok_or_else(|| ActionError::fatal("a manifest needs an apiVersion, a kind and a name"))?;
-        Ok(Self::send(self.request(Method::GET, &path), "a read").await?.is_some())
+    pub async fn read(&self, manifest: &Value) -> Result<Option<Value>, ActionError> {
+        Self::send(self.request(Method::GET, &object_path(manifest)?), "a read").await
+    }
+
+    pub async fn delete(&self, manifest: &Value) -> Result<(), ActionError> {
+        Self::send(self.request(Method::DELETE, &object_path(manifest)?), "a delete").await?;
+        Ok(())
     }
 }

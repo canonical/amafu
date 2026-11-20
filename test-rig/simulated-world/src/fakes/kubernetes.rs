@@ -1,7 +1,18 @@
 use std::collections::{BTreeMap, BTreeSet};
+
+use serde_json::{Value, json};
 use std::sync::Mutex;
 
 use amafu_interfaces::{ActionError, DrainState, KubernetesEndpoint, KubernetesPlatform, NodeRole};
+
+fn key(manifest: &Value) -> String {
+    format!(
+        "{}/{}/{}",
+        manifest["kind"].as_str().unwrap_or_default(),
+        manifest["metadata"]["namespace"].as_str().unwrap_or_default(),
+        manifest["metadata"]["name"].as_str().unwrap_or_default()
+    )
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FakeNode {
@@ -14,7 +25,7 @@ pub struct FakeNode {
 struct State {
     is_api_ready: bool,
     nodes: BTreeMap<String, FakeNode>,
-    applied: BTreeSet<String>,
+    objects: BTreeMap<String, Value>,
     tokens_seen: BTreeSet<String>,
 }
 
@@ -50,7 +61,15 @@ impl FakeKubernetes {
 
     #[must_use]
     pub fn applied(&self) -> BTreeSet<String> {
-        self.with(|state| state.applied.clone())
+        self.with(|state| state.objects.keys().cloned().collect())
+    }
+
+    pub fn put(&self, manifest: &Value) {
+        let mut stored = manifest.clone();
+        if manifest["type"] == "kubernetes.io/service-account-token" {
+            stored["data"] = json!({"token": "ZmFrZS10b2tlbg=="});
+        }
+        self.with(|state| state.objects.insert(key(manifest), stored));
     }
 
     #[must_use]
@@ -129,28 +148,33 @@ impl KubernetesPlatform for FakeKubernetes {
         Ok(())
     }
 
-    async fn apply(
+    async fn apply(&self, _endpoint: &KubernetesEndpoint, manifests: &[Value]) -> Result<(), ActionError> {
+        for manifest in manifests {
+            if self.with(|state| !state.objects.contains_key(&key(manifest))) {
+                self.put(manifest);
+            }
+        }
+        Ok(())
+    }
+
+    async fn read(
         &self,
         _endpoint: &KubernetesEndpoint,
-        manifests: &[serde_json::Value],
-    ) -> Result<(), ActionError> {
-        self.with(|state| {
-            for manifest in manifests {
-                state.applied.insert(manifest["metadata"]["name"].as_str().unwrap_or_default().to_owned());
-            }
-        });
+        manifest: &Value,
+    ) -> Result<Option<Value>, ActionError> {
+        Ok(self.with(|state| state.objects.get(&key(manifest)).cloned()))
+    }
+
+    async fn delete(&self, _endpoint: &KubernetesEndpoint, manifest: &Value) -> Result<(), ActionError> {
+        self.with(|state| state.objects.remove(&key(manifest)));
         Ok(())
     }
 
     async fn is_applied(
         &self,
         _endpoint: &KubernetesEndpoint,
-        manifests: &[serde_json::Value],
+        manifests: &[Value],
     ) -> Result<bool, ActionError> {
-        Ok(self.with(|state| {
-            manifests.iter().all(|manifest| {
-                state.applied.contains(manifest["metadata"]["name"].as_str().unwrap_or_default())
-            })
-        }))
+        Ok(self.with(|state| manifests.iter().all(|manifest| state.objects.contains_key(&key(manifest)))))
     }
 }

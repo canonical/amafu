@@ -56,6 +56,18 @@ pub trait KubernetesPlatform: Send + Sync {
         manifests: &[serde_json::Value],
     ) -> Result<(), ActionError>;
 
+    async fn read(
+        &self,
+        endpoint: &KubernetesEndpoint,
+        manifest: &serde_json::Value,
+    ) -> Result<Option<serde_json::Value>, ActionError>;
+
+    async fn delete(
+        &self,
+        endpoint: &KubernetesEndpoint,
+        manifest: &serde_json::Value,
+    ) -> Result<(), ActionError>;
+
     async fn is_applied(
         &self,
         endpoint: &KubernetesEndpoint,
