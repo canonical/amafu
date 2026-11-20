@@ -29,10 +29,17 @@ pub async fn json_web_keys(state: ApiState) -> Response {
     }
 }
 
-pub async fn discovery(headers: HeaderMap) -> Response {
-    let host =
-        headers.get(http::header::HOST).and_then(|host| host.to_str().ok()).unwrap_or("amafu.internal");
-    Json(discovery_document(ISSUER, &format!("https://{host}{JWKS_PATH}"))).into_response()
+pub async fn discovery(target: Uri, headers: HeaderMap) -> Response {
+    Json(discovery_document(ISSUER, &format!("https://{}{JWKS_PATH}", served_authority(&target, &headers))))
+        .into_response()
+}
+
+fn served_authority(target: &Uri, headers: &HeaderMap) -> String {
+    target
+        .authority()
+        .map(ToString::to_string)
+        .or_else(|| headers.get(http::header::HOST).and_then(|host| host.to_str().ok()).map(str::to_owned))
+        .unwrap_or_else(|| String::from("amafu.internal"))
 }
 
 pub async fn kubernetes_token(
@@ -112,4 +119,19 @@ async fn sign(state: &ApiState, operation: &Operation, claims: &Claims) -> Resul
 
 fn not_ready(operation: &Operation, message: &str) -> ApiError {
     operation.error(StatusCode::CONFLICT, ErrorCode::Conflict, message.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_keys_are_found_where_the_document_was_served() {
+        let over_http2: Uri = "https://10.20.0.12:7443/.well-known/openid-configuration".parse().unwrap();
+        assert_eq!(served_authority(&over_http2, &HeaderMap::new()), "10.20.0.12:7443");
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::HOST, "10.20.0.11:7443".parse().unwrap());
+        let over_http1: Uri = "/.well-known/openid-configuration".parse().unwrap();
+        assert_eq!(served_authority(&over_http1, &headers), "10.20.0.11:7443");
+    }
 }
