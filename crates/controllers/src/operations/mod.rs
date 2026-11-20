@@ -67,7 +67,7 @@ pub trait RunnerKind: Runnable {
     const WATCHES: &'static [WatchedKind<ObjectReference>];
 }
 
-const fn watching(kind: &'static str) -> [WatchedKind<ObjectReference>; 1] {
+pub(crate) const fn watching(kind: &'static str) -> [WatchedKind<ObjectReference>; 1] {
     [WatchedKind { kind, mapping: KeyMapping::ObjectKey(|reference| Some(reference.clone())) }]
 }
 

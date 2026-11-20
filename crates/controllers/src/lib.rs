@@ -3,6 +3,7 @@ pub mod audit_export;
 pub mod boot_slots;
 pub mod cluster_image;
 pub mod compute;
+pub mod environments;
 pub mod floating_ip;
 pub mod image;
 pub mod local_volume;
