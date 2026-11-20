@@ -62,17 +62,17 @@ impl IntoResponse for ApiSuccess {
     }
 }
 
-struct Operation {
+pub(crate) struct Operation {
     kind: KindDescriptor,
     verb: Verb,
-    context: RequestContext,
-    project: Option<ProjectName>,
+    pub(crate) context: RequestContext,
+    pub(crate) project: Option<ProjectName>,
     is_every_project: bool,
     name: Option<ObjectName>,
 }
 
 impl Operation {
-    fn new(
+    pub(crate) fn new(
         kind: KindDescriptor,
         verb: Verb,
         context: RequestContext,
@@ -109,7 +109,7 @@ impl Operation {
         Ok(operation)
     }
 
-    fn audit(&self) -> AuditDetails {
+    pub(crate) fn audit(&self) -> AuditDetails {
         AuditDetails {
             verb: Some(self.verb),
             kind: Some(self.kind.kind),
@@ -120,7 +120,7 @@ impl Operation {
         }
     }
 
-    fn error(&self, status: StatusCode, code: ErrorCode, message: String) -> ApiError {
+    pub(crate) fn error(&self, status: StatusCode, code: ErrorCode, message: String) -> ApiError {
         ApiError {
             status,
             code,
@@ -139,7 +139,7 @@ impl Operation {
         }
     }
 
-    fn authorize(&self) -> Result<(), ApiError> {
+    pub(crate) fn authorize(&self) -> Result<(), ApiError> {
         if is_allowed(&self.context.principal, self.verb, &self.kind, self.target()) {
             return Ok(());
         }
@@ -152,14 +152,14 @@ impl Operation {
         Err(error)
     }
 
-    fn reference(&self) -> Result<ObjectReference, ApiError> {
+    pub(crate) fn reference(&self) -> Result<ObjectReference, ApiError> {
         let name = self.name.clone().ok_or_else(|| {
             self.error(StatusCode::NOT_FOUND, ErrorCode::NotFound, String::from("no object name"))
         })?;
         Ok(ObjectReference { kind: self.kind.kind.to_owned(), project: self.project.clone(), name })
     }
 
-    fn store_error(&self, error: ObjectStoreError) -> ApiError {
+    pub(crate) fn store_error(&self, error: ObjectStoreError) -> ApiError {
         let (status, code) = match &error {
             ObjectStoreError::Change(ChangeError::NotFound) => (StatusCode::NOT_FOUND, ErrorCode::NotFound),
             ObjectStoreError::Change(ChangeError::AlreadyExists) => {
@@ -212,7 +212,11 @@ impl Operation {
         }
     }
 
-    fn json(&self, status: StatusCode, value: &impl serde::Serialize) -> Result<ApiSuccess, ApiError> {
+    pub(crate) fn json(
+        &self,
+        status: StatusCode,
+        value: &impl serde::Serialize,
+    ) -> Result<ApiSuccess, ApiError> {
         let body = serde_json::to_vec(value).map_err(|error| {
             self.error(StatusCode::INTERNAL_SERVER_ERROR, ErrorCode::Internal, error.to_string())
         })?;
@@ -224,7 +228,11 @@ impl Operation {
         })
     }
 
-    fn json_with_generation(&self, status: StatusCode, object: &Value) -> Result<ApiSuccess, ApiError> {
+    pub(crate) fn json_with_generation(
+        &self,
+        status: StatusCode,
+        object: &Value,
+    ) -> Result<ApiSuccess, ApiError> {
         let mut success = self.json(status, object)?;
         success.audit.generation = object["metadata"]["generation"].as_u64();
         Ok(success)

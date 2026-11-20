@@ -18,7 +18,7 @@ use amafu_controllers::{
     FloatingIpController, ImageController, LocalVolumeController, NetworkController, NodeController,
     NodeHealthController, NodeIdentity, NodeNetworkController, OperationSteps, OperationsController,
     SchedulerController, SecurityGroupController, StorageBackendController, VolumeController,
-    cluster_image::ClusterImageController,
+    cluster_image::ClusterImageController, signing_keys::SigningKeysController,
 };
 use amafu_domain::NodeName;
 use amafu_domain::ObjectId;
@@ -353,6 +353,31 @@ fn cloud_hypervisor(
     })
 }
 
+fn cluster_record_roles(roles: &mut JoinSet<()>, services: &Services, settings: ReconcilerSettings) {
+    let (keys_store, keys_clock) = (Arc::clone(&services.store), Arc::clone(&services.clock));
+    singleton_role(
+        roles,
+        "signing-keys",
+        move |_| {
+            SigningKeysController::new(
+                Arc::clone(&keys_store),
+                Arc::clone(&keys_clock),
+                Arc::new(RandomIdentifiers),
+            )
+        },
+        services,
+        settings,
+    );
+    let image_store = Arc::clone(&services.store);
+    singleton_role(
+        roles,
+        "cluster-image",
+        move |_| ClusterImageController::new(Arc::clone(&image_store)),
+        services,
+        settings,
+    );
+}
+
 fn recovery_roles(
     roles: &mut JoinSet<()>,
     services: &Services,
@@ -478,14 +503,7 @@ fn core_roles(
         services,
         settings,
     );
-    let image_store = store();
-    singleton_role(
-        roles,
-        "cluster-image",
-        move |_| ClusterImageController::new(Arc::clone(&image_store)),
-        services,
-        settings,
-    );
+    cluster_record_roles(roles, services, settings);
     let floating_store = store();
     singleton_role(
         roles,

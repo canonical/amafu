@@ -20,6 +20,7 @@ Generated from the kind registry by `cargo rig reference`. Do not edit it by han
 | NetworkEndpoint | `/v1/network-endpoints` | 1 | project | nodes |
 | FloatingIp | `/v1/floating-ips` | 1 | project | members of the project |
 | ServiceAccount | `/v1/service-accounts` | 1 | project | members of the project |
+| SigningKey | `/v1/signing-keys` | 1 | cluster | admins |
 | KubernetesCluster | `/v1/kubernetes-clusters` | 1 | project | nodes |
 | KubernetesClusterChange | `/v1/kubernetes-cluster-changes` | 1 | project | members of the project |
 | JujuController | `/v1/juju-controllers` | 1 | project | nodes |

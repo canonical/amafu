@@ -10,6 +10,7 @@ pub mod name;
 pub mod node_image;
 pub mod object;
 pub mod object_id;
+pub mod platform_access;
 pub mod registry;
 pub mod resource;
 pub mod slice;

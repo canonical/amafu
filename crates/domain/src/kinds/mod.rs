@@ -15,6 +15,7 @@ pub mod node_lease;
 pub mod operation;
 pub mod security_group;
 pub mod service_account;
+pub mod signing_key;
 pub mod storage_backend;
 pub mod vm;
 pub mod volume;

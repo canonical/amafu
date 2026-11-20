@@ -4,12 +4,13 @@ use amafu_domain::registry;
 use amafu_interfaces::{AuditLog, Clock, Identifiers, Store};
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Extension, Path, State};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Router, middleware};
 use http::Uri;
 
 use crate::authentication::Authenticator;
 use crate::handlers::{create_object, delete_object, get_object, list_objects, update_object, watch_object};
+use crate::platform_tokens;
 use crate::request_chain::{RequestContext, request_chain};
 use crate::wire::MAXIMUM_BODY_BYTES;
 
@@ -84,7 +85,36 @@ pub fn router(state: ApiState) -> Router {
             );
     }
     router
+        .route(
+            "/v1/kubernetes-clusters/{name}/tokens",
+            post(
+                |State(state): State<ApiState>,
+                 Extension(context): Context,
+                 target: Uri,
+                 Path(name): Path<String>| {
+                    platform_tokens::kubernetes_token(state, context, target, name)
+                },
+            ),
+        )
+        .route(
+            "/v1/juju-controllers/{name}/tokens",
+            post(
+                |State(state): State<ApiState>,
+                 Extension(context): Context,
+                 target: Uri,
+                 Path(name): Path<String>| {
+                    platform_tokens::juju_token(state, context, target, name)
+                },
+            ),
+        )
         .layer(DefaultBodyLimit::max(MAXIMUM_BODY_BYTES))
         .layer(middleware::from_fn_with_state(state.clone(), request_chain))
+        .merge(public_router(state.clone()))
         .with_state(state)
+}
+
+fn public_router(state: ApiState) -> Router<ApiState> {
+    Router::new()
+        .route("/v1/jwks", get(move || platform_tokens::json_web_keys(state.clone())))
+        .route("/.well-known/openid-configuration", get(platform_tokens::discovery))
 }

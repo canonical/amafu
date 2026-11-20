@@ -20,6 +20,7 @@ use crate::kinds::node_lease::NodeLease;
 use crate::kinds::operation::Operation;
 use crate::kinds::security_group::SecurityGroup;
 use crate::kinds::service_account::ServiceAccount;
+use crate::kinds::signing_key::SigningKey;
 use crate::kinds::storage_backend::StorageBackend;
 use crate::kinds::vm::Vm;
 use crate::kinds::volume::Volume;
@@ -99,7 +100,7 @@ impl KindDescriptor {
 }
 
 #[must_use]
-pub fn kinds() -> [KindDescriptor; 20] {
+pub fn kinds() -> [KindDescriptor; 21] {
     [
         KindDescriptor::of::<Node>(),
         KindDescriptor::of::<NodeLease>(),
@@ -117,6 +118,7 @@ pub fn kinds() -> [KindDescriptor; 20] {
         KindDescriptor::of::<NetworkEndpoint>(),
         KindDescriptor::of::<FloatingIp>(),
         KindDescriptor::of::<ServiceAccount>(),
+        KindDescriptor::of::<SigningKey>(),
         KindDescriptor::of::<KubernetesCluster>(),
         KindDescriptor::of::<KubernetesClusterChange>(),
         KindDescriptor::of::<JujuController>(),

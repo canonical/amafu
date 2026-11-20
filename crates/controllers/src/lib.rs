@@ -15,6 +15,7 @@ pub mod operations;
 mod references;
 pub mod retirement;
 pub mod scheduling;
+pub mod signing_keys;
 pub mod storage_backend;
 #[cfg(test)]
 mod testing;

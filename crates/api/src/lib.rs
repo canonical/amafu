@@ -9,6 +9,7 @@ pub mod node_client;
 pub mod node_identity;
 pub mod node_routes;
 pub mod node_wire;
+mod platform_tokens;
 mod request_chain;
 pub mod routes;
 pub mod server;
