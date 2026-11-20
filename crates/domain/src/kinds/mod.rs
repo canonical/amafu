@@ -2,6 +2,7 @@ pub mod audit_sink;
 pub mod certificate_revocation;
 pub mod cluster_version;
 pub mod environment;
+pub mod environment_secret;
 pub mod external_network;
 pub mod floating_ip;
 pub mod image;
