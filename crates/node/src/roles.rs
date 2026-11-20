@@ -17,6 +17,9 @@ use amafu_controllers::environments::failover::ApiFailoverController;
 use amafu_controllers::environments::host_health::HostHealthController;
 use amafu_controllers::environments::juju::{JujuEnvironment, JujuSteps};
 use amafu_controllers::environments::kubernetes::{KubernetesEnvironment, KubernetesSteps};
+use amafu_controllers::environments::outcomes::{
+    CreationOutcomeController, EnvironmentKinds, JujuKinds, KubernetesKinds,
+};
 use amafu_controllers::environments::rotation::CredentialRotationController;
 use amafu_controllers::node_lease::{LeaseKeeper, LeaseKeeperSettings, feed_while_leased};
 use amafu_controllers::{
@@ -427,6 +430,8 @@ fn environment_roles(
 }
 
 fn environment_loops(roles: &mut JoinSet<()>, services: &Services, settings: ReconcilerSettings) {
+    outcome_role::<KubernetesKinds>(roles, services, settings);
+    outcome_role::<JujuKinds>(roles, services, settings);
     let failover_store = Arc::clone(&services.store);
     singleton_role(
         roles,
@@ -454,6 +459,21 @@ fn environment_loops(roles: &mut JoinSet<()>, services: &Services, settings: Rec
                 Arc::new(RandomIdentifiers),
             )
         },
+        services,
+        settings,
+    );
+}
+
+fn outcome_role<K: EnvironmentKinds>(
+    roles: &mut JoinSet<()>,
+    services: &Services,
+    settings: ReconcilerSettings,
+) {
+    let store = Arc::clone(&services.store);
+    singleton_role(
+        roles,
+        K::NAME,
+        move |_| CreationOutcomeController::<K>::new(Arc::clone(&store)),
         services,
         settings,
     );

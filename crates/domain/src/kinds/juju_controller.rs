@@ -3,7 +3,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::access::ProjectPolicy;
-use crate::kinds::environment::{EnvironmentChange, EnvironmentPhase};
+use crate::kinds::environment::{EnvironmentChange, EnvironmentPhase, EnvironmentStatus};
 use crate::kinds::machine_shape::MachineShape;
 use crate::kinds::operation::OperationStatus;
 use crate::name::ObjectName;
@@ -168,6 +168,16 @@ pub struct JujuControllerStatus {
     pub credential_rotated_at: Option<time::OffsetDateTime>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+}
+
+impl EnvironmentStatus for JujuControllerStatus {
+    fn phase(&self) -> EnvironmentPhase {
+        self.phase
+    }
+
+    fn failed(&self, reason: &str) -> Self {
+        Self { phase: EnvironmentPhase::Failed, message: Some(reason.to_owned()), ..self.clone() }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

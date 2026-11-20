@@ -5,6 +5,7 @@ pub mod juju;
 pub mod kubernetes;
 mod machines;
 mod objects;
+pub mod outcomes;
 pub mod rotation;
 mod ssh;
 

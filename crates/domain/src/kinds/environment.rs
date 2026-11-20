@@ -19,3 +19,10 @@ pub trait EnvironmentChange {
 
     fn creates_environment(&self) -> bool;
 }
+
+pub trait EnvironmentStatus {
+    fn phase(&self) -> EnvironmentPhase;
+
+    #[must_use]
+    fn failed(&self, reason: &str) -> Self;
+}
