@@ -49,13 +49,6 @@ pub const OFFERED: &[OfferedContainer] = &[
         title: "PostgreSQL on Ubuntu",
         is_long_term: false,
     },
-    OfferedContainer {
-        repository: "ubuntu/python",
-        tag: "latest",
-        id: "ubuntu/python",
-        title: "Python on Ubuntu",
-        is_long_term: false,
-    },
 ];
 
 pub async fn digest_of(client: &reqwest::Client, repository: &str, tag: &str) -> Result<String, String> {
