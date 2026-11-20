@@ -1,0 +1,52 @@
+#!/bin/sh
+set -eu
+
+: "${JUJU_CONTROLLER_NAME:?}" "${JUJU_VERSION:?}" "${JUJU_SUBSTRATE:?}"
+: "${JUJU_CA_CERT:?}" "${JUJU_CA_PRIVATE_KEY:?}" "${JUJU_SIGN_IN:=amafu}"
+
+workdir=$(mktemp -d)
+trap 'rm -rf "$workdir"' EXIT
+export JUJU_DATA="$workdir/juju"
+cloud="amafu-$JUJU_CONTROLLER_NAME"
+
+indent() {
+    sed 's/^/    /'
+}
+
+{
+    echo "ca-cert: |"
+    printf '%s\n' "$JUJU_CA_CERT" | indent
+    echo "ca-private-key: |"
+    printf '%s\n' "$JUJU_CA_PRIVATE_KEY" | indent
+    if [ "$JUJU_SIGN_IN" = amafu ]; then
+        echo "login-token-refresh-url: ${JUJU_LOGIN_TOKEN_REFRESH_URL:?}"
+    fi
+} > "$workdir/bootstrap.yaml"
+
+case "$JUJU_SUBSTRATE" in
+machine)
+    : "${JUJU_MACHINE_ADDRESS:?}" "${JUJU_SSH_PRIVATE_KEY:?}"
+    mkdir -p "$HOME/.ssh"
+    chmod 700 "$HOME/.ssh"
+    printf '%s\n' "$JUJU_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
+    chmod 600 "$HOME/.ssh/id_ed25519"
+    printf 'Host *\n    StrictHostKeyChecking accept-new\n    User ubuntu\n' > "$HOME/.ssh/config"
+    printf 'clouds:\n  %s:\n    type: manual\n    endpoint: ubuntu@%s\n' "$cloud" "$JUJU_MACHINE_ADDRESS" > "$workdir/cloud.yaml"
+    juju add-cloud --client "$cloud" "$workdir/cloud.yaml"
+    ;;
+kubernetes)
+    : "${JUJU_KUBECONFIG:?}"
+    printf '%s\n' "$JUJU_KUBECONFIG" > "$workdir/kubeconfig"
+    KUBECONFIG="$workdir/kubeconfig" juju add-k8s --client "$cloud"
+    echo "controller-service-type: loadbalancer" >> "$workdir/bootstrap.yaml"
+    ;;
+*)
+    echo "unknown substrate $JUJU_SUBSTRATE" >&2
+    exit 2
+    ;;
+esac
+
+juju bootstrap "$cloud" "$JUJU_CONTROLLER_NAME" \
+    --agent-version "$JUJU_VERSION" \
+    --config "$workdir/bootstrap.yaml" \
+    --no-switch

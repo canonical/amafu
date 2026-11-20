@@ -1,0 +1,21 @@
+FROM ubuntu:24.04
+
+ARG JUJU_VERSION
+ARG JUJU_SHA256
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates curl openssh-client xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN series="${JUJU_VERSION%.*}" \
+    && curl --fail --location --output /tmp/juju.tar.xz \
+        "https://launchpad.net/juju/${series}/${JUJU_VERSION}/+download/juju-${JUJU_VERSION}-linux-amd64.tar.xz" \
+    && echo "${JUJU_SHA256}  /tmp/juju.tar.xz" | sha256sum --check \
+    && tar --extract --file /tmp/juju.tar.xz --directory /usr/local/bin juju \
+    && rm /tmp/juju.tar.xz
+
+RUN useradd --create-home runner
+COPY bootstrap /usr/local/bin/amafu-juju-bootstrap
+USER runner
+WORKDIR /home/runner
+ENTRYPOINT ["/usr/local/bin/amafu-juju-bootstrap"]

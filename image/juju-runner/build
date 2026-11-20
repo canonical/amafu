@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+: "${JUJU_VERSION:?set JUJU_VERSION, for example 3.6.11}"
+: "${JUJU_SHA256:?set JUJU_SHA256 to the checksum of the Juju release tarball}"
+: "${IMAGE:?set IMAGE to the registry and repository to push, for example registry.example/amafu-juju-runner}"
+
+directory=$(dirname "$0")
+tag="$IMAGE:$JUJU_VERSION"
+podman build --build-arg JUJU_VERSION="$JUJU_VERSION" --build-arg JUJU_SHA256="$JUJU_SHA256" --tag "$tag" "$directory"
+podman push --digestfile "$directory/digest" "$tag"
+echo "$IMAGE@$(cat "$directory/digest")"
