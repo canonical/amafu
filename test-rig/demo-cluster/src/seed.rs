@@ -473,3 +473,54 @@ pub async fn seed(store: &dyn Store) -> anyhow::Result<()> {
     seed_history(store).await?;
     seed_environments(store).await
 }
+
+#[must_use]
+pub fn catalog() -> amafu_interfaces::FixedImageCatalog {
+    let entry = |id: &str, title: &str, distribution: &str, kind: &str, source: Value, is_long_term: bool| {
+        serde_json::from_value(json!({
+            "id": id, "name": id.replace(['/', '.'], "-") + if kind == "container" { "-container" } else { "" },
+            "title": title, "distribution": distribution, "kind": kind, "source": source,
+            "size_bytes": 621_284_352, "published": "20261017", "is_long_term": is_long_term,
+        }))
+        .unwrap_or_else(|error| panic!("a catalog entry: {error}"))
+    };
+    let disk =
+        |url: &str| json!({"type": "disk", "url": url, "sha256": format!("sha256:{}", digest_of(url))});
+    let container = |repository: &str| json!({"type": "container", "reference": format!("docker.io/{repository}@sha256:{}", digest_of(repository))});
+    amafu_interfaces::FixedImageCatalog::new(vec![
+        entry(
+            "ubuntu/24.04",
+            "Ubuntu 24.04 LTS",
+            "ubuntu",
+            "virtual-machine",
+            disk("https://cloud-images.ubuntu.com/releases/noble/disk.img"),
+            true,
+        ),
+        entry(
+            "ubuntu/22.04",
+            "Ubuntu 22.04 LTS",
+            "ubuntu",
+            "virtual-machine",
+            disk("https://cloud-images.ubuntu.com/releases/jammy/disk.img"),
+            true,
+        ),
+        entry(
+            "debian/bookworm",
+            "Debian bookworm",
+            "debian",
+            "virtual-machine",
+            disk("https://images.lxd.canonical.com/debian/bookworm/disk.qcow2"),
+            false,
+        ),
+        entry(
+            "fedora/44",
+            "Fedora 44",
+            "fedora",
+            "virtual-machine",
+            disk("https://images.lxd.canonical.com/fedora/44/disk.qcow2"),
+            false,
+        ),
+        entry("ubuntu/24.04", "Ubuntu 24.04 LTS", "ubuntu", "container", container("library/ubuntu"), true),
+        entry("ubuntu/nginx", "NGINX on Ubuntu", "ubuntu", "container", container("ubuntu/nginx"), false),
+    ])
+}

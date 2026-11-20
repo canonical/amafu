@@ -182,6 +182,7 @@ mod resuming {
             clock: Arc::new(StillClock),
             identifiers: Arc::new(RandomIdentifiers),
             issuers: Arc::new(amafu_api::service_accounts::HttpIssuerDirectory::default()),
+            catalog: Arc::new(amafu_interfaces::FixedImageCatalog::default()),
         });
         let maas = Arc::new(FakeMaas {
             cluster: Arc::clone(&cluster_store),

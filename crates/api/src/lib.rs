@@ -1,6 +1,7 @@
 pub mod admission;
 pub mod authentication;
 pub mod authorization;
+mod catalog;
 pub mod client;
 pub mod diagnostics;
 mod handlers;

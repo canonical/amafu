@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use amafu_domain::registry;
-use amafu_interfaces::{AuditLog, Clock, Identifiers, Store};
+use amafu_interfaces::{AuditLog, Clock, Identifiers, ImageCatalog, Store};
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Extension, Path, State};
 use axum::routing::{get, post};
@@ -23,6 +23,7 @@ pub struct ApiState {
     pub clock: Arc<dyn Clock>,
     pub identifiers: Arc<dyn Identifiers>,
     pub issuers: Arc<dyn IssuerDirectory>,
+    pub catalog: Arc<dyn ImageCatalog>,
 }
 
 type Context = Extension<RequestContext>;
@@ -95,6 +96,7 @@ pub fn router(state: ApiState) -> Router {
 
 fn credential_routes(router: Router<ApiState>) -> Router<ApiState> {
     router
+        .route("/v1/image-catalog", get(|State(state): State<ApiState>| crate::catalog::image_catalog(state)))
         .route(
             "/v1/kubernetes-clusters/{name}/tokens",
             post(

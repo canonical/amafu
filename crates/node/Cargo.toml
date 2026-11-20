@@ -20,6 +20,7 @@ amafu-boot-slots.workspace = true
 amafu-controllers.workspace = true
 amafu-domain.workspace = true
 amafu-hypervisor.workspace = true
+amafu-image-catalog.workspace = true
 amafu-interfaces.workspace = true
 amafu-juju-client.workspace = true
 amafu-kubernetes-client.workspace = true

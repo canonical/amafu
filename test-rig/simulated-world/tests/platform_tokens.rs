@@ -86,6 +86,7 @@ mod platform_tokens {
             clock: Arc::new(VirtualClock::starting_at(now())),
             identifiers: Arc::new(SeededIdentifiers::new(1)) as Arc<dyn Identifiers>,
             issuers: Arc::new(amafu_api::service_accounts::HttpIssuerDirectory::default()),
+            catalog: Arc::new(amafu_interfaces::FixedImageCatalog::default()),
         };
         let transport: Arc<dyn Transport> = Arc::new(RouterTransport::new(router(state)));
         (

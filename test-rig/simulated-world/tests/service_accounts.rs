@@ -84,6 +84,7 @@ mod service_accounts {
             clock: Arc::new(VirtualClock::starting_at(now())),
             identifiers: Arc::new(SeededIdentifiers::new(3)) as Arc<dyn Identifiers>,
             issuers: Arc::new(CiIssuer { keys: ExternalKeys::parse(&published) }),
+            catalog: Arc::new(amafu_interfaces::FixedImageCatalog::default()),
         };
         let transport: Arc<dyn Transport> = Arc::new(RouterTransport::new(router(state)));
         Api {

@@ -40,12 +40,13 @@ use amafu_hypervisor::{
     BootSources, CloudHypervisor, CloudHypervisorSettings, HybridVsockAgents, MIGRATION_PORT,
     MigrationTransport, RuntimeDirectory, prepare_kvm_access,
 };
-use amafu_interfaces::KubernetesPlatform;
+use amafu_image_catalog::{CanonicalCatalog, host_architecture};
 use amafu_interfaces::{
     AuditEntry, AuditLog, BootSlots, Clock, CoreConnection, Datapath, Fence, GuestAgents, Hypervisor,
     ImageStore, Leases, LocalServices, NodeLeaseAuthority, NodeLeaseState, RandomIdentifiers,
     SequencedAuditEntry, Storage, Store, StoreError, Watchdog,
 };
+use amafu_interfaces::{FixedImageCatalog, ImageCatalog, KubernetesPlatform};
 use amafu_juju_client::WebSocketJuju;
 use amafu_kubernetes_client::HttpKubernetes;
 use amafu_network::{KernelDatapath, LocalServicesServer};
@@ -229,6 +230,7 @@ fn start_api(
         clock: Arc::clone(&services.clock),
         identifiers: Arc::new(RandomIdentifiers),
         issuers: Arc::new(amafu_api::service_accounts::HttpIssuerDirectory::default()),
+        catalog: catalog_for_node(),
     };
     let tls = tls_configuration(
         configuration.api.certificate.as_bytes(),
@@ -396,6 +398,16 @@ fn cluster_record_roles(roles: &mut JoinSet<()>, services: &Services, settings: 
         services,
         settings,
     );
+}
+
+fn catalog_for_node() -> Arc<dyn ImageCatalog> {
+    match CanonicalCatalog::new(host_architecture()) {
+        Ok(catalog) => Arc::new(catalog),
+        Err(error) => {
+            tracing::warn!(%error, "the image catalog is unavailable");
+            Arc::new(FixedImageCatalog::default())
+        }
+    }
 }
 
 fn environment_roles(
