@@ -20,6 +20,8 @@ const PAGES = [
   ["networks", "/networks", "10.20.0.0/24"],
   ["floating-ips", "/floating-ips", "203.0.113.10"],
   ["security-groups", "/security-groups", "monitoring"],
+  ["kubernetes", "/kubernetes", "platform"],
+  ["juju", "/juju", "observability"],
   ["nodes", "/nodes", "node-9"],
   ["operations", "/operations", "migrate-db-replica-77c2"],
   ["settings", "/settings", "26.04.1"],
@@ -137,6 +139,35 @@ async function workloads(browser) {
     await page.goto(`${base}/virtual-machines?panel=detail&subject=web-1`);
     await page.getByText("amafu vm show web-1").waitFor();
     await shoot(page, "virtual-machines-detail");
+  });
+
+  await attempt("a Kubernetes cluster panel shows its pools, nodes and the running change", async () => {
+    await page.goto(`${base}/kubernetes?panel=detail&subject=platform`);
+    await page.getByText("amafu kubernetes kubeconfig platform").waitFor();
+    await page.locator(".amafu-panel").getByText("platform-general-1", { exact: true }).waitFor();
+    await page.locator(".amafu-panel").getByText("Running: scale pool").waitFor();
+    await shoot(page, "kubernetes-detail");
+  });
+
+  await attempt("creating a cluster previews its command", async () => {
+    await page.goto(`${base}/kubernetes?panel=create`);
+    await page.getByLabel("Name").fill("analytics");
+    await page.getByText("--pool general=2:large").waitFor();
+    await shoot(page, "kubernetes-create");
+  });
+
+  await attempt("a Juju controller panel shows its models and changes", async () => {
+    await page.goto(`${base}/juju?panel=detail&subject=observability`);
+    await page.locator(".amafu-panel").getByText("monitoring", { exact: true }).first().waitFor();
+    await page.getByText("amafu juju token observability").waitFor();
+    await shoot(page, "juju-detail");
+  });
+
+  await attempt("creating a controller previews its command", async () => {
+    await page.goto(`${base}/juju?panel=create`);
+    await page.getByLabel("Name", { exact: true }).fill("apps");
+    await page.getByText("amafu juju create apps").waitFor();
+    await shoot(page, "juju-create");
   });
 
   await attempt("a rule added in the security group panel is kept", async () => {

@@ -4,6 +4,8 @@ import { NavLink, Route, Routes } from "react-router";
 import Containers from "./pages/Containers";
 import FloatingIps from "./pages/FloatingIps";
 import Images from "./pages/Images";
+import Juju from "./pages/Juju";
+import Kubernetes from "./pages/Kubernetes";
 import Networks from "./pages/Networks";
 import Nodes from "./pages/Nodes";
 import Operations from "./pages/Operations";
@@ -27,6 +29,8 @@ const PAGES = [
   { path: "/networks", label: "Networks", icon: "connected", page: <Networks /> },
   { path: "/floating-ips", label: "Floating IPs", icon: "exposed", page: <FloatingIps /> },
   { path: "/security-groups", label: "Security groups", icon: "security", page: <SecurityGroups /> },
+  { path: "/kubernetes", label: "Kubernetes", icon: "pods", page: <Kubernetes /> },
+  { path: "/juju", label: "Juju", icon: "applications", page: <Juju /> },
   { path: "/nodes", label: "Nodes", icon: "cluster-host", page: <Nodes /> },
   { path: "/operations", label: "Operations", icon: "history", page: <Operations /> },
 ];

@@ -5,6 +5,8 @@ use amafu_domain::kinds::cluster_version::ClusterVersion;
 use amafu_domain::kinds::external_network::ExternalNetwork;
 use amafu_domain::kinds::floating_ip::FloatingIp;
 use amafu_domain::kinds::image::Image;
+use amafu_domain::kinds::juju_controller::{JujuController, JujuControllerChange};
+use amafu_domain::kinds::kubernetes_cluster::{KubernetesCluster, KubernetesClusterChange};
 use amafu_domain::kinds::network::Network;
 use amafu_domain::kinds::node::Node;
 use amafu_domain::kinds::operation::Operation;
@@ -395,6 +397,72 @@ async fn seed_history(store: &dyn Store) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn seed_environments(store: &dyn Store) -> anyhow::Result<()> {
+    let cluster = json!({
+        "version": "1.34", "control_plane_nodes": 1, "control_plane_shape": "medium",
+        "node_pools": {"general": {"nodes": 2, "shape": "large"}},
+        "network": "app", "storage_backend": "ceph-prod", "external_network": "public",
+    });
+    let node = |pool: Option<&str>, index: u16, vm: &str| {
+        let mut member = json!({"index": index});
+        if let Some(pool) = pool {
+            member["pool"] = json!(pool);
+        }
+        json!({"member": member, "vm": vm, "version": "1.34", "is_ready": true})
+    };
+    put_with_status::<KubernetesCluster>(
+        store,
+        Some(DEFAULT_PROJECT),
+        "platform",
+        cluster.clone(),
+        json!({"phase": "ready", "endpoint": "203.0.113.20", "uid": "8f7c2d1e", "nodes": [
+            node(None, 0, "platform-cp-0"), node(Some("general"), 0, "platform-general-0"), node(Some("general"), 1, "platform-general-1"),
+        ]}),
+    )
+    .await?;
+    put_with_status::<KubernetesClusterChange>(
+        store,
+        Some(DEFAULT_PROJECT),
+        "create-platform-1a2b",
+        json!({"cluster": "platform", "request": {"kind": "create", "cluster": cluster}}),
+        json!({"completed_steps": 9, "outcome": {"outcome": "succeeded"}}),
+    )
+    .await?;
+    put_with_status::<KubernetesClusterChange>(
+        store,
+        Some(DEFAULT_PROJECT),
+        "scale-pool-platform-3c4d",
+        json!({"cluster": "platform", "request": {"kind": "scale-pool", "pool": "general",
+               "nodes": [{"pool": "general", "index": 0}, {"pool": "general", "index": 1}], "to": 3}}),
+        json!({"completed_steps": 0, "current_step": {"attempts": 1, "started_at": now()}}),
+    )
+    .await?;
+    let controller = json!({
+        "version": "4.2.1", "first_model": "default",
+        "substrate": {"on": "vms", "controllers": 1, "shape": "medium", "network": "app",
+                      "storage_backend": "ceph-prod", "external_network": "public"},
+    });
+    put_with_status::<JujuController>(
+        store,
+        Some(DEFAULT_PROJECT),
+        "observability",
+        controller,
+        json!({"phase": "ready", "uuid": "5e1d", "addresses": ["203.0.113.21"], "version": "4.2.1",
+               "models": [{"name": "default", "uuid": "a1b2c3d4"}, {"name": "monitoring", "uuid": "e5f6a7b8"}]}),
+    )
+    .await?;
+    put_with_status::<JujuControllerChange>(
+        store,
+        Some(DEFAULT_PROJECT),
+        "deploy-observability-5e6f",
+        json!({"controller": "observability", "request": {"kind": "deploy", "deployment": {
+            "model": "monitoring", "application": "prometheus", "charm": "prometheus-k8s", "units": 2, "shape": "medium"}}}),
+        json!({"completed_steps": 1, "current_step": {"attempts": 1, "started_at": now()}}),
+    )
+    .await?;
+    Ok(())
+}
+
 pub async fn seed(store: &dyn Store) -> anyhow::Result<()> {
     seed_nodes(store).await?;
     seed_cluster(store).await?;
@@ -402,5 +470,6 @@ pub async fn seed(store: &dyn Store) -> anyhow::Result<()> {
     seed_images_and_volumes(store, DEFAULT_PROJECT).await?;
     seed_workloads(store, DEFAULT_PROJECT).await?;
     seed_research(store).await?;
-    seed_history(store).await
+    seed_history(store).await?;
+    seed_environments(store).await
 }
