@@ -111,7 +111,7 @@ mod platform_tokens {
         let set: JwkSet = serde_json::from_slice(&keys.body).unwrap();
         let claims = Claims::verified(&issued.token, &published_key(&set, &key)).unwrap();
         assert_eq!(claims.aud, "cluster-uid");
-        assert_eq!(claims.sub, "alice");
+        assert_eq!(claims.sub, "alice@amafu");
         assert_eq!(claims.exp - claims.iat, 300);
         assert_eq!(claims.extra["groups"], serde_json::json!(["amafu:web-team:member"]));
         let discovery = anonymous.raw(Method::GET, "/.well-known/openid-configuration", None).await.unwrap();

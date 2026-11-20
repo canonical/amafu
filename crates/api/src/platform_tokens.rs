@@ -1,7 +1,7 @@
 use amafu_domain::access::Verb;
 use amafu_domain::kinds::juju_controller::JujuController;
 use amafu_domain::kinds::kubernetes_cluster::KubernetesCluster;
-use amafu_domain::platform_access::{ISSUER, juju_access, juju_user, kubernetes_group};
+use amafu_domain::platform_access::{ISSUER, juju_access, juju_user, kubernetes_group, platform_user};
 use amafu_domain::registry::KindDescriptor;
 use amafu_domain::{Object, ObjectReference, Resource};
 use std::sync::Arc;
@@ -46,8 +46,9 @@ pub async fn kubernetes_token(
         cluster.status.uid.clone().ok_or_else(|| not_ready(&operation, "the cluster has no UID yet"))?;
     let principal = &operation.context.principal;
     let group = kubernetes_group(&principal.project, principal.role);
-    let claims = Claims::new(ISSUER, &principal.name, &audience, state.clock.now(), TOKEN_LIFETIME)
-        .with("groups", serde_json::json!([group]));
+    let claims =
+        Claims::new(ISSUER, &platform_user(&principal.name), &audience, state.clock.now(), TOKEN_LIFETIME)
+            .with("groups", serde_json::json!([group]));
     sign(&state, &operation, &claims).await
 }
 

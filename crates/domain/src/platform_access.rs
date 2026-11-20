@@ -4,6 +4,8 @@ use crate::access::Role;
 use crate::name::ProjectName;
 
 pub const ISSUER: &str = "https://amafu.internal";
+pub const SERVICE_SUBJECT: &str = "amafu@amafu";
+pub const ROLES: [Role; 4] = [Role::Viewer, Role::Member, Role::Operator, Role::Admin];
 
 #[must_use]
 pub fn kubernetes_group(project: &ProjectName, role: Role) -> String {
@@ -36,8 +38,13 @@ pub fn juju_access(role: Role, controller_uuid: &str, model_uuids: &[String]) ->
 }
 
 #[must_use]
-pub fn juju_user(principal: &str) -> String {
+pub fn platform_user(principal: &str) -> String {
     format!("{}@amafu", principal.split('@').next().unwrap_or(principal))
+}
+
+#[must_use]
+pub fn juju_user(principal: &str) -> String {
+    format!("user-{}", platform_user(principal))
 }
 
 fn role_name(role: Role) -> &'static str {
@@ -72,7 +79,7 @@ mod tests {
 
     #[test]
     fn a_juju_user_is_the_principal_in_the_amafu_domain() {
-        assert_eq!(juju_user("alice"), "alice@amafu");
-        assert_eq!(juju_user("alice@example.com"), "alice@amafu");
+        assert_eq!(juju_user("alice"), "user-alice@amafu");
+        assert_eq!(platform_user("alice@example.com"), "alice@amafu");
     }
 }
