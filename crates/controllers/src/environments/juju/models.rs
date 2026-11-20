@@ -11,6 +11,7 @@ use amafu_domain::kinds::kubernetes_cluster::KubernetesCluster;
 use amafu_domain::kinds::security_group::SecurityGroup;
 use amafu_domain::kinds::vm::Vm;
 use amafu_domain::kinds::volume::Volume;
+use amafu_interfaces::juju::cloud_name;
 use amafu_interfaces::{ActionError, JujuModel};
 use amafu_reconciler::Step;
 
@@ -198,7 +199,11 @@ impl Step<JujuControllerChange> for RotateCredential {
         else {
             return Ok(());
         };
-        self.environment.platform.update_kubernetes_credential(&scope.endpoint().await?, &token).await?;
+        let cloud = cloud_name(controller.as_str());
+        self.environment
+            .platform
+            .update_kubernetes_credential(&scope.endpoint().await?, &cloud, &token)
+            .await?;
         let previous = scope.secret().await?.value(CREDENTIAL_SECRET).map(str::to_owned);
         if let Some(previous) = previous {
             kubernetes.delete(&kubernetes_endpoint, &token_secret(&controller, &previous)).await?;

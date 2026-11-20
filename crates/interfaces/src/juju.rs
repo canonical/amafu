@@ -4,6 +4,11 @@ use crate::error::ActionError;
 
 pub const JUJU_API_PORT: u16 = 17070;
 
+#[must_use]
+pub fn cloud_name(controller: &str) -> String {
+    format!("amafu-{controller}")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JujuEndpoint {
     pub address: Ipv4Addr,
@@ -135,6 +140,7 @@ pub trait JujuPlatform: Send + Sync {
     async fn update_kubernetes_credential(
         &self,
         endpoint: &JujuEndpoint,
+        cloud: &str,
         token: &str,
     ) -> Result<(), ActionError>;
 }

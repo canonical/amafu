@@ -39,8 +39,7 @@ impl WebSocketJuju {
         Connection::open(endpoint, Scope::Model(model), self.timeout).await
     }
 
-    fn cloud_credential(controller: &str) -> String {
-        let cloud = format!("amafu-{controller}");
+    fn cloud_credential(cloud: &str) -> String {
         format!("cloudcred-{cloud}_{BOOTSTRAP_USER}_{cloud}")
     }
 }
@@ -250,12 +249,12 @@ impl JujuPlatform for WebSocketJuju {
     async fn update_kubernetes_credential(
         &self,
         endpoint: &JujuEndpoint,
+        cloud: &str,
         token: &str,
     ) -> Result<(), ActionError> {
         let mut connection = self.controller_connection(endpoint).await?;
-        let controller = connection.login().controller_uuid.clone();
         let request = json!({"credentials": [{
-            "tag": Self::cloud_credential(&controller),
+            "tag": Self::cloud_credential(cloud),
             "credential": {"auth-type": "oauth2", "attrs": {"Token": token}},
         }]});
         connection.call("Cloud", "UpdateCredentialsCheckModels", request).await?;

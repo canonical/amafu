@@ -308,6 +308,7 @@ impl JujuPlatform for FakeJuju {
     async fn update_kubernetes_credential(
         &self,
         _endpoint: &JujuEndpoint,
+        _cloud: &str,
         token: &str,
     ) -> Result<(), ActionError> {
         self.with(|state| state.credential = Some(token.to_owned()));
