@@ -13,6 +13,7 @@ use amafu_reconciler::{Step, StepRegistry};
 use amafu_token_issuer::Keyring;
 
 pub use cloud_init::IssuerTrust;
+pub use scope::endpoint_of;
 
 pub struct KubernetesSettings {
     pub ubuntu_image: Option<ImageSource>,
