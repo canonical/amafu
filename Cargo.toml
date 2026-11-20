@@ -23,6 +23,7 @@ amafu-hypervisor = { path = "crates/hypervisor" }
 amafu-installer = { path = "crates/installer" }
 amafu-token-issuer = { path = "crates/token-issuer" }
 amafu-kubernetes-client = { path = "crates/kubernetes-client" }
+amafu-juju-client = { path = "crates/juju-client" }
 amafu-api = { path = "crates/api" }
 amafu-audit-export = { path = "crates/audit-export" }
 amafu-boot-slots = { path = "crates/boot-slots" }
@@ -86,6 +87,7 @@ wasmtime-wasi = { version = "50.0.1", default-features = false }
 time = { version = "0.3.55", features = ["serde", "formatting", "parsing"] }
 tokio = { version = "1.54.1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "net", "io-util", "signal", "process", "fs"] }
 tokio-vsock = "0.7.3"
+tokio-tungstenite = "0.28.0"
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12", "logging"] }
 tower = { version = "0.5.3", features = ["util"] }
 tracing = "0.1.44"
