@@ -5,6 +5,7 @@ use amafu_domain::ObjectName;
 use amafu_domain::kinds::vm::{
     BootSource, CONTAINER_CPU_COUNT, CONTAINER_MEMORY_MEBIBYTES, Vm, VmSpecification,
 };
+use amafu_interfaces::CatalogKind;
 use clap::Subcommand;
 
 use crate::output::OutputFormat;
@@ -15,8 +16,8 @@ pub enum ContainerCommand {
     #[command(about = "Run a container image in its own small VM")]
     Run {
         name: ObjectName,
-        #[arg(long)]
-        image: ObjectName,
+        #[arg(long, help = "A container image of the project or a catalog ID such as ubuntu/nginx")]
+        image: String,
         #[arg(long, default_value_t = CONTAINER_CPU_COUNT)]
         cpus: u16,
         #[arg(long = "memory", value_name = "MEBIBYTES", default_value_t = CONTAINER_MEMORY_MEBIBYTES)]
@@ -55,6 +56,7 @@ pub async fn run(client: &ApiClient, command: ContainerCommand, format: OutputFo
             timeout,
             command,
         } => {
+            let image = crate::catalog::resolve(client, &image, CatalogKind::Container).await?;
             let specification = VmSpecification {
                 cpu_count: cpus,
                 memory_mebibytes,

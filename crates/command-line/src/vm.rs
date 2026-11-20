@@ -10,6 +10,7 @@ use anyhow::bail;
 use clap::Subcommand;
 use futures::StreamExt;
 
+use crate::catalog::{DEFAULT_DISK_GIBIBYTES, RootDisk, create_root_volume};
 use crate::output::{OutputFormat, Table, print_structured};
 
 pub const DEFAULT_WAIT: &str = "120";
@@ -56,9 +57,15 @@ pub struct Placement {
 #[derive(clap::Args)]
 #[group(required = true, multiple = false)]
 pub struct BootChoice {
+    #[arg(
+        long,
+        value_name = "IMAGE",
+        help = "Boot a new disk made from this image: one of the project's or a catalog ID such as ubuntu/24.04"
+    )]
+    image: Option<String>,
     #[arg(long, value_name = "BUNDLE", help = "Boot a kernel bundle installed on the nodes")]
     kernel: Option<ObjectName>,
-    #[arg(long, help = "Boot from the first volume through UEFI firmware")]
+    #[arg(long, help = "Boot from the first --volume through UEFI firmware")]
     from_disk: bool,
 }
 
@@ -71,36 +78,55 @@ impl BootChoice {
     }
 }
 
+#[derive(clap::Args)]
+pub struct DiskChoice {
+    #[arg(long = "disk-size", value_name = "GIB", default_value_t = DEFAULT_DISK_GIBIBYTES, help = "Size of the disk made from --image")]
+    size_gibibytes: u32,
+    #[arg(
+        long = "storage-backend",
+        value_name = "BACKEND",
+        help = "Where the disk made from --image is kept"
+    )]
+    backend: Option<ObjectName>,
+    #[arg(long = "keep-disk", help = "Keep the disk made from --image when the VM is deleted")]
+    is_kept: bool,
+}
+
+#[derive(clap::Args)]
+pub struct CreateArguments {
+    pub name: ObjectName,
+    #[arg(long, default_value_t = 1)]
+    pub cpus: u16,
+    #[arg(long = "memory", value_name = "MEBIBYTES", default_value_t = 512)]
+    pub memory_mebibytes: u64,
+    #[command(flatten)]
+    pub boot: BootChoice,
+    #[command(flatten)]
+    pub disk: DiskChoice,
+    #[arg(
+        long = "volume",
+        value_name = "VOLUME",
+        help = "Attach a volume; repeatable, the first is the boot disk"
+    )]
+    pub volumes: Vec<ObjectName>,
+    #[command(flatten)]
+    pub attachments: Attachments,
+    #[command(flatten)]
+    pub placement: Placement,
+    #[arg(long, value_name = "FILE", help = "Serve this file as cloud-init user data")]
+    pub user_data: Option<std::path::PathBuf>,
+    #[arg(long, help = "Create the VM without starting it")]
+    pub stopped: bool,
+    #[arg(long, help = "Wait until the VM runs")]
+    pub wait: bool,
+    #[arg(long, value_name = "SECONDS", default_value = DEFAULT_WAIT)]
+    pub timeout: u64,
+}
+
 #[derive(Subcommand)]
 pub enum VmCommand {
     #[command(about = "Create a virtual machine")]
-    Create {
-        name: ObjectName,
-        #[arg(long, default_value_t = 1)]
-        cpus: u16,
-        #[arg(long = "memory", value_name = "MEBIBYTES", default_value_t = 512)]
-        memory_mebibytes: u64,
-        #[command(flatten)]
-        boot: BootChoice,
-        #[arg(
-            long = "volume",
-            value_name = "VOLUME",
-            help = "Attach a volume; repeatable, the first is the boot disk"
-        )]
-        volumes: Vec<ObjectName>,
-        #[command(flatten)]
-        attachments: Attachments,
-        #[command(flatten)]
-        placement: Placement,
-        #[arg(long, value_name = "FILE", help = "Serve this file as cloud-init user data")]
-        user_data: Option<std::path::PathBuf>,
-        #[arg(long, help = "Create the VM without starting it")]
-        stopped: bool,
-        #[arg(long, help = "Wait until the VM runs")]
-        wait: bool,
-        #[arg(long, value_name = "SECONDS", default_value = DEFAULT_WAIT)]
-        timeout: u64,
-    },
+    Create(Box<CreateArguments>),
     #[command(about = "List virtual machines")]
     List,
     #[command(about = "Show a virtual machine")]
@@ -237,19 +263,30 @@ pub async fn create_and_wait(
 
 pub async fn run(client: &ApiClient, command: VmCommand, format: OutputFormat) -> anyhow::Result<()> {
     match command {
-        VmCommand::Create {
-            name,
-            cpus,
-            memory_mebibytes,
-            boot,
-            volumes,
-            attachments,
-            placement,
-            user_data,
-            stopped,
-            wait,
-            timeout,
-        } => {
+        VmCommand::Create(arguments) => {
+            let CreateArguments {
+                name,
+                cpus,
+                memory_mebibytes,
+                boot,
+                disk,
+                mut volumes,
+                attachments,
+                placement,
+                user_data,
+                stopped,
+                wait,
+                timeout,
+            } = *arguments;
+            if let Some(image) = &boot.image {
+                let root = RootDisk {
+                    image: image.clone(),
+                    size_gibibytes: disk.size_gibibytes,
+                    backend: disk.backend,
+                    is_kept: disk.is_kept,
+                };
+                volumes.insert(0, create_root_volume(client, &name, root).await?);
+            }
             let power_state = if stopped { PowerState::Stopped } else { PowerState::Running };
             let user_data = user_data.map(std::fs::read_to_string).transpose()?;
             let specification = VmSpecification {

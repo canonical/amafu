@@ -373,6 +373,10 @@ impl ApiClient {
         serde_json::to_vec(value).map_err(|error| ClientError::Decode(error.to_string()))
     }
 
+    pub async fn image_catalog(&self) -> Result<Vec<amafu_interfaces::CatalogEntry>, ClientError> {
+        self.call(Method::GET, "/v1/image-catalog", None).await
+    }
+
     pub async fn platform_token<R: Resource>(&self, name: &str) -> Result<PlatformToken, ClientError> {
         self.call(Method::POST, &self.object_path::<R>(name, "/tokens"), None).await
     }
@@ -382,8 +386,17 @@ impl ApiClient {
         name: &amafu_domain::ObjectName,
         specification: &R::Specification,
     ) -> Result<Object<R>, ClientError> {
+        self.create_labelled::<R>(name, BTreeMap::new(), specification).await
+    }
+
+    pub async fn create_labelled<R: Resource>(
+        &self,
+        name: &amafu_domain::ObjectName,
+        labels: BTreeMap<String, String>,
+        specification: &R::Specification,
+    ) -> Result<Object<R>, ClientError> {
         let body = CreateRequest {
-            metadata: NewObjectMetadata { name: name.clone(), labels: BTreeMap::new() },
+            metadata: NewObjectMetadata { name: name.clone(), labels },
             specification: serde_json::to_value(specification)
                 .map_err(|error| ClientError::Decode(error.to_string()))?,
         };

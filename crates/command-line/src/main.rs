@@ -1,4 +1,5 @@
 mod audit_sink;
+mod catalog;
 mod connection;
 mod container;
 mod dashboard;
