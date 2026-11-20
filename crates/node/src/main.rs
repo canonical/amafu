@@ -3,6 +3,7 @@ mod clock;
 mod control;
 mod diagnostics;
 mod init;
+mod restart_guard;
 mod roles;
 mod watchdog;
 

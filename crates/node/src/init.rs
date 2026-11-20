@@ -2,13 +2,13 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use amafu_interfaces::Watchdog;
 use tokio::io::AsyncBufReadExt;
 use tokio::net::UnixListener;
 use tokio::sync::mpsc;
 
 use crate::boot;
 use crate::control::{FEED_REQUEST, INIT_SOCKET, MODULES_READY_FILE, RESTART_REQUEST};
+use crate::restart_guard::RestartGuard;
 use crate::watchdog::KernelWatchdog;
 
 const CONTROL_COMMAND: &str = "control";
@@ -18,14 +18,15 @@ const MAXIMUM_RESTART_DELAY: Duration = Duration::from_secs(30);
 const REAP_INTERVAL: Duration = Duration::from_millis(200);
 const HEALTHY_RUN: Duration = Duration::from_secs(60);
 
-fn restart_node() {
-    tracing::warn!("the control process asked to restart the node");
+fn restart_node(guard: &RestartGuard<KernelWatchdog>) {
+    tracing::warn!("the control process asked to restart the node; the watchdog is no longer fed");
+    guard.begin_restart();
     if let Err(error) = amafu_system::reboot() {
         tracing::error!(%error, "restarting the node failed");
     }
 }
 
-fn answer_control_requests(watchdog: Arc<KernelWatchdog>) -> std::io::Result<()> {
+fn answer_control_requests(watchdog: Arc<RestartGuard<KernelWatchdog>>) -> std::io::Result<()> {
     let _ = std::fs::remove_file(INIT_SOCKET);
     let listener = UnixListener::bind(INIT_SOCKET)?;
     tokio::spawn(async move {
@@ -43,7 +44,7 @@ fn answer_control_requests(watchdog: Arc<KernelWatchdog>) -> std::io::Result<()>
                                 tracing::error!(%error, "feeding the watchdog failed");
                             }
                         }
-                        RESTART_REQUEST => restart_node(),
+                        RESTART_REQUEST => restart_node(&watchdog),
                         _ => tracing::warn!(request, "the control process sent an unknown request"),
                     }
                 }
@@ -107,10 +108,10 @@ async fn supervise_control(
 
 pub async fn run_as_process_one() -> anyhow::Result<()> {
     let (configuration, modules) = boot::early_boot().await?;
-    let watchdog = Arc::new(KernelWatchdog::new(
+    let watchdog = Arc::new(RestartGuard::new(KernelWatchdog::new(
         boot::boot_modules_directory(),
         configuration.fencing.terms().watchdog_interval(),
-    ));
+    )));
     answer_control_requests(watchdog)?;
     mark_modules_ready(modules);
     let (ended, endings) = mpsc::unbounded_channel();
