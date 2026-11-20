@@ -181,6 +181,7 @@ dependencies = [
  "base64",
  "proptest",
  "rcgen",
+ "ring",
  "serde_json",
  "serde_yaml_ng",
  "time",

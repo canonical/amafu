@@ -12,8 +12,8 @@ use amafu_domain::platform_access::{ISSUER, SERVICE_SUBJECT};
 use amafu_domain::{Object, ObjectName, ObjectReference};
 use amafu_interfaces::{ActionError, KubernetesEndpoint};
 use amafu_reconciler::OperationContext;
-use amafu_token_issuer::Claims;
-use time::Duration;
+use amafu_token_issuer::{Claims, Keyring};
+use time::{Duration, OffsetDateTime};
 
 use super::KubernetesEnvironment;
 use crate::environments::{EnvironmentObjects, Machine, MachinePlan, Ownership};
@@ -103,39 +103,25 @@ impl<'a> ClusterScope<'a> {
     }
 
     pub fn secret_reference(cluster: &Object<KubernetesCluster>) -> Result<ObjectReference, ActionError> {
-        let name =
-            ObjectName::new(format!("kubernetes-{}", cluster.metadata.id)).map_err(ActionError::fatal)?;
-        Ok(ObjectReference::of::<EnvironmentSecret>(None, name))
+        secret_reference(cluster)
     }
 
     pub async fn secret(
         &self,
         cluster: &Object<KubernetesCluster>,
     ) -> Result<EnvironmentSecretSpecification, ActionError> {
-        let reference = Self::secret_reference(cluster)?;
-        Ok(self.objects().require::<EnvironmentSecret>(&reference).await?.specification)
+        Ok(self.objects().require::<EnvironmentSecret>(&secret_reference(cluster)?).await?.specification)
     }
 
     pub async fn api_address(&self) -> Result<Option<Ipv4Addr>, ActionError> {
-        let reference = self.ownership.reference::<FloatingIp>(self.api_address_name()?);
-        Ok(self.objects().read::<FloatingIp>(&reference).await?.and_then(|address| address.status.address))
+        api_address_of(self.objects(), &self.ownership).await
     }
 
     pub async fn endpoint(
         &self,
         cluster: &Object<KubernetesCluster>,
     ) -> Result<KubernetesEndpoint, ActionError> {
-        let waiting = |what: &str| ActionError::retryable(format!("the cluster has no {what} yet"));
-        let address = self.api_address().await?.ok_or_else(|| waiting("API address"))?;
-        let uid = cluster.status.uid.as_deref().ok_or_else(|| waiting("UID"))?;
-        let certificate_authority =
-            cluster.status.certificate_authority.clone().ok_or_else(|| waiting("certificate authority"))?;
-        let secret = self.secret(cluster).await?;
-        let k8sd_token = secret.value(K8SD_TOKEN).ok_or_else(|| waiting("k8sd token"))?.to_owned();
-        let now = self.context.clock.now();
-        let claims = Claims::new(ISSUER, SERVICE_SUBJECT, uid, now, CONTROLLER_TOKEN_LIFETIME);
-        let issued = self.environment.keyring.sign(&claims, now).await.map_err(ActionError::retryable)?;
-        Ok(KubernetesEndpoint { address, certificate_authority, k8sd_token, api_token: issued.token })
+        endpoint_of(self.objects(), &self.environment.keyring, self.context.clock.now(), cluster).await
     }
 
     #[must_use]
@@ -180,6 +166,47 @@ impl<'a> ClusterScope<'a> {
             })
             .await
     }
+}
+
+pub fn secret_reference(cluster: &Object<KubernetesCluster>) -> Result<ObjectReference, ActionError> {
+    let name = ObjectName::new(format!("kubernetes-{}", cluster.metadata.id)).map_err(ActionError::fatal)?;
+    Ok(ObjectReference::of::<EnvironmentSecret>(None, name))
+}
+
+pub fn ownership_of(cluster: &Object<KubernetesCluster>) -> Result<Ownership, ActionError> {
+    let project = cluster
+        .metadata
+        .project
+        .clone()
+        .ok_or_else(|| ActionError::fatal("a Kubernetes cluster belongs to a project"))?;
+    Ok(Ownership::new(KUBERNETES_CLUSTER, cluster.metadata.name.clone(), project))
+}
+
+async fn api_address_of(
+    objects: EnvironmentObjects<'_>,
+    ownership: &Ownership,
+) -> Result<Option<Ipv4Addr>, ActionError> {
+    let reference = ownership.reference::<FloatingIp>(ownership.named("api")?);
+    Ok(objects.read::<FloatingIp>(&reference).await?.and_then(|address| address.status.address))
+}
+
+pub async fn endpoint_of(
+    objects: EnvironmentObjects<'_>,
+    keyring: &Keyring,
+    now: OffsetDateTime,
+    cluster: &Object<KubernetesCluster>,
+) -> Result<KubernetesEndpoint, ActionError> {
+    let waiting = |what: &str| ActionError::retryable(format!("the cluster has no {what} yet"));
+    let address =
+        api_address_of(objects, &ownership_of(cluster)?).await?.ok_or_else(|| waiting("API address"))?;
+    let uid = cluster.status.uid.as_deref().ok_or_else(|| waiting("UID"))?;
+    let certificate_authority =
+        cluster.status.certificate_authority.clone().ok_or_else(|| waiting("certificate authority"))?;
+    let secret = objects.require::<EnvironmentSecret>(&secret_reference(cluster)?).await?.specification;
+    let k8sd_token = secret.value(K8SD_TOKEN).ok_or_else(|| waiting("k8sd token"))?.to_owned();
+    let claims = Claims::new(ISSUER, SERVICE_SUBJECT, uid, now, CONTROLLER_TOKEN_LIFETIME);
+    let api_token = keyring.sign(&claims, now).await.map_err(ActionError::retryable)?.token;
+    Ok(KubernetesEndpoint { address, certificate_authority, k8sd_token, api_token })
 }
 
 #[must_use]
