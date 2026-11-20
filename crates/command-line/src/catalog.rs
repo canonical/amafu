@@ -61,6 +61,9 @@ pub async fn import(
 }
 
 pub async fn resolve(client: &ApiClient, image: &str, kind: CatalogKind) -> anyhow::Result<ObjectName> {
+    if ObjectName::new(image).is_err() {
+        return import(client, &find(client, image, kind).await?, None).await;
+    }
     match client.get::<Image>(image).await {
         Ok(found) => Ok(found.metadata.name),
         Err(error) if error.is_not_found() => import(client, &find(client, image, kind).await?, None).await,
