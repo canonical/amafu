@@ -5,6 +5,7 @@ mod dashboard;
 mod floating_ip;
 mod image;
 mod install;
+mod juju;
 mod kubernetes;
 mod network;
 mod node;
@@ -74,6 +75,8 @@ enum Command {
     Release(release::ReleaseCommand),
     #[command(subcommand, about = "Create and change Kubernetes clusters, and reach them with kubectl")]
     Kubernetes(kubernetes::KubernetesCommand),
+    #[command(subcommand, about = "Bootstrap and change Juju controllers")]
+    Juju(juju::JujuCommand),
     #[command(subcommand, about = "Serve or deploy the web dashboard")]
     Dashboard(dashboard::DashboardCommand),
 }
@@ -105,6 +108,7 @@ async fn run(arguments: Arguments) -> anyhow::Result<()> {
         Command::AuditSink(command) => audit_sink::run(&client, command, arguments.output).await,
         Command::Upgrade(command) => upgrade::run(&client, command, arguments.output).await,
         Command::Kubernetes(command) => kubernetes::run(&client, command, arguments.output).await,
+        Command::Juju(command) => juju::run(&client, command, arguments.output).await,
         Command::Install(_) | Command::Release(_) | Command::Dashboard(_) => Ok(()),
     }
 }
