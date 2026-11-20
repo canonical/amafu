@@ -85,6 +85,7 @@ mod platform_tokens {
             audit: Arc::new(MemoryAuditLog::new()) as Arc<dyn AuditLog>,
             clock: Arc::new(VirtualClock::starting_at(now())),
             identifiers: Arc::new(SeededIdentifiers::new(1)) as Arc<dyn Identifiers>,
+            issuers: Arc::new(amafu_api::service_accounts::HttpIssuerDirectory::default()),
         };
         let transport: Arc<dyn Transport> = Arc::new(RouterTransport::new(router(state)));
         (

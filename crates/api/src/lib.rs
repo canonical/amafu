@@ -13,10 +13,13 @@ mod platform_tokens;
 mod request_chain;
 pub mod routes;
 pub mod server;
+pub mod service_accounts;
 mod store_admission;
 pub mod wire;
 
-pub use authentication::{AuthenticationError, Authenticator, TokenAuthenticator, TokenIdentity};
+pub use authentication::{
+    AuthenticationError, Authenticator, ChainedAuthenticator, TokenAuthenticator, TokenIdentity,
+};
 pub use client::{
     ApiClient, ClientError, ClientIdentity, FailoverTransport, HttpTransport, PlatformToken, RawResponse,
     RouterTransport, Transport,

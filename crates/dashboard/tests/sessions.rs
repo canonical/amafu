@@ -41,6 +41,7 @@ mod sessions {
             audit: Arc::new(MemoryAuditLog::new()),
             clock: Arc::new(VirtualClock::starting_at(OffsetDateTime::now_utc())),
             identifiers: Arc::new(RandomIdentifiers),
+            issuers: Arc::new(amafu_api::service_accounts::HttpIssuerDirectory::default()),
         });
         Arc::new(RouterTransport::new(api))
     }

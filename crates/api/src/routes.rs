@@ -12,6 +12,7 @@ use crate::authentication::Authenticator;
 use crate::handlers::{create_object, delete_object, get_object, list_objects, update_object, watch_object};
 use crate::platform_tokens;
 use crate::request_chain::{RequestContext, request_chain};
+use crate::service_accounts::{self, IssuerDirectory};
 use crate::wire::MAXIMUM_BODY_BYTES;
 
 #[derive(Clone)]
@@ -21,6 +22,7 @@ pub struct ApiState {
     pub audit: Arc<dyn AuditLog>,
     pub clock: Arc<dyn Clock>,
     pub identifiers: Arc<dyn Identifiers>,
+    pub issuers: Arc<dyn IssuerDirectory>,
 }
 
 type Context = Extension<RequestContext>;
@@ -84,6 +86,14 @@ pub fn router(state: ApiState) -> Router {
                 ),
             );
     }
+    credential_routes(router)
+        .layer(DefaultBodyLimit::max(MAXIMUM_BODY_BYTES))
+        .layer(middleware::from_fn_with_state(state.clone(), request_chain))
+        .merge(public_router(state.clone()))
+        .with_state(state)
+}
+
+fn credential_routes(router: Router<ApiState>) -> Router<ApiState> {
     router
         .route(
             "/v1/kubernetes-clusters/{name}/tokens",
@@ -107,14 +117,36 @@ pub fn router(state: ApiState) -> Router {
                 },
             ),
         )
-        .layer(DefaultBodyLimit::max(MAXIMUM_BODY_BYTES))
-        .layer(middleware::from_fn_with_state(state.clone(), request_chain))
-        .merge(public_router(state.clone()))
-        .with_state(state)
+        .route(
+            "/v1/service-accounts/{name}/secrets",
+            post(
+                |State(state): State<ApiState>,
+                 Extension(context): Context,
+                 target: Uri,
+                 Path(name): Path<String>| {
+                    service_accounts::create_secret(state, context, target, name)
+                },
+            ),
+        )
+        .route(
+            "/v1/service-accounts/{name}/secrets/{id}",
+            axum::routing::delete(
+                |State(state): State<ApiState>,
+                 Extension(context): Context,
+                 target: Uri,
+                 Path((name, id)): Path<(String, String)>| {
+                    service_accounts::delete_secret(state, context, target, name, id)
+                },
+            ),
+        )
 }
 
 fn public_router(state: ApiState) -> Router<ApiState> {
     Router::new()
         .route("/v1/jwks", get(move || platform_tokens::json_web_keys(state.clone())))
         .route("/.well-known/openid-configuration", get(platform_tokens::discovery))
+        .route(
+            "/v1/tokens",
+            post(|State(state): State<ApiState>, body| service_accounts::exchange(state, body)),
+        )
 }

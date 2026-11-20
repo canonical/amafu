@@ -378,6 +378,7 @@ impl SimulatedWorld {
             audit: Arc::clone(&audit) as Arc<dyn AuditLog>,
             clock: Arc::new(clock.clone()),
             identifiers: Arc::clone(&identifiers) as Arc<dyn Identifiers>,
+            issuers: Arc::new(amafu_api::service_accounts::HttpIssuerDirectory::default()),
         })
         .merge(node_router(NodeApiState {
             store: Arc::clone(&store) as Arc<dyn Store>,

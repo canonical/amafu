@@ -64,6 +64,7 @@ impl DemoCluster {
             audit: Arc::new(MemoryAuditLog::new()),
             clock: Arc::new(WallClock),
             identifiers: Arc::new(RandomIdentifiers),
+            issuers: Arc::new(amafu_api::service_accounts::HttpIssuerDirectory::default()),
         });
         let upstream: Arc<dyn Transport> = Arc::new(RouterTransport::new(api));
         let key = SessionKey::from_hexadecimal(&SessionKey::generate_hexadecimal()?)?;

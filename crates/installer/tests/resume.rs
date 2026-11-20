@@ -181,6 +181,7 @@ mod resuming {
             audit: Arc::new(ForgetfulAudit),
             clock: Arc::new(StillClock),
             identifiers: Arc::new(RandomIdentifiers),
+            issuers: Arc::new(amafu_api::service_accounts::HttpIssuerDirectory::default()),
         });
         let maas = Arc::new(FakeMaas {
             cluster: Arc::clone(&cluster_store),

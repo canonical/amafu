@@ -6,9 +6,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use amafu_api::server::{serve, tls_configuration};
+use amafu_api::service_accounts::IssuedTokenAuthenticator;
 use amafu_api::{
-    ApiState, ClientIdentity, HttpTransport, NodeApiState, NodeAuthenticator, NodeClient, TokenAuthenticator,
-    Transport, node_router, router,
+    ApiState, ChainedAuthenticator, ClientIdentity, HttpTransport, NodeApiState, NodeAuthenticator,
+    NodeClient, TokenAuthenticator, Transport, node_router, router,
 };
 use amafu_audit_export::BuiltInAuditSinks;
 use amafu_controllers::RunnerKind;
@@ -214,10 +215,14 @@ fn start_api(
         Arc::new(ReadReplicaStore::start(Arc::clone(&services.store), &replicated_kinds));
     let state = ApiState {
         store: Arc::clone(&replica),
-        authenticator: Arc::new(TokenAuthenticator::new(configuration.api.identities.clone())),
+        authenticator: Arc::new(ChainedAuthenticator::new(vec![
+            Arc::new(TokenAuthenticator::new(configuration.api.identities.clone())),
+            Arc::new(IssuedTokenAuthenticator::new(Arc::clone(&replica))),
+        ])),
         audit: Arc::clone(&services.audit),
         clock: Arc::clone(&services.clock),
         identifiers: Arc::new(RandomIdentifiers),
+        issuers: Arc::new(amafu_api::service_accounts::HttpIssuerDirectory::default()),
     };
     let tls = tls_configuration(
         configuration.api.certificate.as_bytes(),
