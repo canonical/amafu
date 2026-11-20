@@ -7,6 +7,7 @@ pub mod guest;
 pub mod hypervisor;
 pub mod identifiers;
 pub mod images;
+pub mod kubernetes;
 pub mod lease;
 pub mod network;
 pub mod node_image;
@@ -30,6 +31,7 @@ pub use hypervisor::{
 };
 pub use identifiers::{Identifiers, RandomIdentifiers};
 pub use images::{CachedImage, ContainerConfiguration, ImageRequest, ImageStore};
+pub use kubernetes::{DrainState, KubernetesEndpoint, KubernetesPlatform, NodeRole};
 pub use lease::{HeldLease, Leases};
 pub use network::{
     Datapath, FloatingAddress, LocalServices, NodeNetworkState, Port, PortKey, RealizedNetwork,
