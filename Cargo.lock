@@ -341,6 +341,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "amafu-kubernetes-client"
+version = "0.1.0"
+dependencies = [
+ "amafu-interfaces",
+ "async-trait",
+ "reqwest",
+ "rustls",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "amafu-lxd-lab"
 version = "0.1.0"
 dependencies = [
