@@ -13,6 +13,7 @@ use amafu_api::{
 };
 use amafu_audit_export::BuiltInAuditSinks;
 use amafu_controllers::RunnerKind;
+use amafu_controllers::authorized_keys::AuthorizedKeysController;
 use amafu_controllers::environments::failover::ApiFailoverController;
 use amafu_controllers::environments::host_health::HostHealthController;
 use amafu_controllers::environments::juju::{JujuEnvironment, JujuSteps};
@@ -641,6 +642,14 @@ fn core_roles(
         roles,
         "root-volumes",
         move |_| RootVolumeController::new(Arc::clone(&root_volume_store)),
+        services,
+        settings,
+    );
+    let keys_store = store();
+    singleton_role(
+        roles,
+        "authorized-keys",
+        move |_| AuthorizedKeysController::new(Arc::clone(&keys_store)),
         services,
         settings,
     );
