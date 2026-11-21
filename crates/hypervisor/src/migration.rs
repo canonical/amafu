@@ -16,6 +16,7 @@ use tokio_rustls::{TlsAcceptor, TlsConnector};
 use crate::runtime::{RuntimeDirectory, VmDirectory};
 
 pub const MIGRATION_PORT: u16 = 7445;
+pub const MIGRATION_TIMEOUT_SECONDS: u64 = 900;
 const HEADER_PREFIX: &str = "amafu-migration/1 ";
 const LONGEST_HEADER: u64 = 128;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);

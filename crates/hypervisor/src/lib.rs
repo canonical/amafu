@@ -11,6 +11,7 @@ pub mod runtime;
 pub mod sandbox;
 pub mod sending;
 pub mod vm_process;
+mod vmm_api;
 
 pub use adapter::{CloudHypervisor, CloudHypervisorSettings};
 pub use agents::HybridVsockAgents;

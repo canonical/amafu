@@ -8,15 +8,17 @@ use amafu_domain::{NodeName, ObjectId};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 
-use crate::migration::{MIGRATION_PORT, MigrationRecord, MigrationTransport, report_from_log};
+use crate::migration::{
+    MIGRATION_PORT, MIGRATION_TIMEOUT_SECONDS, MigrationRecord, MigrationTransport, report_from_log,
+};
 use crate::runtime::VmDirectory;
 use crate::sandbox::{give_to, limit_cpu_share};
+use crate::vmm_api;
 
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
 const API_TIMEOUT: Duration = Duration::from_secs(15);
 const EXIT_TIMEOUT: Duration = Duration::from_secs(30);
 const EXIT_POLL: Duration = Duration::from_millis(100);
-const MIGRATION_TIMEOUT_SECONDS: u64 = 900;
 const THROTTLE_AFTER: Duration = Duration::from_secs(10);
 const THROTTLE_STEP: Duration = Duration::from_secs(5);
 const THROTTLE_SHARES_PERCENT: [u64; 4] = [50, 25, 10, 5];
@@ -34,56 +36,37 @@ pub struct SendJob {
     pub is_alive: fn(&VmDirectory) -> bool,
 }
 
-async fn read_response(stream: &mut UnixStream) -> io::Result<(String, String)> {
+async fn read_response(stream: &mut UnixStream) -> io::Result<vmm_api::Response> {
     let mut received = Vec::new();
     let mut chunk = [0_u8; 4096];
-    let header_end = loop {
-        if let Some(position) = received.windows(4).position(|window| window == b"\r\n\r\n") {
-            break position + 4;
+    loop {
+        if let Some(response) = vmm_api::complete(&received) {
+            return Ok(response);
         }
         let read = stream.read(&mut chunk).await?;
         if read == 0 {
-            return Err(io::Error::other("the VMM closed its API connection early"));
-        }
-        received.extend_from_slice(&chunk[..read]);
-    };
-    let headers = String::from_utf8_lossy(&received[..header_end]).into_owned();
-    let length: usize = headers
-        .lines()
-        .find_map(|line| {
-            line.to_ascii_lowercase().strip_prefix("content-length:").map(|value| value.trim().to_owned())
-        })
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(0);
-    while received.len() < header_end + length {
-        let read = stream.read(&mut chunk).await?;
-        if read == 0 {
-            break;
+            return vmm_api::closed(&received);
         }
         received.extend_from_slice(&chunk[..read]);
     }
-    let body = String::from_utf8_lossy(&received[header_end..]).into_owned();
-    Ok((headers, body))
 }
 
 async fn put_api(socket: &Path, path: &str, body: &str) -> io::Result<()> {
     let exchange = async {
         let mut stream = UnixStream::connect(socket).await?;
-        let request = format!(
-            "PUT {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
-            body.len()
-        );
-        stream.write_all(request.as_bytes()).await?;
+        stream.write_all(vmm_api::put_request(path, body).as_bytes()).await?;
         read_response(&mut stream).await
     };
-    let (headers, answer) = tokio::time::timeout(API_TIMEOUT, exchange)
+    let response = tokio::time::timeout(API_TIMEOUT, exchange)
         .await
         .map_err(|_| io::Error::other("the VMM did not answer its API in time"))??;
-    let status = headers.split_whitespace().nth(1).unwrap_or_default();
-    if status.starts_with('2') {
+    if response.is_success() {
         Ok(())
     } else {
-        Err(io::Error::other(format!("the VMM refused to send the VM ({status}): {answer}")))
+        Err(io::Error::other(format!(
+            "the VMM refused to send the VM ({}): {}",
+            response.status, response.body
+        )))
     }
 }
 
@@ -136,7 +119,7 @@ async fn send(job: &SendJob) -> io::Result<u64> {
     }
     put_api(
         &job.directory.api_socket(),
-        "/api/v1/vm.send-migration",
+        vmm_api::SEND_MIGRATION,
         &send_request(&outgoing, job.downtime_milliseconds),
     )
     .await?;
@@ -187,15 +170,16 @@ mod tests {
     async fn an_answer_is_read_without_waiting_for_the_connection_to_close() {
         let (mut client, mut server) = UnixStream::pair().unwrap();
         server.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n").await.unwrap();
-        let (headers, body) = read_response(&mut client).await.unwrap();
-        assert!(headers.starts_with("HTTP/1.1 204"));
-        assert_eq!(body, "");
+        let answer = read_response(&mut client).await.unwrap();
+        assert_eq!(answer.status, "204");
+        assert_eq!(answer.body, "");
         server
             .write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 5\r\n\r\nbroke")
             .await
             .unwrap();
-        let (_, body) = read_response(&mut client).await.unwrap();
-        assert_eq!(body, "broke");
+        let answer = read_response(&mut client).await.unwrap();
+        assert_eq!(answer.body, "broke");
+        assert!(!answer.is_success());
         drop(server);
     }
 }
