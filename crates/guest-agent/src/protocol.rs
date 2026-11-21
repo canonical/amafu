@@ -76,6 +76,7 @@ mod tests {
                 working_directory: None,
                 user: None,
                 hostname: String::from("web-1"),
+                authorized_keys: vec![String::from("ssh-ed25519 AAAA alice")],
             },
         };
         let line = encode(&request);

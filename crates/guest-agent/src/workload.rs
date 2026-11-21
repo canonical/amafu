@@ -2,6 +2,8 @@ use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 
 use amafu_interfaces::{WorkloadSpecification, WorkloadState};
+
+use crate::authorized_keys;
 use anyhow::{Context, bail};
 use rustix::process::{Pid, Signal, WaitOptions, kill_process, waitpid};
 
@@ -54,6 +56,11 @@ impl Workload {
         rustix::system::sethostname(specification.hostname.as_bytes()).context("setting the hostname")?;
         std::fs::write("/etc/hostname", format!("{}\n", specification.hostname))
             .context("writing /etc/hostname")?;
+        if !specification.authorized_keys.is_empty() {
+            let password_file = std::fs::read_to_string(PASSWORD_FILE).unwrap_or_default();
+            let home = authorized_keys::home_of(&password_file, user_id);
+            authorized_keys::install(&home, &specification.authorized_keys, user_id, group_id)?;
+        }
         let child = Command::new(program)
             .args(arguments)
             .env_clear()

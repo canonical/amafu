@@ -170,12 +170,16 @@ fn workload_of(context: &VmContext) -> Option<WorkloadSpecification> {
     };
     let configuration =
         context.container_image.as_ref()?.cached.as_ref()?.container.clone().unwrap_or_default();
-    Some(WorkloadSpecification::from_image(
-        &configuration,
-        command,
-        environment,
-        context.vm.metadata.name.as_str(),
-    ))
+    let keys = context.vm.status.authorized_keys.iter().flatten().map(|key| key.public_key.clone()).collect();
+    Some(
+        WorkloadSpecification::from_image(
+            &configuration,
+            command,
+            environment,
+            context.vm.metadata.name.as_str(),
+        )
+        .authorizing(keys),
+    )
 }
 
 fn has_settled_at_this_generation(vm: &Object<Vm>) -> bool {

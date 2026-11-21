@@ -13,6 +13,8 @@ pub struct WorkloadSpecification {
     pub working_directory: Option<String>,
     pub user: Option<String>,
     pub hostname: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub authorized_keys: Vec<String>,
 }
 
 impl WorkloadSpecification {
@@ -33,7 +35,14 @@ impl WorkloadSpecification {
             working_directory: image.working_directory.clone(),
             user: image.user.clone(),
             hostname: hostname.to_owned(),
+            authorized_keys: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn authorizing(mut self, keys: Vec<String>) -> Self {
+        self.authorized_keys = keys;
+        self
     }
 }
 

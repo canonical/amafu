@@ -1,3 +1,4 @@
+mod authorized_keys;
 mod dhcp_client;
 mod root;
 mod server;
