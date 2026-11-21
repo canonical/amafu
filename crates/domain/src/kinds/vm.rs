@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::addressing::MacAddress;
 use crate::kinds::node::CpuBaseline;
+use crate::kinds::ssh_key::{GrantedKey, SshKeyReference};
 use crate::name::{NodeName, ObjectName};
+use crate::object::Object;
 use crate::object_id::ObjectId;
 use crate::resource::{Resource, Scope};
 use crate::validation::{Validate, ValidationError};
@@ -89,6 +91,8 @@ pub struct VmSpecification {
     pub anti_affinity_group: Option<ObjectName>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub minimum_cpu_baseline: Option<CpuBaseline>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ssh_keys: Vec<SshKeyReference>,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -112,6 +116,7 @@ impl VmSpecification {
             priority: 0,
             anti_affinity_group: None,
             minimum_cpu_baseline: None,
+            ssh_keys: Vec::new(),
         }
     }
 
@@ -351,6 +356,15 @@ pub struct VmStatus {
     pub message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub migration: Option<VmMigration>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorized_keys: Option<Vec<GrantedKey>>,
+}
+
+impl Object<Vm> {
+    #[must_use]
+    pub fn has_granted_keys(&self) -> bool {
+        self.specification.ssh_keys.is_empty() || self.status.authorized_keys.is_some()
+    }
 }
 
 impl VmStatus {

@@ -1,5 +1,6 @@
 pub mod access;
 pub mod addressing;
+pub mod authorized_key;
 pub mod change;
 pub mod digest;
 pub mod features;
