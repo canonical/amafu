@@ -156,6 +156,7 @@ dependencies = [
  "amafu-domain",
  "amafu-installer",
  "amafu-interfaces",
+ "amafu-ssh-key-pair",
  "anyhow",
  "base64",
  "clap",
@@ -178,6 +179,7 @@ dependencies = [
  "amafu-interfaces",
  "amafu-reconciler",
  "amafu-scheduler",
+ "amafu-ssh-key-pair",
  "amafu-token-issuer",
  "async-trait",
  "base64",
@@ -627,6 +629,15 @@ dependencies = [
  "time",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "amafu-ssh-key-pair"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "ring",
+ "thiserror",
 ]
 
 [[package]]

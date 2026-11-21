@@ -28,7 +28,9 @@ use super::scope::{
     CA_CERTIFICATE, CA_KEY, CONTROLLER_MODEL, CREDENTIAL_SECRET, ChangeContext, ControllerScope,
     RUNNER_IMAGE, SSH_PRIVATE_KEY, SSH_PUBLIC_KEY, UBUNTU_IMAGE, substrate_network,
 };
-use crate::environments::{CertificateAuthority, ContainerPlan, SshKeyPair};
+use amafu_ssh_key_pair::SshKeyPair;
+
+use crate::environments::{CertificateAuthority, ContainerPlan};
 
 const RUNNER: &str = "runner";
 const FIRST_CONTROLLER: &str = "controller-0";
@@ -117,7 +119,7 @@ async fn ensure_secret(
         (CA_KEY.to_owned(), authority.private_key_pem),
     ]);
     if with_ssh {
-        let keys = SshKeyPair::generate(BOOTSTRAP_KEY_COMMENT)?;
+        let keys = SshKeyPair::generate(BOOTSTRAP_KEY_COMMENT).map_err(ActionError::fatal)?;
         values.insert(SSH_PRIVATE_KEY.to_owned(), keys.private_key);
         values.insert(SSH_PUBLIC_KEY.to_owned(), keys.public_key);
     }

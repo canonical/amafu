@@ -7,7 +7,6 @@ mod machines;
 mod objects;
 pub mod outcomes;
 pub mod rotation;
-mod ssh;
 
 use amafu_domain::ObjectReference;
 use amafu_domain::kinds::juju_controller::JujuControllerChange;
@@ -17,7 +16,6 @@ use amafu_reconciler::WatchedKind;
 pub use authority::CertificateAuthority;
 pub use machines::{ContainerPlan, Machine, MachinePlan};
 pub use objects::{EnvironmentObjects, Ownership};
-pub use ssh::SshKeyPair;
 
 use crate::operations::{RunnerKind, watching};
 

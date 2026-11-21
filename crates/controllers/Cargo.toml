@@ -15,6 +15,7 @@ ring.workspace = true
 serde_json.workspace = true
 serde_yaml_ng.workspace = true
 amafu-domain.workspace = true
+amafu-ssh-key-pair.workspace = true
 amafu-interfaces.workspace = true
 amafu-reconciler.workspace = true
 amafu-scheduler.workspace = true

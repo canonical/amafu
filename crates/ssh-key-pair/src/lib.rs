@@ -1,4 +1,3 @@
-use amafu_interfaces::ActionError;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use ring::rand::{SecureRandom, SystemRandom};
@@ -7,6 +6,14 @@ use ring::signature::{Ed25519KeyPair, KeyPair};
 const KEY_TYPE: &str = "ssh-ed25519";
 const MAGIC: &[u8] = b"openssh-key-v1\0";
 const LINE_WIDTH: usize = 70;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum KeyPairError {
+    #[error("the system has no randomness for an SSH key")]
+    NoRandomness,
+    #[error("an SSH key seed was refused")]
+    RefusedSeed,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SshKeyPair {
@@ -28,18 +35,17 @@ fn public_blob(public: &[u8]) -> Vec<u8> {
 }
 
 impl SshKeyPair {
-    pub fn generate(comment: &str) -> Result<Self, ActionError> {
+    pub fn generate(comment: &str) -> Result<Self, KeyPairError> {
         let random = SystemRandom::new();
         let mut seed = [0_u8; 32];
-        random.fill(&mut seed).map_err(|_| ActionError::fatal("no randomness for an SSH key"))?;
+        random.fill(&mut seed).map_err(|_| KeyPairError::NoRandomness)?;
         let mut check = [0_u8; 4];
-        random.fill(&mut check).map_err(|_| ActionError::fatal("no randomness for an SSH key"))?;
+        random.fill(&mut check).map_err(|_| KeyPairError::NoRandomness)?;
         Self::from_seed(&seed, check, comment)
     }
 
-    fn from_seed(seed: &[u8; 32], check: [u8; 4], comment: &str) -> Result<Self, ActionError> {
-        let key = Ed25519KeyPair::from_seed_unchecked(seed)
-            .map_err(|_| ActionError::fatal("an SSH key seed was refused"))?;
+    fn from_seed(seed: &[u8; 32], check: [u8; 4], comment: &str) -> Result<Self, KeyPairError> {
+        let key = Ed25519KeyPair::from_seed_unchecked(seed).map_err(|_| KeyPairError::RefusedSeed)?;
         let public = key.public_key().as_ref();
         let blob = public_blob(public);
         let mut private = Vec::new();
