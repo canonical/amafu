@@ -21,6 +21,7 @@ fn desired() -> Result<NodeNetworkState, Box<dyn std::error::Error>> {
             hostname: String::from("contract"),
             rules: Vec::new(),
             user_data: None,
+            public_keys: Vec::new(),
         }],
         ..NodeNetworkState::default()
     })

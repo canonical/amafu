@@ -68,6 +68,7 @@ mod tests {
             hostname: format!("vm-{octet}"),
             rules,
             user_data: None,
+            public_keys: Vec::new(),
         }
     }
 

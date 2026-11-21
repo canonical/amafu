@@ -183,6 +183,13 @@ pub fn desired_network_state(view: &NetworkView) -> NodeNetworkState {
                 hostname: vm.metadata.name.to_string(),
                 rules: port_rules(view, vm, &interface.security_groups),
                 user_data: vm.specification.user_data.clone(),
+                public_keys: vm
+                    .status
+                    .authorized_keys
+                    .iter()
+                    .flatten()
+                    .map(|granted| granted.public_key.clone())
+                    .collect(),
             });
         }
     }

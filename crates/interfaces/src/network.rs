@@ -104,6 +104,8 @@ pub struct Port {
     pub rules: Vec<PortRule>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_data: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub public_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

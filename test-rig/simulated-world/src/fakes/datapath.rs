@@ -98,6 +98,7 @@ mod tests {
                 hostname: String::from("web"),
                 rules: Vec::new(),
                 user_data: None,
+                public_keys: Vec::new(),
             }],
             ..NodeNetworkState::default()
         };
