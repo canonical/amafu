@@ -30,7 +30,7 @@ use super::scope::{
 };
 use amafu_ssh_key_pair::SshKeyPair;
 
-use crate::environments::{CertificateAuthority, ContainerPlan};
+use crate::environments::{AuthorityKey, CertificateAuthority, ContainerPlan};
 
 const RUNNER: &str = "runner";
 const FIRST_CONTROLLER: &str = "controller-0";
@@ -113,7 +113,10 @@ async fn ensure_secret(
     if let Some(existing) = scope.objects().read::<EnvironmentSecret>(&reference).await? {
         return Ok(existing.specification);
     }
-    let authority = CertificateAuthority::generate(&format!("{} Juju", scope.ownership.environment()))?;
+    let authority = CertificateAuthority::generate(
+        &format!("{} Juju", scope.ownership.environment()),
+        AuthorityKey::Ecdsa,
+    )?;
     let mut values = BTreeMap::from([
         (CA_CERTIFICATE.to_owned(), authority.certificate_pem),
         (CA_KEY.to_owned(), authority.private_key_pem),

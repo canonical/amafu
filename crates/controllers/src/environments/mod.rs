@@ -13,7 +13,7 @@ use amafu_domain::kinds::juju_controller::JujuControllerChange;
 use amafu_domain::kinds::kubernetes_cluster::KubernetesClusterChange;
 use amafu_reconciler::WatchedKind;
 
-pub use authority::CertificateAuthority;
+pub use authority::{AuthorityKey, CertificateAuthority};
 pub use machines::{ContainerPlan, Machine, MachinePlan};
 pub use objects::{EnvironmentObjects, Ownership};
 

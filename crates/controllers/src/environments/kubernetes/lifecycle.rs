@@ -21,7 +21,7 @@ use amafu_reconciler::Step;
 use super::KubernetesEnvironment;
 use super::add_ons;
 use super::scope::{CA_CERTIFICATE, CA_KEY, ChangeContext, ClusterScope, K8SD_TOKEN, UBUNTU_IMAGE, reshaped};
-use crate::environments::CertificateAuthority;
+use crate::environments::{AuthorityKey, CertificateAuthority};
 
 fn with_status(
     cluster: &Object<KubernetesCluster>,
@@ -100,8 +100,10 @@ impl PrepareNetworkAccess {
         scope: &ClusterScope<'_>,
         identifiers: &dyn Identifiers,
     ) -> Result<EnvironmentSecretSpecification, ActionError> {
-        let authority =
-            CertificateAuthority::generate(&format!("{} Kubernetes", scope.ownership.environment()))?;
+        let authority = CertificateAuthority::generate(
+            &format!("{} Kubernetes", scope.ownership.environment()),
+            AuthorityKey::Rsa,
+        )?;
         let token = format!("{}{}", identifiers.generate().simple(), identifiers.generate().simple());
         Ok(EnvironmentSecretSpecification {
             project: scope.ownership.project().clone(),
