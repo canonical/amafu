@@ -89,8 +89,12 @@ mod ssh_keys {
         client.create::<SshKey>(&name("alice-laptop"), &imported).await.unwrap();
         let pasted = SshKeySpecification { public_key: PRIVATE.to_owned(), origin: KeyOrigin::Pasted };
         assert_eq!(client.create::<SshKey>(&name("oops"), &pasted).await.unwrap_err().status(), Some(422));
+        let ghosts = SshKeyGroupSpecification { keys: vec![name("alice-laptop"), name("ghost")] };
+        assert!(client.create::<SshKeyGroup>(&name("team"), &ghosts).await.is_err());
         let team = SshKeyGroupSpecification { keys: vec![name("alice-laptop")] };
-        client.create::<SshKeyGroup>(&name("team"), &team).await.unwrap();
+        let created = client.create::<SshKeyGroup>(&name("team"), &team).await.unwrap();
+        let updated = client.update::<SshKeyGroup>("team", &ghosts, Some(created.metadata.generation)).await;
+        assert!(updated.is_err());
 
         let unknown = vm(vec![SshKeyReference::Group { name: name("strangers") }]);
         assert!(client.create::<Vm>(&name("web-1"), &unknown).await.is_err());

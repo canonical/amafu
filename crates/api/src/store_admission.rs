@@ -8,7 +8,7 @@ use amafu_domain::kinds::kubernetes_cluster::{
     KubernetesCluster, KubernetesClusterChange, KubernetesClusterChangeSpecification, KubernetesRequest,
 };
 use amafu_domain::kinds::operation::OperationStatus;
-use amafu_domain::kinds::ssh_key::{SshKey, SshKeyGroup};
+use amafu_domain::kinds::ssh_key::{SshKey, SshKeyGroup, SshKeyGroupSpecification};
 use amafu_domain::kinds::vm::{Vm, VmSpecification};
 use amafu_domain::labels::owning_environment;
 use amafu_domain::{ObjectName, ObjectReference, ProjectName, Resource};
@@ -63,21 +63,33 @@ impl StoreAdmission<'_> {
                 )
                 .await
             }
-            kind if kind == Vm::KIND => {
-                let vm = decode::<VmSpecification>(specification)?;
-                match ssh_key_admission::missing_reference(self.store, reference.project.as_ref(), &vm)
-                    .await?
-                {
-                    Some(missing) => Err(Refusal::Unready(missing)),
-                    None => Ok(()),
-                }
-            }
-            _ => Ok(()),
+            _ => self.refuse_missing_keys(reference, specification).await,
         }
     }
 
-    pub async fn on_update(&self, reference: &ObjectReference) -> Result<(), Refusal> {
-        self.refuse_if_owned(reference).await
+    pub async fn on_update(&self, reference: &ObjectReference, specification: &Value) -> Result<(), Refusal> {
+        self.refuse_if_owned(reference).await?;
+        self.refuse_missing_keys(reference, specification).await
+    }
+
+    async fn refuse_missing_keys(
+        &self,
+        reference: &ObjectReference,
+        specification: &Value,
+    ) -> Result<(), Refusal> {
+        let project = reference.project.as_ref();
+        let missing = match reference.kind.as_str() {
+            kind if kind == Vm::KIND => {
+                let vm = decode::<VmSpecification>(specification)?;
+                ssh_key_admission::missing_reference(self.store, project, &vm.ssh_keys).await?
+            }
+            kind if kind == SshKeyGroup::KIND => {
+                let group = decode::<SshKeyGroupSpecification>(specification)?;
+                ssh_key_admission::missing_key(self.store, project, &group.keys).await?
+            }
+            _ => None,
+        };
+        missing.map_or(Ok(()), |missing| Err(Refusal::Unready(missing)))
     }
 
     pub async fn on_delete(&self, reference: &ObjectReference) -> Result<(), Refusal> {

@@ -340,10 +340,12 @@ pub async fn update_object(
     operation.authorize()?;
     let reference = operation.reference()?;
     let change = admit_update(&body).map_err(|error| operation.admission_error(error))?;
-    StoreAdmission { store: state.store.as_ref() }
-        .on_update(&reference)
-        .await
-        .map_err(|refusal| operation.refusal(refusal))?;
+    if let UntypedChange::UpdateSpecification { specification, .. } = &change {
+        StoreAdmission { store: state.store.as_ref() }
+            .on_update(&reference, specification)
+            .await
+            .map_err(|refusal| operation.refusal(refusal))?;
+    }
     let updated = apply_untyped(state.store.as_ref(), &kind, &reference, change)
         .await
         .map_err(|error| operation.store_error(error))?;

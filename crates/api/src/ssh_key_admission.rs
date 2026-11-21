@@ -1,5 +1,5 @@
 use amafu_domain::kinds::ssh_key::{SshKey, SshKeyGroup, SshKeyReference};
-use amafu_domain::kinds::vm::{Vm, VmSpecification};
+use amafu_domain::kinds::vm::Vm;
 use amafu_domain::{Object, ObjectName, ObjectReference, ProjectName, Resource};
 use amafu_interfaces::objects::{get, list};
 use amafu_interfaces::{Consistency, ObjectStoreError, Store};
@@ -7,22 +7,30 @@ use amafu_interfaces::{Consistency, ObjectStoreError, Store};
 pub async fn missing_reference(
     store: &dyn Store,
     project: Option<&ProjectName>,
-    vm: &VmSpecification,
+    references: &[SshKeyReference],
 ) -> Result<Option<String>, ObjectStoreError> {
-    for reference in &vm.ssh_keys {
-        let exists = match reference {
-            SshKeyReference::Key { name } => exists::<SshKey>(store, project, name).await?,
-            SshKeyReference::Group { name } => exists::<SshKeyGroup>(store, project, name).await?,
+    for reference in references {
+        let (exists, noun) = match reference {
+            SshKeyReference::Key { name } => (exists::<SshKey>(store, project, name).await?, "SSH key"),
+            SshKeyReference::Group { name } => {
+                (exists::<SshKeyGroup>(store, project, name).await?, "SSH key group")
+            }
         };
         if !exists {
-            let noun = match reference {
-                SshKeyReference::Key { .. } => "SSH key",
-                SshKeyReference::Group { .. } => "SSH key group",
-            };
             return Ok(Some(format!("there is no {noun} {} in this project", reference.name())));
         }
     }
     Ok(None)
+}
+
+pub async fn missing_key(
+    store: &dyn Store,
+    project: Option<&ProjectName>,
+    keys: &[ObjectName],
+) -> Result<Option<String>, ObjectStoreError> {
+    let references: Vec<SshKeyReference> =
+        keys.iter().map(|name| SshKeyReference::Key { name: name.clone() }).collect();
+    missing_reference(store, project, &references).await
 }
 
 async fn exists<R: Resource>(
