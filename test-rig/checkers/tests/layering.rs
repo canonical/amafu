@@ -10,9 +10,17 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ("amafu-kubernetes-client", &["amafu-interfaces"]),
     ("amafu-juju-client", &["amafu-interfaces"]),
     ("amafu-image-catalog", &["amafu-domain", "amafu-interfaces"]),
+    ("amafu-ssh-key-pair", &[]),
     (
         "amafu-controllers",
-        &["amafu-domain", "amafu-interfaces", "amafu-reconciler", "amafu-scheduler", "amafu-token-issuer"],
+        &[
+            "amafu-domain",
+            "amafu-interfaces",
+            "amafu-reconciler",
+            "amafu-scheduler",
+            "amafu-ssh-key-pair",
+            "amafu-token-issuer",
+        ],
     ),
     ("amafu-state", &["amafu-domain", "amafu-interfaces", "amafu-system"]),
     ("amafu-hypervisor", &["amafu-domain", "amafu-guest-agent", "amafu-interfaces"]),
@@ -38,7 +46,14 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ),
     (
         "amafu-command-line",
-        &["amafu-api", "amafu-dashboard", "amafu-domain", "amafu-installer", "amafu-interfaces"],
+        &[
+            "amafu-api",
+            "amafu-dashboard",
+            "amafu-domain",
+            "amafu-installer",
+            "amafu-interfaces",
+            "amafu-ssh-key-pair",
+        ],
     ),
     (
         "amafu-node-configuration",
