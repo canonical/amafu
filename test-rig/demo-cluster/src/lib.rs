@@ -65,6 +65,7 @@ impl DemoCluster {
             clock: Arc::new(WallClock),
             identifiers: Arc::new(RandomIdentifiers),
             issuers: Arc::new(amafu_api::service_accounts::HttpIssuerDirectory::default()),
+            key_directory: Arc::new(amafu_api::key_directory::HttpKeyDirectory::default()),
             catalog: Arc::new(seed::catalog()),
         });
         let upstream: Arc<dyn Transport> = Arc::new(RouterTransport::new(api));

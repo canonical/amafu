@@ -232,6 +232,7 @@ fn start_api(
         clock: Arc::clone(&services.clock),
         identifiers: Arc::new(RandomIdentifiers),
         issuers: Arc::new(amafu_api::service_accounts::HttpIssuerDirectory::default()),
+        key_directory: Arc::new(amafu_api::key_directory::HttpKeyDirectory::default()),
         catalog: catalog_for_node(),
     };
     let tls = tls_configuration(

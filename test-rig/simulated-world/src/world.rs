@@ -379,6 +379,7 @@ impl SimulatedWorld {
             clock: Arc::new(clock.clone()),
             identifiers: Arc::clone(&identifiers) as Arc<dyn Identifiers>,
             issuers: Arc::new(amafu_api::service_accounts::HttpIssuerDirectory::default()),
+            key_directory: Arc::new(amafu_api::key_directory::HttpKeyDirectory::default()),
             catalog: Arc::new(amafu_interfaces::FixedImageCatalog::default()),
         })
         .merge(node_router(NodeApiState {

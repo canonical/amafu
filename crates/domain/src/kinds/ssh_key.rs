@@ -46,13 +46,100 @@ impl KeyOrigin {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum KeySource {
+    Github,
+    Launchpad,
+}
+
+impl KeySource {
+    #[must_use]
+    pub fn origin(self, account: &str) -> KeyOrigin {
+        let account = account.to_owned();
+        match self {
+            Self::Github => KeyOrigin::Github { account },
+            Self::Launchpad => KeyOrigin::Launchpad { account },
+        }
+    }
+
+    #[must_use]
+    pub fn keys_url(self, account: &str) -> String {
+        match self {
+            Self::Github => format!("https://github.com/{account}.keys"),
+            Self::Launchpad => format!("https://launchpad.net/~{account}/+sshkeys"),
+        }
+    }
+}
+
+impl std::str::FromStr for KeySource {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, String> {
+        match text {
+            "github" | "gh" => Ok(Self::Github),
+            "launchpad" | "lp" => Ok(Self::Launchpad),
+            _ => Err(format!("{text:?} is not a key source; use github or launchpad")),
+        }
+    }
+}
+
+impl KeyOrigin {
+    #[must_use]
+    pub fn source(&self) -> Option<KeySource> {
+        match self {
+            Self::Github { .. } => Some(KeySource::Github),
+            Self::Launchpad { .. } => Some(KeySource::Launchpad),
+            Self::Pasted | Self::Generated => None,
+        }
+    }
+}
+
 #[must_use]
 pub fn is_account_name(account: &str) -> bool {
-    !account.is_empty()
-        && account.len() <= LONGEST_ACCOUNT_NAME
+    account.len() <= LONGEST_ACCOUNT_NAME
+        && account.chars().next().is_some_and(|first| first.is_ascii_alphanumeric())
         && account
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '.' | '_' | '+'))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscoveredKey {
+    pub public_key: String,
+    pub fingerprint: String,
+    pub algorithm: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KeyLookup {
+    pub source: KeySource,
+    pub account: String,
+    pub keys: Vec<DiscoveredKey>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skipped: Vec<String>,
+}
+
+impl KeyLookup {
+    #[must_use]
+    pub fn from_listing(source: KeySource, account: &str, listing: &str) -> Self {
+        let mut lookup = Self { source, account: account.to_owned(), keys: Vec::new(), skipped: Vec::new() };
+        for line in listing.lines().map(str::trim).filter(|line| !line.is_empty() && !line.starts_with('#')) {
+            match AuthorizedKey::parse(line) {
+                Ok(key) if lookup.keys.iter().any(|known| known.fingerprint == key.fingerprint()) => {}
+                Ok(key) => lookup.keys.push(DiscoveredKey {
+                    fingerprint: key.fingerprint(),
+                    algorithm: key.algorithm().to_owned(),
+                    comment: key.comment().map(str::to_owned),
+                    public_key: key.line(),
+                }),
+                Err(problem) => lookup.skipped.push(problem.to_string()),
+            }
+        }
+        lookup
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -218,6 +305,17 @@ mod tests {
             origin: KeyOrigin::Github { account: String::from("a/b") },
         };
         assert!(imported.validate().is_err());
+    }
+
+    #[test]
+    fn a_listing_keeps_good_keys_once_and_says_why_others_were_skipped() {
+        let listing = format!("{ALICE}\n\n{ALICE}\nssh-dss AAAA old\n");
+        let lookup = KeyLookup::from_listing(KeySource::Github, "alice", &listing);
+        assert_eq!(lookup.keys.len(), 1);
+        assert_eq!(lookup.keys[0].comment.as_deref(), Some("alice"));
+        assert_eq!(lookup.skipped.len(), 1);
+        assert!(!is_account_name("../x") && !is_account_name("") && !is_account_name("-a"));
+        assert!(is_account_name("alice.b+c"));
     }
 
     #[test]

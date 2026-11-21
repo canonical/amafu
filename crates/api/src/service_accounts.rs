@@ -21,6 +21,7 @@ use time::{Duration, OffsetDateTime};
 
 use crate::authentication::{AuthenticationError, Authenticator, bearer_token};
 use crate::handlers::{ApiError, ApiSuccess, Operation};
+use crate::https::https_client;
 use crate::identity::Principal;
 use crate::request_chain::RequestContext;
 use crate::routes::ApiState;
@@ -45,21 +46,7 @@ pub struct HttpIssuerDirectory {
 
 impl Default for HttpIssuerDirectory {
     fn default() -> Self {
-        let roots = rustls::RootCertStore { roots: webpki_roots::TLS_SERVER_ROOTS.to_vec() };
-        let client =
-            rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-                .with_safe_default_protocol_versions()
-                .ok()
-                .map(|builder| builder.with_root_certificates(roots).with_no_client_auth())
-                .and_then(|tls| {
-                    reqwest::Client::builder()
-                        .use_preconfigured_tls(tls)
-                        .https_only(true)
-                        .timeout(ISSUER_TIMEOUT)
-                        .build()
-                        .ok()
-                });
-        Self { client }
+        Self { client: https_client(ISSUER_TIMEOUT) }
     }
 }
 

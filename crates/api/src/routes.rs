@@ -10,6 +10,7 @@ use http::Uri;
 
 use crate::authentication::Authenticator;
 use crate::handlers::{create_object, delete_object, get_object, list_objects, update_object, watch_object};
+use crate::key_directory::{self, KeyDirectory};
 use crate::platform_tokens;
 use crate::request_chain::{RequestContext, request_chain};
 use crate::service_accounts::{self, IssuerDirectory};
@@ -24,6 +25,7 @@ pub struct ApiState {
     pub identifiers: Arc<dyn Identifiers>,
     pub issuers: Arc<dyn IssuerDirectory>,
     pub catalog: Arc<dyn ImageCatalog>,
+    pub key_directory: Arc<dyn KeyDirectory>,
 }
 
 type Context = Extension<RequestContext>;
@@ -97,6 +99,17 @@ pub fn router(state: ApiState) -> Router {
 fn credential_routes(router: Router<ApiState>) -> Router<ApiState> {
     router
         .route("/v1/image-catalog", get(|State(state): State<ApiState>| crate::catalog::image_catalog(state)))
+        .route(
+            "/v1/ssh-key-sources/{source}/{account}",
+            get(
+                |State(state): State<ApiState>,
+                 Extension(context): Context,
+                 target: Uri,
+                 Path((source, account)): Path<(String, String)>| {
+                    key_directory::look_up(state, context, target, source, account)
+                },
+            ),
+        )
         .route(
             "/v1/kubernetes-clusters/{name}/tokens",
             post(

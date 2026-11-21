@@ -42,6 +42,7 @@ mod sessions {
             clock: Arc::new(VirtualClock::starting_at(OffsetDateTime::now_utc())),
             identifiers: Arc::new(RandomIdentifiers),
             issuers: Arc::new(amafu_api::service_accounts::HttpIssuerDirectory::default()),
+            key_directory: Arc::new(amafu_api::key_directory::HttpKeyDirectory::default()),
             catalog: Arc::new(amafu_interfaces::FixedImageCatalog::default()),
         });
         Arc::new(RouterTransport::new(api))
