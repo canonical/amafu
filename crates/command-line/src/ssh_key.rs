@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use amafu_api::ApiClient;
 use amafu_domain::authorized_key::AuthorizedKey;
 use amafu_domain::kinds::ssh_key::{
-    ImportPlan, KeyOrigin, KeySource, SshKey, SshKeyGroup, SshKeyGroupSpecification, SshKeyReference,
-    SshKeySpecification,
+    ImportPlan, KeyLookup, KeyOrigin, KeySource, SshKey, SshKeyGroup, SshKeyGroupSpecification,
+    SshKeyReference, SshKeySpecification,
 };
 use amafu_domain::{Object, ObjectName};
 use amafu_ssh_key_pair::SshKeyPair;
@@ -33,8 +33,12 @@ pub enum SshKeyCommand {
     )]
     Generate {
         name: ObjectName,
-        #[arg(long, help = "Where to write the private key; the public key goes next to it with .pub")]
-        output: Option<PathBuf>,
+        #[arg(
+            long = "private-key-file",
+            value_name = "PATH",
+            help = "Where to write the private key, NAME by default; the public key goes next to it with .pub"
+        )]
+        private_key_file: Option<PathBuf>,
         #[arg(long, help = "The comment in the public key")]
         comment: Option<String>,
     },
@@ -156,11 +160,11 @@ fn public_path(private: &Path) -> PathBuf {
 async fn generate(
     client: &ApiClient,
     name: &ObjectName,
-    output: Option<PathBuf>,
+    private_key_file: Option<PathBuf>,
     comment: Option<String>,
     format: OutputFormat,
 ) -> anyhow::Result<()> {
-    let private_path = output.unwrap_or_else(|| PathBuf::from(name.as_str()));
+    let private_path = private_key_file.unwrap_or_else(|| PathBuf::from(name.as_str()));
     let public_path = public_path(&private_path);
     if private_path.exists() || public_path.exists() {
         bail!("{} or {} already exists", private_path.display(), public_path.display());
@@ -182,16 +186,20 @@ async fn existing_keys(client: &ApiClient) -> anyhow::Result<Vec<(ObjectName, Ss
     Ok(client.list::<SshKey>().await?.into_iter().map(|key| (key.metadata.name, key.specification)).collect())
 }
 
-fn describe(plan: &ImportPlan, prune: bool) -> anyhow::Result<()> {
+fn describe(lookup: &KeyLookup, plan: &ImportPlan, prune: bool) -> anyhow::Result<()> {
+    emit_line(format!(
+        "{}:{} publishes {} usable keys; {} are already here.",
+        lookup.source.as_str(),
+        lookup.account,
+        lookup.keys.len(),
+        plan.unchanged.len()
+    ))?;
     for (name, specification) in &plan.additions {
         emit_line(format!("+ {name}  {}", specification.public_key))?;
     }
     for name in &plan.withdrawn {
         let action = if prune { "deleting" } else { "no longer published; --prune deletes it" };
         emit_line(format!("- {name}  {action}"))?;
-    }
-    if plan.additions.is_empty() && plan.withdrawn.is_empty() {
-        emit_line("Nothing has changed.")?;
     }
     Ok(())
 }
@@ -225,7 +233,7 @@ async fn import(
         emit_line(format!("! skipped a key: {skipped}"))?;
     }
     let plan = lookup.import_plan(&existing_keys(client).await?);
-    describe(&plan, prune)?;
+    describe(&lookup, &plan, prune)?;
     if dry_run {
         return Ok(());
     }
@@ -264,8 +272,8 @@ pub async fn run(client: &ApiClient, command: SshKeyCommand, format: OutputForma
             let specification = SshKeySpecification { public_key, origin: KeyOrigin::Pasted };
             create::<SshKey>(client, &name, &specification, format).await
         }
-        SshKeyCommand::Generate { name, output, comment } => {
-            generate(client, &name, output, comment, format).await
+        SshKeyCommand::Generate { name, private_key_file, comment } => {
+            generate(client, &name, private_key_file, comment, format).await
         }
         SshKeyCommand::Import { account, group, prune, dry_run } => {
             import(client, account, group, prune, dry_run, format).await

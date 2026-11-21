@@ -143,3 +143,15 @@ fn main() -> ExitCode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    use super::Arguments;
+
+    #[test]
+    fn every_command_line_is_well_formed() {
+        Arguments::command().debug_assert();
+    }
+}
