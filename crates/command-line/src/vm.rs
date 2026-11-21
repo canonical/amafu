@@ -300,6 +300,7 @@ pub async fn run(client: &ApiClient, command: VmCommand, format: OutputFormat) -
                 priority: placement.priority,
                 anti_affinity_group: placement.anti_affinity_group,
                 minimum_cpu_baseline: None,
+                ssh_keys: Vec::new(),
             };
             create_and_wait(client, &name, &specification, wait && !stopped, timeout, format).await
         }

@@ -15,6 +15,7 @@ mod request_chain;
 pub mod routes;
 pub mod server;
 pub mod service_accounts;
+mod ssh_key_admission;
 mod store_admission;
 pub mod wire;
 

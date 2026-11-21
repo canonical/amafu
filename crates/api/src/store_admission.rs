@@ -8,12 +8,15 @@ use amafu_domain::kinds::kubernetes_cluster::{
     KubernetesCluster, KubernetesClusterChange, KubernetesClusterChangeSpecification, KubernetesRequest,
 };
 use amafu_domain::kinds::operation::OperationStatus;
-use amafu_domain::kinds::vm::Vm;
+use amafu_domain::kinds::ssh_key::{SshKey, SshKeyGroup};
+use amafu_domain::kinds::vm::{Vm, VmSpecification};
 use amafu_domain::labels::owning_environment;
 use amafu_domain::{ObjectName, ObjectReference, ProjectName, Resource};
 use amafu_interfaces::objects::{get, list};
 use amafu_interfaces::{Consistency, ObjectStoreError, Store};
 use serde_json::Value;
+
+use crate::ssh_key_admission;
 
 #[derive(Debug)]
 pub enum Refusal {
@@ -60,6 +63,15 @@ impl StoreAdmission<'_> {
                 )
                 .await
             }
+            kind if kind == Vm::KIND => {
+                let vm = decode::<VmSpecification>(specification)?;
+                match ssh_key_admission::missing_reference(self.store, reference.project.as_ref(), &vm)
+                    .await?
+                {
+                    Some(missing) => Err(Refusal::Unready(missing)),
+                    None => Ok(()),
+                }
+            }
             _ => Ok(()),
         }
     }
@@ -72,6 +84,10 @@ impl StoreAdmission<'_> {
         self.refuse_if_owned(reference).await?;
         let holders = match reference.kind.as_str() {
             "Volume" => self.volume_holders(reference).await?,
+            kind if kind == SshKey::KIND => ssh_key_admission::key_holders(self.store, reference).await?,
+            kind if kind == SshKeyGroup::KIND => {
+                ssh_key_admission::group_holders(self.store, reference).await?
+            }
             _ => Vec::new(),
         };
         if holders.is_empty() {
