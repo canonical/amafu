@@ -16,6 +16,7 @@ mod release;
 mod resources;
 mod security_group;
 mod service_account;
+mod ssh_key;
 mod step_plans;
 mod storage_backend;
 mod upgrade;
@@ -81,6 +82,10 @@ enum Command {
     Juju(juju::JujuCommand),
     #[command(subcommand, about = "Give automation its own credentials")]
     ServiceAccount(service_account::ServiceAccountCommand),
+    #[command(subcommand, about = "Add, generate and import the SSH keys VMs and containers accept")]
+    SshKey(ssh_key::SshKeyCommand),
+    #[command(subcommand, about = "Gather SSH keys to grant them together")]
+    SshKeyGroup(ssh_key::SshKeyGroupCommand),
     #[command(subcommand, about = "Serve or deploy the web dashboard")]
     Dashboard(dashboard::DashboardCommand),
 }
@@ -114,6 +119,8 @@ async fn run(arguments: Arguments) -> anyhow::Result<()> {
         Command::Kubernetes(command) => kubernetes::run(&client, command, arguments.output).await,
         Command::Juju(command) => juju::run(&client, command, arguments.output).await,
         Command::ServiceAccount(command) => service_account::run(&client, command, arguments.output).await,
+        Command::SshKey(command) => ssh_key::run(&client, command, arguments.output).await,
+        Command::SshKeyGroup(command) => ssh_key::run_group(&client, command, arguments.output).await,
         Command::Install(_) | Command::Release(_) | Command::Dashboard(_) => Ok(()),
     }
 }

@@ -12,6 +12,7 @@ use futures::StreamExt;
 
 use crate::catalog::{DEFAULT_DISK_GIBIBYTES, RootDisk, create_root_volume};
 use crate::output::{OutputFormat, Table, print_structured};
+use crate::ssh_key::KeyGrants;
 
 pub const DEFAULT_WAIT: &str = "120";
 
@@ -113,6 +114,8 @@ pub struct CreateArguments {
     pub attachments: Attachments,
     #[command(flatten)]
     pub placement: Placement,
+    #[command(flatten)]
+    pub ssh: KeyGrants,
     #[arg(long, value_name = "FILE", help = "Serve this file as cloud-init user data")]
     pub user_data: Option<std::path::PathBuf>,
     #[arg(long, help = "Create the VM without starting it")]
@@ -273,6 +276,7 @@ pub async fn run(client: &ApiClient, command: VmCommand, format: OutputFormat) -
                 mut volumes,
                 attachments,
                 placement,
+                ssh,
                 user_data,
                 stopped,
                 wait,
@@ -300,7 +304,7 @@ pub async fn run(client: &ApiClient, command: VmCommand, format: OutputFormat) -
                 priority: placement.priority,
                 anti_affinity_group: placement.anti_affinity_group,
                 minimum_cpu_baseline: None,
-                ssh_keys: Vec::new(),
+                ssh_keys: ssh.references(),
             };
             create_and_wait(client, &name, &specification, wait && !stopped, timeout, format).await
         }

@@ -379,11 +379,8 @@ impl ApiClient {
     }
 
     pub async fn look_up_ssh_keys(&self, source: KeySource, account: &str) -> Result<KeyLookup, ClientError> {
-        let source = match source {
-            KeySource::Github => "github",
-            KeySource::Launchpad => "launchpad",
-        };
-        let path = format!("/v1/ssh-key-sources/{source}/{account}{}", self.project_query::<SshKey>());
+        let path =
+            format!("/v1/ssh-key-sources/{}/{account}{}", source.as_str(), self.project_query::<SshKey>());
         self.call(Method::GET, &path, None).await
     }
 

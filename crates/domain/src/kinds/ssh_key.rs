@@ -3,12 +3,14 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::authorized_key::{AuthorizedKey, KeyError};
-use crate::name::ObjectName;
+use crate::name::{ObjectName, label_fragment};
 use crate::resource::{Resource, Scope};
 use crate::validation::{Validate, ValidationError};
 
 pub const MAXIMUM_GROUP_KEYS: usize = 64;
 pub const LONGEST_ACCOUNT_NAME: usize = 64;
+const MAXIMUM_STEM: usize = 56;
+const LAST_IMPORT_INDEX: usize = 999;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SshKey;
@@ -54,6 +56,14 @@ pub enum KeySource {
 }
 
 impl KeySource {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Github => "github",
+            Self::Launchpad => "launchpad",
+        }
+    }
+
     #[must_use]
     pub fn origin(self, account: &str) -> KeyOrigin {
         let account = account.to_owned();
@@ -122,7 +132,53 @@ pub struct KeyLookup {
     pub skipped: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ImportPlan {
+    pub additions: Vec<(ObjectName, SshKeySpecification)>,
+    pub unchanged: Vec<ObjectName>,
+    pub withdrawn: Vec<ObjectName>,
+}
+
 impl KeyLookup {
+    #[must_use]
+    pub fn import_plan(&self, existing: &[(ObjectName, SshKeySpecification)]) -> ImportPlan {
+        let origin = self.source.origin(&self.account);
+        let fingerprint = |specification: &SshKeySpecification| {
+            specification.authorized_key().map(|key| key.fingerprint()).unwrap_or_default()
+        };
+        let mut plan = ImportPlan::default();
+        let mut taken: BTreeSet<ObjectName> = existing.iter().map(|(name, _)| name.clone()).collect();
+        let stem = format!("{}-{}", self.source.as_str(), label_fragment(&self.account));
+        let stem: String =
+            stem.chars().take(MAXIMUM_STEM).collect::<String>().trim_end_matches('-').to_owned();
+        for discovered in &self.keys {
+            if let Some((name, _)) =
+                existing.iter().find(|(_, known)| fingerprint(known) == discovered.fingerprint)
+            {
+                plan.unchanged.push(name.clone());
+                continue;
+            }
+            let name = (1..=LAST_IMPORT_INDEX)
+                .filter_map(|index| ObjectName::new(format!("{stem}-{index}")).ok())
+                .find(|candidate| !taken.contains(candidate));
+            if let Some(name) = name {
+                taken.insert(name.clone());
+                let specification =
+                    SshKeySpecification { public_key: discovered.public_key.clone(), origin: origin.clone() };
+                plan.additions.push((name, specification));
+            }
+        }
+        plan.withdrawn = existing
+            .iter()
+            .filter(|(_, known)| known.origin == origin)
+            .filter(|(_, known)| {
+                !self.keys.iter().any(|discovered| discovered.fingerprint == fingerprint(known))
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
+        plan
+    }
+
     #[must_use]
     pub fn from_listing(source: KeySource, account: &str, listing: &str) -> Self {
         let mut lookup = Self { source, account: account.to_owned(), keys: Vec::new(), skipped: Vec::new() };
@@ -316,6 +372,22 @@ mod tests {
         assert_eq!(lookup.skipped.len(), 1);
         assert!(!is_account_name("../x") && !is_account_name("") && !is_account_name("-a"));
         assert!(is_account_name("alice.b+c"));
+    }
+
+    #[test]
+    fn importing_again_adds_new_keys_and_names_withdrawn_ones() {
+        let laptop = ALICE.replace(" alice", " laptop");
+        let lookup = KeyLookup::from_listing(KeySource::Github, "Alice_B", &format!("{ALICE}\n"));
+        let first = lookup.import_plan(&[]);
+        assert_eq!(first.additions.len(), 1);
+        assert_eq!(first.additions[0].0, name("github-alice-b-1"));
+        assert_eq!(first.additions[0].1.origin, KeySource::Github.origin("Alice_B"));
+        let rotated_listing = format!("{}\n", laptop.replace("AAAAIOpK", "AAAAIOpL"));
+        let rotated = KeyLookup::from_listing(KeySource::Github, "Alice_B", &rotated_listing);
+        let second = rotated.import_plan(&first.additions);
+        assert_eq!(second.additions[0].0, name("github-alice-b-2"));
+        assert_eq!(second.withdrawn, [name("github-alice-b-1")]);
+        assert_eq!(lookup.import_plan(&first.additions).unchanged, [name("github-alice-b-1")]);
     }
 
     #[test]
