@@ -1,5 +1,6 @@
 pub mod address_allocation;
 pub mod audit_export;
+pub mod authorized_keys;
 pub mod boot_slots;
 pub mod cluster_image;
 pub mod compute;

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use amafu_domain::kinds::image::Image;
 use amafu_domain::kinds::network::Network;
 use amafu_domain::kinds::node::{Node, NodeRole};
+use amafu_domain::kinds::ssh_key::GrantedKey;
 use amafu_domain::kinds::storage_backend::StorageBackend;
 use amafu_domain::kinds::vm::{InterfaceStatus, Vm, VmPhase, VmStatus};
 use amafu_domain::kinds::volume::Volume;
@@ -55,9 +56,23 @@ pub struct SchedulingObservation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchedulingAction {
-    Assign { vm: ObjectReference, node: NodeName, interfaces: Vec<InterfaceStatus>, observed_generation: u64 },
-    ReportWaiting { vm: ObjectReference, observed_generation: u64, phase: VmPhase, reason: String },
-    Remove { vm: ObjectReference },
+    Assign {
+        vm: ObjectReference,
+        node: NodeName,
+        interfaces: Vec<InterfaceStatus>,
+        observed_generation: u64,
+        authorized_keys: Option<Vec<GrantedKey>>,
+    },
+    ReportWaiting {
+        vm: ObjectReference,
+        observed_generation: u64,
+        phase: VmPhase,
+        reason: String,
+        authorized_keys: Option<Vec<GrantedKey>>,
+    },
+    Remove {
+        vm: ObjectReference,
+    },
 }
 
 fn same_project<'objects, R: Resource>(
@@ -85,6 +100,7 @@ fn report_waiting(vm: &Object<Vm>, phase: VmPhase, reason: String) -> Option<Sch
         observed_generation: vm.metadata.generation,
         phase,
         reason,
+        authorized_keys: vm.status.authorized_keys.clone(),
     })
 }
 
@@ -270,6 +286,9 @@ pub fn plan_scheduling(
             actions.push(SchedulingAction::Remove { vm: vm.reference() });
             continue;
         }
+        if !vm.has_granted_keys() {
+            continue;
+        }
         let networks: Vec<Object<Network>> = same_project(&observation.networks, vm).cloned().collect();
         let peers: Vec<Object<Vm>> = same_project(&assigned_peers, vm).cloned().collect();
         let interfaces = match allocate_interfaces(vm, &networks, &peers) {
@@ -306,6 +325,7 @@ pub fn plan_scheduling(
                         node,
                         interfaces,
                         observed_generation: vm.metadata.generation,
+                        authorized_keys: vm.status.authorized_keys.clone(),
                     });
                 }
             }
@@ -348,7 +368,7 @@ impl Controller for SchedulerController {
     async fn apply(&self, _key: &PendingWorkloads, action: SchedulingAction) -> Result<(), ActionError> {
         let store = self.store.as_ref();
         match action {
-            SchedulingAction::Assign { vm, node, interfaces, observed_generation } => {
+            SchedulingAction::Assign { vm, node, interfaces, observed_generation, authorized_keys } => {
                 tracing::info!(vm = %vm, %node, "placing a VM");
                 let status = VmStatus {
                     phase: VmPhase::Scheduled,
@@ -356,6 +376,7 @@ impl Controller for SchedulerController {
                     interfaces,
                     message: None,
                     migration: None,
+                    authorized_keys,
                 };
                 apply_fenced::<Vm>(
                     store,
@@ -365,13 +386,14 @@ impl Controller for SchedulerController {
                 )
                 .await?;
             }
-            SchedulingAction::ReportWaiting { vm, observed_generation, phase, reason } => {
+            SchedulingAction::ReportWaiting { vm, observed_generation, phase, reason, authorized_keys } => {
                 let status = VmStatus {
                     phase,
                     node: None,
                     interfaces: Vec::new(),
                     message: Some(reason),
                     migration: None,
+                    authorized_keys,
                 };
                 apply_fenced::<Vm>(
                     store,

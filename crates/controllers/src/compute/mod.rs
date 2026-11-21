@@ -227,6 +227,7 @@ impl ComputeController {
             interfaces: vm.status.interfaces.clone(),
             message: Some(reason.to_owned()),
             migration: vm.status.migration.clone(),
+            authorized_keys: vm.status.authorized_keys.clone(),
         };
         apply::<Vm>(
             self.store(),

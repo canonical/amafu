@@ -75,6 +75,7 @@ fn report(
         interfaces: vm.status.interfaces.clone(),
         message,
         migration: vm.status.migration.clone(),
+        authorized_keys: vm.status.authorized_keys.clone(),
     };
     if vm.status == status && vm.is_status_current() {
         return None;
@@ -463,6 +464,7 @@ mod tests {
                 interfaces: vm.status.interfaces.clone(),
                 message: None,
                 migration: None,
+                authorized_keys: None,
             },
         }
     }

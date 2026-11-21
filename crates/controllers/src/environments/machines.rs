@@ -95,6 +95,7 @@ impl<'a> Machine<'a> {
             priority: 0,
             anti_affinity_group: Some(self.ownership.environment().clone()),
             minimum_cpu_baseline: None,
+            ssh_keys: Vec::new(),
         };
         self.objects.ensure::<Vm>(&self.vm_reference(), labels, vm).await?;
         Ok(())
@@ -121,6 +122,7 @@ impl<'a> Machine<'a> {
             priority: 0,
             anti_affinity_group: None,
             minimum_cpu_baseline: None,
+            ssh_keys: Vec::new(),
         };
         self.objects.ensure::<Vm>(&self.vm_reference(), self.labels(BTreeMap::new()), vm).await?;
         Ok(())
