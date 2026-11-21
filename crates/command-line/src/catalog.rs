@@ -107,6 +107,11 @@ pub async fn create_root_volume(
         Ok(_) => {}
         Err(error) if error.is_conflict() => {
             let existing = client.get::<Volume>(name.as_str()).await?;
+            if existing.metadata.is_deleting {
+                anyhow::bail!(
+                    "{name} is still being deleted after an earlier attempt; try again in a moment"
+                );
+            }
             if existing.specification != specification || existing.metadata.labels != labels {
                 anyhow::bail!("{name} already exists and is not the disk this VM asks for");
             }
