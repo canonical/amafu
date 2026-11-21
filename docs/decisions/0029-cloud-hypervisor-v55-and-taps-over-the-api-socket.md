@@ -30,7 +30,7 @@ takes descriptor numbers from strings.
   floating IP, and its SSH port is unreachable for about a second during switch-over.
 - A VM booted before this change has automatically named devices and cannot be received this way; restarting it
   once gives it stable names.
-- The VMM's API socket stays open for the life of each VM process. It lives in the VM's runtime directory, which
-  only the VM's user and the node can reach.
+- The VMM's API socket stays open for the life of each VM process, in the VM's runtime directory, as it already did
+  for sending; its permissions have not been reviewed for this new use.
 - Every Cloud Hypervisor upgrade must still compare lockfiles, as 0001 says, and now also check that the receive
   request's `external_fds` format is unchanged.
