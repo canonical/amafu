@@ -43,7 +43,7 @@ pub async fn key_holders(store: &dyn Store, key: &ObjectReference) -> Result<Vec
     let groups = list::<SshKeyGroup>(store, project, Consistency::Linearizable).await?;
     let holding_groups: Vec<ObjectName> = groups
         .into_iter()
-        .filter(|group| group.specification.keys.contains(&key.name))
+        .filter(|group| !group.metadata.is_deleting && group.specification.keys.contains(&key.name))
         .map(|group| group.metadata.name)
         .collect();
     let vms = list::<Vm>(store, project, Consistency::Linearizable).await?;

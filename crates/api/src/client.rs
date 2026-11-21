@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use amafu_domain::kinds::ssh_key::{KeyLookup, KeySource, SshKey};
 use amafu_domain::{Object, ProjectName, Resource, Scope};
 use axum::body::Body;
 use bytes::{Bytes, BytesMut};
@@ -375,6 +376,15 @@ impl ApiClient {
 
     pub async fn image_catalog(&self) -> Result<Vec<amafu_interfaces::CatalogEntry>, ClientError> {
         self.call(Method::GET, "/v1/image-catalog", None).await
+    }
+
+    pub async fn look_up_ssh_keys(&self, source: KeySource, account: &str) -> Result<KeyLookup, ClientError> {
+        let source = match source {
+            KeySource::Github => "github",
+            KeySource::Launchpad => "launchpad",
+        };
+        let path = format!("/v1/ssh-key-sources/{source}/{account}{}", self.project_query::<SshKey>());
+        self.call(Method::GET, &path, None).await
     }
 
     pub async fn platform_token<R: Resource>(&self, name: &str) -> Result<PlatformToken, ClientError> {
