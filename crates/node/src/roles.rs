@@ -567,11 +567,11 @@ fn recovery_roles(
 }
 
 fn vm_preparation_roles(roles: &mut JoinSet<()>, services: &Services, settings: ReconcilerSettings) {
-    let root_volume_store = Arc::clone(&services.store);
+    let (root_volume_store, root_volume_clock) = (Arc::clone(&services.store), Arc::clone(&services.clock));
     singleton_role(
         roles,
         "root-volumes",
-        move |_| RootVolumeController::new(Arc::clone(&root_volume_store)),
+        move |_| RootVolumeController::new(Arc::clone(&root_volume_store), Arc::clone(&root_volume_clock)),
         services,
         settings,
     );
