@@ -1,6 +1,6 @@
 # 0001: Embed Cloud Hypervisor's vmm crate in a per-VM process
 
-Status: accepted for milestone 1
+Status: accepted for milestone 1; the configuration path is amended by 0029
 
 ## Context
 
