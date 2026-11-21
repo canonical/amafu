@@ -23,6 +23,7 @@ use amafu_controllers::environments::outcomes::{
 };
 use amafu_controllers::environments::rotation::CredentialRotationController;
 use amafu_controllers::node_lease::{LeaseKeeper, LeaseKeeperSettings, feed_while_leased};
+use amafu_controllers::retirement::SshKeyRetirementController;
 use amafu_controllers::root_volumes::RootVolumeController;
 use amafu_controllers::{
     AuditExportController, BootSlotsController, BootSlotsServices, BootSlotsSettings,
@@ -579,6 +580,14 @@ fn vm_preparation_roles(roles: &mut JoinSet<()>, services: &Services, settings: 
         roles,
         "authorized-keys",
         move |_| AuthorizedKeysController::new(Arc::clone(&keys_store)),
+        services,
+        settings,
+    );
+    let retired_keys_store = Arc::clone(&services.store);
+    singleton_role(
+        roles,
+        "ssh-key-retirement",
+        move |_| SshKeyRetirementController::new(Arc::clone(&retired_keys_store)),
         services,
         settings,
     );

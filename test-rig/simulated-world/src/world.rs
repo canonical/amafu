@@ -16,6 +16,7 @@ use amafu_api::{
 use amafu_checkers::invariants::check_all;
 use amafu_controllers::authorized_keys::AuthorizedKeysController;
 use amafu_controllers::node_lease::{LeaseKeeper, LeaseKeeperSettings, feed_while_leased};
+use amafu_controllers::retirement::SshKeyRetirementController;
 use amafu_controllers::{
     BootSlotsController, BootSlotsServices, BootSlotsSettings, CertificateRevocationController,
     ComputeController, ComputeServices, ExternalNetworkController, FloatingIpController, ImageController,
@@ -771,7 +772,8 @@ impl SimulatedWorld {
         let (volume_store, volume_storage, volume_images) =
             (Arc::clone(store), Arc::clone(&storage), Arc::clone(&images));
         let (backend_store, backend_storage) = (Arc::clone(store), Arc::clone(&storage));
-        let (floating_store, keys_store) = (Arc::clone(store), Arc::clone(store));
+        let (floating_store, keys_store, retired_keys_store) =
+            (Arc::clone(store), Arc::clone(store), Arc::clone(store));
         let (external_store, revocation_store) = (Arc::clone(store), Arc::clone(store));
         vec![
             singleton_role(
@@ -789,6 +791,12 @@ impl SimulatedWorld {
             singleton_role(
                 format!("{name}/authorized-keys"),
                 move |_| AuthorizedKeysController::new(Arc::clone(&keys_store)),
+                &singletons,
+                settings,
+            ),
+            singleton_role(
+                format!("{name}/ssh-key-retirement"),
+                move |_| SshKeyRetirementController::new(Arc::clone(&retired_keys_store)),
                 &singletons,
                 settings,
             ),

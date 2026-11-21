@@ -3,7 +3,8 @@ use std::sync::Arc;
 use amafu_domain::kinds::certificate_revocation::CertificateRevocation;
 use amafu_domain::kinds::external_network::ExternalNetwork;
 use amafu_domain::kinds::floating_ip::FloatingIp;
-use amafu_domain::{Object, ObjectReference};
+use amafu_domain::kinds::ssh_key::{SshKey, SshKeyGroup};
+use amafu_domain::{Object, ObjectReference, Resource};
 use amafu_interfaces::objects::{get, list, remove};
 use amafu_interfaces::{ActionError, Consistency, Store};
 use amafu_reconciler::{Controller, KeyMapping, WatchedKind};
@@ -124,6 +125,71 @@ impl Controller for CertificateRevocationController {
     async fn apply(&self, key: &ObjectReference, action: RetirementAction) -> Result<(), ActionError> {
         let RetirementAction::Remove = action;
         Ok(remove::<CertificateRevocation>(self.store.as_ref(), key).await?)
+    }
+}
+
+pub struct SshKeyRetirementController {
+    store: Arc<dyn Store>,
+}
+
+impl SshKeyRetirementController {
+    #[must_use]
+    pub fn new(store: Arc<dyn Store>) -> Self {
+        Self { store }
+    }
+
+    async fn references<R: Resource>(&self) -> Result<Vec<ObjectReference>, ActionError> {
+        let objects = list::<R>(self.store.as_ref(), None, Consistency::Linearizable).await?;
+        Ok(objects.iter().map(Object::reference).collect())
+    }
+
+    async fn is_deleting<R: Resource>(&self, key: &ObjectReference) -> Result<bool, ActionError> {
+        let object = get::<R>(self.store.as_ref(), key, Consistency::Linearizable).await?;
+        Ok(object.is_some_and(|object| object.metadata.is_deleting))
+    }
+}
+
+impl Controller for SshKeyRetirementController {
+    type Key = ObjectReference;
+    type Observation = RetirementObservation;
+    type Action = RetirementAction;
+
+    const NAME: &'static str = "ssh-key-retirement";
+    const WATCHES: &'static [WatchedKind<ObjectReference>] = &[
+        WatchedKind { kind: "SshKey", mapping: KeyMapping::ObjectKey(|reference| Some(reference.clone())) },
+        WatchedKind {
+            kind: "SshKeyGroup",
+            mapping: KeyMapping::ObjectKey(|reference| Some(reference.clone())),
+        },
+    ];
+
+    async fn discover_keys(&self) -> Result<Vec<ObjectReference>, ActionError> {
+        let mut keys = self.references::<SshKey>().await?;
+        keys.extend(self.references::<SshKeyGroup>().await?);
+        Ok(keys)
+    }
+
+    async fn observe(&self, key: &ObjectReference) -> Result<RetirementObservation, ActionError> {
+        let is_deleting = if key.kind == SshKeyGroup::KIND {
+            self.is_deleting::<SshKeyGroup>(key).await?
+        } else {
+            self.is_deleting::<SshKey>(key).await?
+        };
+        Ok(RetirementObservation { is_deleting, is_in_use: false })
+    }
+
+    fn plan(&self, observation: &RetirementObservation) -> Vec<RetirementAction> {
+        plan_retirement(observation)
+    }
+
+    async fn apply(&self, key: &ObjectReference, action: RetirementAction) -> Result<(), ActionError> {
+        let RetirementAction::Remove = action;
+        let store = self.store.as_ref();
+        if key.kind == SshKeyGroup::KIND {
+            Ok(remove::<SshKeyGroup>(store, key).await?)
+        } else {
+            Ok(remove::<SshKey>(store, key).await?)
+        }
     }
 }
 

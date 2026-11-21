@@ -8,6 +8,7 @@ mod ssh_keys {
     use amafu_api::routes::{ApiState, router};
     use amafu_api::{ApiClient, RouterTransport, Transport};
     use amafu_controllers::authorized_keys::AuthorizedKeysController;
+    use amafu_controllers::retirement::SshKeyRetirementController;
     use amafu_domain::access::Role;
     use amafu_domain::kinds::ssh_key::{
         KeyOrigin, KeySource, SshKey, SshKeyGroup, SshKeyGroupSpecification, SshKeyReference,
@@ -117,6 +118,15 @@ mod ssh_keys {
 
         client.delete::<SshKeyGroup>("team").await.unwrap();
         client.delete::<SshKey>("alice-laptop").await.unwrap();
+        let retirement = SshKeyRetirementController::new(Arc::clone(&store) as Arc<dyn Store>);
+        for key in retirement.discover_keys().await.unwrap() {
+            let observation = retirement.observe(&key).await.unwrap();
+            for action in retirement.plan(&observation) {
+                retirement.apply(&key, action).await.unwrap();
+            }
+        }
+        assert_eq!(client.list::<SshKey>().await.unwrap(), []);
+        assert_eq!(client.list::<SshKeyGroup>().await.unwrap(), []);
         let after = client.get::<Vm>("web-1").await.unwrap().status.authorized_keys.unwrap();
         assert_eq!(after, frozen);
     }
