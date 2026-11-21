@@ -58,7 +58,7 @@ export default function SearchSelect({ id, label, value, choices, onChange, plac
       value={value}
       options={optionsOf(choices)}
       onChange={(chosen) => {
-        if (!chosen.startsWith(GROUP_PREFIX)) {
+        if (choices.some((choice) => choice.value === chosen)) {
           onChange(chosen);
         }
       }}
