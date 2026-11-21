@@ -12,8 +12,8 @@ amafu-guest-agent.workspace = true
 amafu-interfaces.workspace = true
 async-trait.workspace = true
 landlock.workspace = true
-event_monitor = { git = "https://github.com/cloud-hypervisor/cloud-hypervisor", tag = "v54.0" }
-cloud-hypervisor-backend = { package = "hypervisor", git = "https://github.com/cloud-hypervisor/cloud-hypervisor", tag = "v54.0", features = ["kvm"] }
+event_monitor = { git = "https://github.com/cloud-hypervisor/cloud-hypervisor", tag = "v55.0" }
+cloud-hypervisor-backend = { package = "hypervisor", git = "https://github.com/cloud-hypervisor/cloud-hypervisor", tag = "v55.0", features = ["kvm"] }
 rustix.workspace = true
 rustls.workspace = true
 rustls-pemfile.workspace = true
@@ -25,7 +25,7 @@ tokio.workspace = true
 tokio-rustls.workspace = true
 tracing.workspace = true
 tun-rs.workspace = true
-vmm = { git = "https://github.com/cloud-hypervisor/cloud-hypervisor", tag = "v54.0", features = ["kvm"] }
+vmm = { git = "https://github.com/cloud-hypervisor/cloud-hypervisor", tag = "v55.0", features = ["kvm"] }
 vmm-sys-util = "0.15.0"
 
 [dev-dependencies]

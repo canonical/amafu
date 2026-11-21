@@ -7,9 +7,11 @@ pub mod migration;
 pub mod plan;
 pub mod probe;
 pub mod process;
+mod receiving;
 pub mod runtime;
 pub mod sandbox;
 pub mod sending;
+mod vm_configuration;
 pub mod vm_process;
 mod vmm_api;
 
