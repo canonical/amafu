@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::net::{Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -59,23 +59,41 @@ pub struct EnvironmentsSection {
 }
 
 impl EnvironmentsSection {
-    fn address(&self, api: &ApiSection) -> String {
-        self.api_address.clone().unwrap_or_else(|| api.listen.to_string())
+    fn address(&self, api: &ApiSection, underlay: Option<Ipv4Addr>) -> String {
+        if let Some(address) = &self.api_address {
+            return address.clone();
+        }
+        match (api.listen.ip(), underlay) {
+            (IpAddr::V4(listen), Some(underlay)) if listen.is_unspecified() => {
+                SocketAddr::from((underlay, api.listen.port())).to_string()
+            }
+            _ => api.listen.to_string(),
+        }
     }
 
     #[must_use]
-    pub fn juju(&self, api: &ApiSection, certificate_authority: &str) -> JujuSettings {
+    pub fn juju(
+        &self,
+        api: &ApiSection,
+        underlay: Option<Ipv4Addr>,
+        certificate_authority: &str,
+    ) -> JujuSettings {
         JujuSettings {
             ubuntu_image: self.ubuntu_image.clone(),
             runner_image: self.juju_runner_image.clone(),
-            token_refresh_url: format!("https://{}/v1/jwks", self.address(api)),
+            token_refresh_url: format!("https://{}/v1/jwks", self.address(api, underlay)),
             amafu_certificate_authority: certificate_authority.to_owned(),
         }
     }
 
     #[must_use]
-    pub fn kubernetes(&self, api: &ApiSection, certificate_authority: &str) -> KubernetesSettings {
-        let address = self.address(api);
+    pub fn kubernetes(
+        &self,
+        api: &ApiSection,
+        underlay: Option<Ipv4Addr>,
+        certificate_authority: &str,
+    ) -> KubernetesSettings {
+        let address = self.address(api, underlay);
         KubernetesSettings {
             ubuntu_image: self.ubuntu_image.clone(),
             trust: IssuerTrust {
@@ -381,6 +399,22 @@ impl NodeConfiguration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guests_are_told_a_reachable_api_address() {
+        let api = |listen: &str| ApiSection {
+            listen: listen.parse().unwrap(),
+            certificate: String::new(),
+            private_key: String::new(),
+            identities: Vec::new(),
+        };
+        let underlay = Some(Ipv4Addr::new(10, 20, 0, 11));
+        let unset = EnvironmentsSection::default();
+        assert_eq!(unset.address(&api("0.0.0.0:7443"), underlay), "10.20.0.11:7443");
+        assert_eq!(unset.address(&api("10.20.0.12:7443"), underlay), "10.20.0.12:7443");
+        let configured = EnvironmentsSection { api_address: Some(String::from("api.lab:7443")), ..unset };
+        assert_eq!(configured.address(&api("0.0.0.0:7443"), underlay), "api.lab:7443");
+    }
 
     const MINIMAL: &str = "
 version: 1

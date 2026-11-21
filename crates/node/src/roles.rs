@@ -425,20 +425,21 @@ fn environment_roles(
         .as_ref()
         .map(|identity| identity.certificate_authority.clone())
         .unwrap_or_default();
+    let underlay = configuration.network.as_ref().map(|network| network.address.address);
     let kubernetes: Arc<dyn KubernetesPlatform> = Arc::new(HttpKubernetes::default());
     let keyring = Keyring::new(Arc::clone(&services.store));
     let kubernetes_steps = KubernetesSteps::new(KubernetesEnvironment {
         platform: Arc::clone(&kubernetes),
         keyring: keyring.clone(),
         identifiers: Arc::new(RandomIdentifiers),
-        settings: configuration.environments.kubernetes(&configuration.api, &certificate_authority),
+        settings: configuration.environments.kubernetes(&configuration.api, underlay, &certificate_authority),
     });
     let juju_steps = JujuSteps::new(JujuEnvironment {
         platform: Arc::new(WebSocketJuju::default()),
         kubernetes,
         keyring,
         identifiers: Arc::new(RandomIdentifiers),
-        settings: configuration.environments.juju(&configuration.api, &certificate_authority),
+        settings: configuration.environments.juju(&configuration.api, underlay, &certificate_authority),
     });
     step_runner_role::<KubernetesClusterChange>(roles, services, settings, Arc::new(kubernetes_steps));
     step_runner_role::<JujuControllerChange>(roles, services, settings, Arc::new(juju_steps));
