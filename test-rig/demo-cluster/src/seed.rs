@@ -11,6 +11,7 @@ use amafu_domain::kinds::network::Network;
 use amafu_domain::kinds::node::Node;
 use amafu_domain::kinds::operation::Operation;
 use amafu_domain::kinds::security_group::SecurityGroup;
+use amafu_domain::kinds::ssh_key::{SshKey, SshKeyGroup};
 use amafu_domain::kinds::storage_backend::StorageBackend;
 use amafu_domain::kinds::vm::Vm;
 use amafu_domain::kinds::volume::Volume;
@@ -237,6 +238,38 @@ async fn seed_networking(store: &dyn Store, project: &str) -> anyhow::Result<()>
     for (name, rules) in groups {
         put::<SecurityGroup>(store, Some(project), name, json!({"rules": rules})).await?;
     }
+    Ok(())
+}
+
+async fn seed_ssh_keys(store: &dyn Store, project: &str) -> anyhow::Result<()> {
+    let keys = [
+        (
+            "alice-laptop",
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOpKbGPinFIKvvVQexMuxfmVR3auvr57kkIe6mkURtIs alice@laptop",
+            json!({"source": "pasted"}),
+        ),
+        (
+            "github-bob-1",
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJsMTuMi6luo0Sexf3BlqMU52E47LhP6MjDac7V3HkV4 bob@workstation",
+            json!({"source": "github", "account": "bob"}),
+        ),
+        (
+            "deploy-bot",
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOpKbGPinFIKvvVQexMuxfmVR3auvr57kkIe6mkURtIt deploy-bot",
+            json!({"source": "generated"}),
+        ),
+    ];
+    for (name, public_key, origin) in keys {
+        put::<SshKey>(store, Some(project), name, json!({"public_key": public_key, "origin": origin}))
+            .await?;
+    }
+    put::<SshKeyGroup>(
+        store,
+        Some(project),
+        "platform-team",
+        json!({"keys": ["alice-laptop", "github-bob-1"]}),
+    )
+    .await?;
     Ok(())
 }
 
@@ -467,6 +500,7 @@ pub async fn seed(store: &dyn Store) -> anyhow::Result<()> {
     seed_nodes(store).await?;
     seed_cluster(store).await?;
     seed_networking(store, DEFAULT_PROJECT).await?;
+    seed_ssh_keys(store, DEFAULT_PROJECT).await?;
     seed_images_and_volumes(store, DEFAULT_PROJECT).await?;
     seed_workloads(store, DEFAULT_PROJECT).await?;
     seed_research(store).await?;
