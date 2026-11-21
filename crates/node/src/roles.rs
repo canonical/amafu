@@ -564,6 +564,25 @@ fn recovery_roles(
     );
 }
 
+fn vm_preparation_roles(roles: &mut JoinSet<()>, services: &Services, settings: ReconcilerSettings) {
+    let root_volume_store = Arc::clone(&services.store);
+    singleton_role(
+        roles,
+        "root-volumes",
+        move |_| RootVolumeController::new(Arc::clone(&root_volume_store)),
+        services,
+        settings,
+    );
+    let keys_store = Arc::clone(&services.store);
+    singleton_role(
+        roles,
+        "authorized-keys",
+        move |_| AuthorizedKeysController::new(Arc::clone(&keys_store)),
+        services,
+        settings,
+    );
+}
+
 fn core_roles(
     roles: &mut JoinSet<()>,
     services: &Services,
@@ -637,22 +656,7 @@ fn core_roles(
         settings,
     );
     cluster_record_roles(roles, services, settings);
-    let root_volume_store = store();
-    singleton_role(
-        roles,
-        "root-volumes",
-        move |_| RootVolumeController::new(Arc::clone(&root_volume_store)),
-        services,
-        settings,
-    );
-    let keys_store = store();
-    singleton_role(
-        roles,
-        "authorized-keys",
-        move |_| AuthorizedKeysController::new(Arc::clone(&keys_store)),
-        services,
-        settings,
-    );
+    vm_preparation_roles(roles, services, settings);
     environment_roles(roles, services, settings, configuration);
     let floating_store = store();
     singleton_role(
