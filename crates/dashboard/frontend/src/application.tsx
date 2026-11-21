@@ -12,6 +12,7 @@ import Operations from "./pages/Operations";
 import Overview from "./pages/Overview";
 import SecurityGroups from "./pages/SecurityGroups";
 import Settings from "./pages/Settings";
+import SshKeys from "./pages/SshKeys";
 import SignIn from "./pages/SignIn";
 import Storage from "./pages/Storage";
 import VirtualMachines from "./pages/VirtualMachines";
@@ -29,6 +30,7 @@ const PAGES = [
   { path: "/networks", label: "Networks", icon: "connected", page: <Networks /> },
   { path: "/floating-ips", label: "Floating IPs", icon: "exposed", page: <FloatingIps /> },
   { path: "/security-groups", label: "Security groups", icon: "security", page: <SecurityGroups /> },
+  { path: "/ssh-keys", label: "SSH keys", icon: "lock-locked", page: <SshKeys /> },
   { path: "/kubernetes", label: "Kubernetes", icon: "pods", page: <Kubernetes /> },
   { path: "/juju", label: "Juju", icon: "applications", page: <Juju /> },
   { path: "/nodes", label: "Nodes", icon: "cluster-host", page: <Nodes /> },

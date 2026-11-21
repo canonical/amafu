@@ -20,6 +20,7 @@ const PAGES = [
   ["networks", "/networks", "10.20.0.0/24"],
   ["floating-ips", "/floating-ips", "203.0.113.10"],
   ["security-groups", "/security-groups", "monitoring"],
+  ["ssh-keys", "/ssh-keys", "alice-laptop"],
   ["kubernetes", "/kubernetes", "platform"],
   ["juju", "/juju", "observability"],
   ["nodes", "/nodes", "node-9"],
@@ -136,6 +137,7 @@ async function workloads(browser) {
     await page.getByRole("button", { name: "Next" }).click();
     await choose(page, "Networks", "app");
     await page.getByRole("button", { name: "Next" }).click();
+    await page.getByRole("button", { name: "Next" }).click();
     await page.getByText("--image ubuntu/24.04").waitFor();
     await shoot(page, "virtual-machines-review");
     await page.locator(".amafu-panel").getByRole("button", { name: "Create VM", exact: true }).click();
@@ -223,6 +225,51 @@ async function workloads(browser) {
     await page.getByRole("button", { name: "Add rule" }).click();
     await page.locator(".amafu-panel").getByText("TCP 8443", { exact: true }).waitFor({ timeout: SETTLE_MILLISECONDS });
     await shoot(page, "security-groups-detail");
+  });
+
+  await attempt("a pasted SSH key is added and a private key is refused", async () => {
+    await page.goto(`${base}/ssh-keys`);
+    await page.getByRole("button", { name: "Add SSH key" }).click();
+    await page.getByLabel("Name").fill("carol");
+    await page.getByLabel("Public key").fill("-----BEGIN OPENSSH PRIVATE KEY-----");
+    await page.getByText("This is a private key").waitFor();
+    await page.getByLabel("Public key").fill("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOpKbGPinFIKvvVQexMuxfmVR3auvr57kkIe6mkURtIu carol@desk");
+    await shoot(page, "ssh-keys-add");
+    await page.locator(".amafu-panel").getByRole("button", { name: "Add", exact: true }).click();
+    await row(page, "carol").getByText("SHA256:").waitFor({ timeout: SETTLE_MILLISECONDS });
+  });
+
+  await attempt("a key generated in the browser downloads its private key", async () => {
+    await page.goto(`${base}/ssh-keys?panel=add`);
+    await page.getByRole("tab", { name: "Generate" }).click();
+    await page.getByLabel("Name").fill("browser-made");
+    const downloaded = page.waitForEvent("download");
+    await page.locator(".amafu-panel").getByRole("button", { name: "Generate and download" }).click();
+    const file = await downloaded;
+    check(file.suggestedFilename() === "browser-made", "the private key is named after the key");
+    await row(page, "browser-made").getByText("Generated").waitFor({ timeout: SETTLE_MILLISECONDS });
+  });
+
+  await attempt("a key group is granted to a new VM", async () => {
+    await page.goto(`${base}/ssh-keys?panel=group&subject=platform-team`);
+    await page.locator(".amafu-panel .p-chip").first().waitFor();
+    await shoot(page, "ssh-keys-group");
+    await page.goto(`${base}/virtual-machines`);
+    await page.getByRole("button", { name: "Create VM" }).click();
+    await page.getByLabel("Name").fill("bastion");
+    await page.getByRole("tab", { name: "A kernel bundle" }).click();
+    await page.getByLabel("Kernel bundle").fill("ubuntu-kernel");
+    await page.getByRole("button", { name: "Next" }).click();
+    await page.getByRole("button", { name: "Next" }).click();
+    await page.getByRole("button", { name: "Next" }).click();
+    await choose(page, "SSH keys", "platform-team");
+    await choose(page, "SSH keys", "deploy-bot");
+    await shoot(page, "virtual-machines-access");
+    await page.getByRole("button", { name: "Next" }).click();
+    await shoot(page, "virtual-machines-access-review");
+    await page.getByText("--ssh-key-group platform-team").waitFor();
+    await page.locator(".amafu-panel").getByRole("button", { name: "Create VM", exact: true }).click();
+    await row(page, "bastion").waitFor({ timeout: SETTLE_MILLISECONDS });
   });
 
   await attempt("a deleted volume disappears", async () => {

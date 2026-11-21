@@ -2,7 +2,8 @@ import { Button, Input, MainTable, Notification, Select, Textarea } from "@canon
 import { useState } from "react";
 
 import { create } from "../cluster/client";
-import type { Image, Vm, VmSpecification } from "../cluster/kinds";
+import type { Image, SshKeyReference, Vm, VmSpecification } from "../cluster/kinds";
+import { grantWords } from "../cluster/sshKeys";
 import { isContainer } from "../cluster/kinds";
 import { chosenImage, ensureImage, imageChoices, useCatalog } from "../cluster/catalog";
 import { useCollection } from "../cluster/live";
@@ -31,7 +32,7 @@ import {
   vmScope,
   zoneOf,
 } from "./instances";
-import { NetworkChoices, SecurityGroupChoices } from "./attachments";
+import { NetworkChoices, SecurityGroupChoices, SshKeyChoices } from "./attachments";
 import { MEMORY_CHOICES } from "./CreateVmWizard";
 import { nameProblem } from "./environmentForms";
 
@@ -65,6 +66,7 @@ function CreateContainerWizard({ taken, onClose }: { taken: string[]; onClose: (
   const [memory, setMemory] = useState(CONTAINER_MEMORY_MEBIBYTES);
   const [networks, setNetworks] = useState<string[]>([]);
   const [securityGroups, setSecurityGroups] = useState<string[]>([]);
+  const [sshKeys, setSshKeys] = useState<SshKeyReference[]>([]);
   const [environment, setEnvironment] = useState("");
   const [command, setCommand] = useState("");
   const { isBusy, problem, submit } = useSubmission();
@@ -77,6 +79,7 @@ function CreateContainerWizard({ taken, onClose }: { taken: string[]; onClose: (
     boot: { type: "container", image: imageName, command: commandWords, environment: variables },
     network_interfaces: networks.map((network) => ({ network, security_groups: securityGroups })),
     power_state: "running",
+    ...(sshKeys.length > 0 ? { ssh_keys: sshKeys } : {}),
   });
   const run = async () => {
     if (!picked) {
@@ -131,6 +134,11 @@ function CreateContainerWizard({ taken, onClose }: { taken: string[]; onClose: (
               </div>
               <NetworkChoices chosen={networks} onChange={setNetworks} />
               <SecurityGroupChoices chosen={securityGroups} onChange={setSecurityGroups} />
+              <SshKeyChoices
+                chosen={sshKeys}
+                onChange={setSshKeys}
+                help="Written to the workload user's ~/.ssh/authorized_keys before the container starts. Useful only if the image runs an SSH server."
+              />
             </>
           ),
         },
@@ -150,6 +158,7 @@ function CreateContainerWizard({ taken, onClose }: { taken: string[]; onClose: (
                   memory !== CONTAINER_MEMORY_MEBIBYTES && "--memory", memory !== CONTAINER_MEMORY_MEBIBYTES && String(memory),
                   ...networks.flatMap((network) => ["--network", network]),
                   ...securityGroups.flatMap((group) => ["--security-group", group]),
+                  ...grantWords(sshKeys),
                   ...Object.entries(variables).flatMap(([variable, value]) => ["--env", `${variable}=${value}`]),
                   ...(commandWords.length > 0 ? ["--", ...commandWords] : []),
                 ]}

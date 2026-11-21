@@ -3,7 +3,8 @@ import { useState } from "react";
 
 import { chosenImage, ensureImage, imageChoices, useCatalog } from "../cluster/catalog";
 import { create, createLabelled } from "../cluster/client";
-import type { Image, Vm, VmSpecification } from "../cluster/kinds";
+import type { Image, SshKeyReference, Vm, VmSpecification } from "../cluster/kinds";
+import { grantWords } from "../cluster/sshKeys";
 import { useCollection } from "../cluster/live";
 import { projectScope } from "../cluster/scopes";
 import ChipSelect from "../components/ChipSelect";
@@ -14,7 +15,7 @@ import Wizard from "../components/Wizard";
 import { useSubmission } from "../components/submission";
 import { mebibytes } from "../format";
 import { useProject } from "../session";
-import { NetworkChoices, SecurityGroupChoices, useBackendChoices, useFreeVolumeChoices } from "./attachments";
+import { NetworkChoices, SecurityGroupChoices, SshKeyChoices, useBackendChoices, useFreeVolumeChoices } from "./attachments";
 import { DetailList, vmScope } from "./instances";
 import { nameProblem } from "./environmentForms";
 
@@ -152,6 +153,7 @@ export default function CreateVmWizard({ taken, onClose }: { taken: string[]; on
   const [extraVolumes, setExtraVolumes] = useState<string[]>([]);
   const [networks, setNetworks] = useState<string[]>([]);
   const [securityGroups, setSecurityGroups] = useState<string[]>([]);
+  const [sshKeys, setSshKeys] = useState<SshKeyReference[]>([]);
   const [userData, setUserData] = useState("");
   const [priority, setPriority] = useState(0);
   const [antiAffinity, setAntiAffinity] = useState("");
@@ -172,6 +174,7 @@ export default function CreateVmWizard({ taken, onClose }: { taken: string[]; on
     priority,
     ...(antiAffinity ? { anti_affinity_group: antiAffinity } : {}),
     ...(userData ? { user_data: userData } : {}),
+    ...(sshKeys.length > 0 ? { ssh_keys: sshKeys } : {}),
   };
 
   const createVm = async () => {
@@ -199,6 +202,7 @@ export default function CreateVmWizard({ taken, onClose }: { taken: string[]; on
     ...extraVolumes.flatMap((volume) => ["--volume", volume]),
     ...networks.flatMap((network) => ["--network", network]),
     ...securityGroups.flatMap((group) => ["--security-group", group]),
+    ...grantWords(sshKeys),
     priority !== 0 && "--priority", priority !== 0 && String(priority),
     antiAffinity && "--anti-affinity-group", antiAffinity,
     userData && "--user-data", userData && "user-data.yaml",
@@ -257,6 +261,18 @@ export default function CreateVmWizard({ taken, onClose }: { taken: string[]; on
           ),
         },
         {
+          title: "Access",
+          summary: sshKeys.length > 0 ? sshKeys.map((reference) => reference.name).join(", ") : "no SSH keys",
+          isReady: true,
+          content: (
+            <SshKeyChoices
+              chosen={sshKeys}
+              onChange={setSshKeys}
+              help="Cloud-init installs these keys for the image's default user at first boot. Later changes to a key or group do not reach a running VM."
+            />
+          ),
+        },
+        {
           title: "Review",
           isReady: true,
           content: (
@@ -270,6 +286,7 @@ export default function CreateVmWizard({ taken, onClose }: { taken: string[]; on
                     { label: "Volumes", value: specification.volumes?.join(", ") || "—" },
                     { label: "Networks", value: networks.join(", ") || "—" },
                     { label: "Security groups", value: securityGroups.join(", ") || "—" },
+                    { label: "SSH keys", value: sshKeys.map((reference) => reference.name).join(", ") || "—" },
                   ]}
                 />
                 <Switch label="Start it now" checked={isStartedNow} onChange={() => setStartedNow(!isStartedNow)} />

@@ -39,6 +39,7 @@ export interface VmSpecification {
   priority?: number;
   anti_affinity_group?: string;
   minimum_cpu_baseline?: string;
+  ssh_keys?: SshKeyReference[];
 }
 
 export type VmPhase = "pending" | "scheduled" | "starting" | "running" | "stopping" | "stopped" | "failed";
@@ -67,6 +68,7 @@ export interface VmStatus {
   interfaces?: { network: string; mac: string; address: string }[];
   message?: string;
   migration?: VmMigration;
+  authorized_keys?: GrantedKey[];
 }
 
 export type Vm = ClusterObject<VmSpecification, VmStatus>;
@@ -220,4 +222,33 @@ export type AuditSink = ClusterObject<AuditSinkSpecification, { next_sequence?: 
 
 export function isContainer(vm: Vm): boolean {
   return vm.specification.boot.type === "container";
+}
+
+export type KeySource = "github" | "launchpad";
+
+export type KeyOrigin = { source: "pasted" } | { source: "generated" } | { source: KeySource; account: string };
+
+export type SshKey = ClusterObject<{ public_key: string; origin?: KeyOrigin }, Record<string, never>>;
+
+export type SshKeyGroup = ClusterObject<{ keys?: string[] }, Record<string, never>>;
+
+export type SshKeyReference = { kind: "key"; name: string } | { kind: "group"; name: string };
+
+export interface GrantedKey {
+  fingerprint: string;
+  public_key: string;
+}
+
+export interface DiscoveredKey {
+  public_key: string;
+  fingerprint: string;
+  algorithm: string;
+  comment?: string;
+}
+
+export interface KeyLookup {
+  source: KeySource;
+  account: string;
+  keys: DiscoveredKey[];
+  skipped?: string[];
 }

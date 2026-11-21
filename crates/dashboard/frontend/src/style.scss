@@ -264,6 +264,24 @@ $neutral: #999;
   grid-template-columns: 1fr 1fr;
 }
 
+.field-pair--action {
+  align-items: end;
+  grid-template-columns: 1fr auto;
+
+  .p-button {
+    margin-bottom: 1.5rem;
+  }
+}
+
+.discovered-keys {
+  margin-bottom: 1.5rem;
+}
+
+.fingerprint {
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
 .choice-list {
   border: 0;
   margin: 0 0 1rem;

@@ -1,7 +1,9 @@
-import type { Network, SecurityGroup, StorageBackend, Volume } from "../cluster/kinds";
+import type { Network, SecurityGroup, SshKey, SshKeyGroup, SshKeyReference, StorageBackend, Volume } from "../cluster/kinds";
 import { useCollection } from "../cluster/live";
+import { describeOrigin, parsePublicKey, referenceOf, referenceValue } from "../cluster/sshKeys";
 import ChipSelect from "../components/ChipSelect";
 import type { Choice } from "../components/SearchSelect";
+import { countOf } from "../format";
 import { useProject } from "../session";
 
 export function useNetworkChoices(): Choice[] {
@@ -72,6 +74,41 @@ export function SecurityGroupChoices({ chosen, onChange }: AttachmentProps) {
       placeholder="Search security groups"
       emptyMessage="No security groups in this project yet"
       help="Applied to every interface."
+    />
+  );
+}
+
+export function useSshKeyChoices(): Choice[] {
+  const project = useProject();
+  const keys = useCollection<SshKey>({ plural: "ssh-keys", project });
+  const groups = useCollection<SshKeyGroup>({ plural: "ssh-key-groups", project });
+  return [
+    ...groups.items.map((group) => ({
+      value: referenceValue({ kind: "group", name: group.metadata.name }),
+      label: `${group.metadata.name} (group)`,
+      detail: countOf(group.specification.keys?.length ?? 0, "key"),
+      group: "Key groups",
+    })),
+    ...keys.items.map((key) => ({
+      value: key.metadata.name,
+      label: key.metadata.name,
+      detail: [parsePublicKey(key.specification.public_key)?.comment, describeOrigin(key.specification.origin)].filter(Boolean).join(" · "),
+      group: "Keys",
+    })),
+  ];
+}
+
+export function SshKeyChoices({ chosen, onChange, help }: { chosen: SshKeyReference[]; onChange: (chosen: SshKeyReference[]) => void; help: string }) {
+  return (
+    <ChipSelect
+      id="ssh-keys"
+      label="SSH keys"
+      choices={useSshKeyChoices()}
+      selected={chosen.map(referenceValue)}
+      onChange={(values) => onChange(values.map(referenceOf))}
+      placeholder="Search keys and groups"
+      emptyMessage="No SSH keys in this project yet; add them on the SSH keys page"
+      help={help}
     />
   );
 }
