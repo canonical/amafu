@@ -28,6 +28,8 @@ pub struct NetworkSpecification {
     pub subnet: Ipv4Network,
     #[serde(default = "allowed_by_default")]
     pub is_outbound_access_allowed: bool,
+    #[serde(default)]
+    pub is_platform_api_allowed: bool,
 }
 
 pub const MINIMUM_SUBNET_PREFIX_LENGTH: u8 = 8;
@@ -88,6 +90,7 @@ mod tests {
         let subnet = |text: &str| NetworkSpecification {
             subnet: text.parse().unwrap(),
             is_outbound_access_allowed: true,
+            is_platform_api_allowed: false,
         };
         assert_eq!(subnet("10.0.0.0/24").validate(), Ok(()));
         assert!(subnet("10.0.0.0/30").validate().is_err());

@@ -50,7 +50,8 @@ pub async fn ready_network(
     let subnet: Ipv4Network = subnet
         .parse()
         .map_err(|error: amafu_domain::InvalidAddress| ScenarioError::Expectation(error.to_string()))?;
-    let specification = NetworkSpecification { subnet, is_outbound_access_allowed: true };
+    let specification =
+        NetworkSpecification { subnet, is_outbound_access_allowed: true, is_platform_api_allowed: false };
     member.create::<Network>(&name(network_name)?, &specification).await?;
     eventually(cluster, START_TIMEOUT, "the network is ready", async || {
         Ok(member.get::<Network>(network_name).await?.status.phase == NetworkPhase::Ready)

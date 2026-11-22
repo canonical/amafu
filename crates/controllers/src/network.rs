@@ -219,6 +219,7 @@ mod tests {
             specification: NetworkSpecification {
                 subnet: subnet.parse().unwrap(),
                 is_outbound_access_allowed: true,
+                is_platform_api_allowed: false,
             },
             status: NetworkStatus { phase, ..NetworkStatus::default() },
         }
