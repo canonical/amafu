@@ -53,7 +53,7 @@ export function usePlacementChoices() {
   const backends = useCollection<StorageBackend>({ plural: "storage-backends" });
   const external = useCollection<ExternalNetwork>({ plural: "external-networks" });
   return {
-    networks: networks.items.map((item) => item.metadata.name),
+    networks: networks.items.map((item) => ({ name: item.metadata.name, reachesPlatformApi: Boolean(item.specification.is_platform_api_allowed) })),
     backends: backends.items.map((item) => item.metadata.name),
     externalNetworks: external.items.map((item) => item.metadata.name),
   };
@@ -61,10 +61,15 @@ export function usePlacementChoices() {
 
 export function chosen(placement: Placement, choices: ReturnType<typeof usePlacementChoices>): Placement {
   return {
-    network: placement.network || choices.networks[0] || "",
+    network: placement.network || (choices.networks.find((network) => network.reachesPlatformApi) ?? choices.networks[0])?.name || "",
     storageBackend: placement.storageBackend || choices.backends[0] || "",
     externalNetwork: placement.externalNetwork || choices.externalNetworks[0] || "",
   };
+}
+
+export function isPlacementReady(placement: Placement, choices: ReturnType<typeof usePlacementChoices>): boolean {
+  const network = choices.networks.find((candidate) => candidate.name === placement.network);
+  return Boolean(network?.reachesPlatformApi && placement.storageBackend && placement.externalNetwork);
 }
 
 export function PlacementFields({
@@ -79,6 +84,7 @@ export function PlacementFields({
   onChange: (placement: Placement) => void;
 }) {
   const options = (names: string[]) => names.map((name) => ({ value: name, label: name }));
+  const isClosed = choices.networks.some((network) => network.name === placement.network && !network.reachesPlatformApi);
   return (
     <>
       <SearchSelect
@@ -86,7 +92,12 @@ export function PlacementFields({
         label="Network"
         value={placement.network}
         onChange={(network) => onChange({ ...placement, network })}
-        choices={options(choices.networks)}
+        choices={choices.networks.map((network) => ({
+          value: network.name,
+          label: network.name,
+          detail: network.reachesPlatformApi ? "reaches the Amafu API" : "keeps VMs from the Amafu API",
+        }))}
+        error={isClosed ? `Its VMs cannot reach the Amafu API. Allow it on the Networks page, or run amafu network allow-platform-api ${placement.network}.` : undefined}
       />
       <SearchSelect
         id={`${prefix}-storage`}

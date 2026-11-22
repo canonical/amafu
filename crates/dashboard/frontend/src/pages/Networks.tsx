@@ -1,7 +1,7 @@
 import { Button, Input, MainTable, Switch, Tabs } from "@canonical/react-components";
 import { useState } from "react";
 
-import { create } from "../cluster/client";
+import { create, update } from "../cluster/client";
 import type { ExternalNetwork, FloatingIp, Network, Vm } from "../cluster/kinds";
 import { useCollection } from "../cluster/live";
 import { clusterScope, projectScope } from "../cluster/scopes";
@@ -20,13 +20,33 @@ import { countOf } from "../format";
 import { useProject } from "../session";
 import { useVms } from "./instances";
 
+const PLATFORM_API_HELP =
+  "Kubernetes clusters and Juju controllers need it. Only the nodes' API port is opened, with a per-VM limit on new connections.";
+
+function PlatformApiSwitch({ network }: { network: Network }) {
+  const project = useProject();
+  const { problem, submit } = useSubmission();
+  const isAllowed = Boolean(network.specification.is_platform_api_allowed);
+  const toggle = () =>
+    void submit(() =>
+      update(projectScope("networks", project), network.metadata.name, { ...network.specification, is_platform_api_allowed: !isAllowed }, network.metadata.generation),
+    );
+  return (
+    <>
+      <Switch label={isAllowed ? "Allowed" : "Blocked"} checked={isAllowed} onChange={toggle} aria-label={`Let VMs on ${network.metadata.name} reach the Amafu API`} />
+      {problem && <div className="secondary-line u-text--negative">{problem}</div>}
+    </>
+  );
+}
+
 function CreateNetworkPanel({ onClose }: { onClose: () => void }) {
   const project = useProject();
   const [name, setName] = useState("");
   const [subnet, setSubnet] = useState("10.10.0.0/24");
   const [isIsolated, setIsolated] = useState(false);
+  const [reachesPlatformApi, setReachesPlatformApi] = useState(false);
   const { isBusy, problem, submit } = useSubmission();
-  const specification = { subnet, is_outbound_access_allowed: !isIsolated };
+  const specification = { subnet, is_outbound_access_allowed: !isIsolated, is_platform_api_allowed: reachesPlatformApi };
   return (
     <Panel
       title="Create network"
@@ -43,7 +63,19 @@ function CreateNetworkPanel({ onClose }: { onClose: () => void }) {
         onChange={() => setIsolated(!isIsolated)}
         help="Outbound traffic leaves through the node's address."
       />
-      <Command words={["amafu", "network", "create", name || "NAME", "--subnet", subnet, isIsolated && "--no-outbound-access"]} />
+      <Switch
+        label="Let VMs on this network reach the Amafu API"
+        checked={reachesPlatformApi}
+        onChange={() => setReachesPlatformApi(!reachesPlatformApi)}
+        help={PLATFORM_API_HELP}
+      />
+      <Command
+        words={[
+          "amafu", "network", "create", name || "NAME", "--subnet", subnet,
+          isIsolated && "--no-outbound-access",
+          reachesPlatformApi && "--allow-platform-api",
+        ]}
+      />
     </Panel>
   );
 }
@@ -100,6 +132,7 @@ function PrivateNetworks({ query }: { query: string }) {
           { content: "Subnet" },
           { content: "Gateway" },
           { content: "Outbound" },
+          { content: "Amafu API" },
           { content: "Segment", className: "u-align--right" },
           { content: "Instances", sortKey: "instances", className: "u-align--right" },
           { content: "Status" },
@@ -120,6 +153,7 @@ function PrivateNetworks({ query }: { query: string }) {
               ),
             },
             { content: network.specification.is_outbound_access_allowed ? "Allowed" : "Blocked" },
+            { content: <PlatformApiSwitch network={network} /> },
             { content: network.status.segment_id ?? "—", className: "u-align--right" },
             { content: instancesOn(vms.items, network.metadata.name), className: "u-align--right" },
             { content: <Status phase={network.status.phase ?? "pending"} detail={network.status.phase === "failed" ? network.status.message : undefined} /> },

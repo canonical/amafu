@@ -9,7 +9,7 @@ import Wizard from "../components/Wizard";
 import { useSubmission } from "../components/submission";
 import { countOf } from "../format";
 import { useProject } from "../session";
-import { NumberField, PlacementFields, ShapeSelect, chosen, nameProblem, usePlacementChoices } from "./environmentForms";
+import { NumberField, PlacementFields, ShapeSelect, chosen, isPlacementReady, nameProblem, usePlacementChoices } from "./environmentForms";
 
 const VERSIONS = ["1.34", "1.33", "1.32"];
 const CONTROL_PLANE_SIZES = [1, 3, 5];
@@ -42,7 +42,7 @@ export function CreateClusterPanel({ taken, onClose }: { taken: string[]; onClos
     storage_backend: where.storageBackend,
     external_network: where.externalNetwork,
   };
-  const isPlaced = Boolean(where.network && where.storageBackend && where.externalNetwork);
+  const isPlaced = isPlacementReady(where, choices);
   return (
     <Wizard
       title="Create Kubernetes cluster"

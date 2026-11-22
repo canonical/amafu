@@ -198,16 +198,18 @@ async fn seed_cluster(store: &dyn Store) -> anyhow::Result<()> {
 }
 
 async fn seed_networking(store: &dyn Store, project: &str) -> anyhow::Result<()> {
-    let networks =
-        [("app", "10.10.0.0/24", true), ("db", "10.20.0.0/24", true), ("corp", "10.30.0.0/24", false)];
-    for (name, subnet, is_outbound_access_allowed) in networks {
-        put::<Network>(
-            store,
-            Some(project),
-            name,
-            json!({"subnet": subnet, "is_outbound_access_allowed": is_outbound_access_allowed}),
-        )
-        .await?;
+    let networks = [
+        ("app", "10.10.0.0/24", true, true),
+        ("db", "10.20.0.0/24", true, false),
+        ("corp", "10.30.0.0/24", false, false),
+    ];
+    for (name, subnet, is_outbound_access_allowed, is_platform_api_allowed) in networks {
+        let specification = json!({
+            "subnet": subnet,
+            "is_outbound_access_allowed": is_outbound_access_allowed,
+            "is_platform_api_allowed": is_platform_api_allowed,
+        });
+        put::<Network>(store, Some(project), name, specification).await?;
     }
     let rule = |direction: &str, protocol: &str, port: Option<u16>, remote: Value| json!({"direction": direction, "protocol": protocol, "ports": port.map(|port| json!({"first": port, "last": port})), "remote": remote});
     let anywhere = json!({"type": "any"});

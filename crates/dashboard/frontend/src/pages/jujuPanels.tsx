@@ -10,7 +10,7 @@ import Segments from "../components/Segments";
 import Wizard from "../components/Wizard";
 import { useSubmission } from "../components/submission";
 import { useProject } from "../session";
-import { NumberField, PlacementFields, ShapeSelect, chosen, nameProblem, usePlacementChoices } from "./environmentForms";
+import { NumberField, PlacementFields, ShapeSelect, chosen, isPlacementReady, nameProblem, usePlacementChoices } from "./environmentForms";
 
 const VERSIONS = ["4.2.1", "4.1.3", "3.6.11"];
 const MAXIMUM_UNITS = 100;
@@ -51,7 +51,7 @@ export function CreateControllerPanel({
       : { on, cluster: hostCluster };
   const problemWithName = nameProblem(name, taken);
   const controller = { version, substrate, first_model: firstModel, sign_in: "amafu" as const };
-  const isPlaced = on === "vms" ? Boolean(where.network && where.storageBackend && where.externalNetwork) : Boolean(hostCluster);
+  const isPlaced = on === "vms" ? isPlacementReady(where, choices) : Boolean(hostCluster);
   return (
     <Wizard
       title="Create Juju controller"

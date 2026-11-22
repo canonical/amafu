@@ -91,7 +91,7 @@ export type Volume = ClusterObject<
 >;
 
 export type Network = ClusterObject<
-  { subnet: string; is_outbound_access_allowed: boolean },
+  { subnet: string; is_outbound_access_allowed: boolean; is_platform_api_allowed?: boolean },
   { phase?: "pending" | "ready" | "failed"; gateway?: string; segment_id?: number; message?: string }
 >;
 

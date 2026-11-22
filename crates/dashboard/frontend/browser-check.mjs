@@ -192,6 +192,13 @@ async function workloads(browser) {
     await shoot(page, "kubernetes-detail");
   });
 
+  await attempt("a network is opened to the Amafu API from its row", async () => {
+    await page.goto(`${base}/networks`);
+    await page.getByLabel("Let VMs on db reach the Amafu API").click({ force: true });
+    await row(page, "db").getByText("Allowed").waitFor({ timeout: SETTLE_MILLISECONDS });
+    await shoot(page, "networks-platform-api");
+  });
+
   await attempt("creating a cluster previews its command", async () => {
     await page.goto(`${base}/kubernetes?panel=create`);
     await page.getByLabel("Name").fill("analytics");
@@ -199,6 +206,7 @@ async function workloads(browser) {
     await page.getByRole("button", { name: "Next" }).click();
     await page.getByRole("button", { name: "Next" }).click();
     await page.getByText("--pool general=2:large").waitFor();
+    await page.getByText("--network app").waitFor();
     await shoot(page, "kubernetes-create");
   });
 
