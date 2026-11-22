@@ -7,6 +7,7 @@ use amafu_domain::kinds::juju_controller::{
 use amafu_domain::kinds::kubernetes_cluster::{
     KubernetesCluster, KubernetesClusterChange, KubernetesClusterChangeSpecification, KubernetesRequest,
 };
+use amafu_domain::kinds::network::Network;
 use amafu_domain::kinds::operation::OperationStatus;
 use amafu_domain::kinds::ssh_key::{SshKey, SshKeyGroup, SshKeyGroupSpecification};
 use amafu_domain::kinds::vm::{Vm, VmSpecification};
@@ -166,8 +167,12 @@ impl StoreAdmission<'_> {
         project: Option<&ProjectName>,
         change: &KubernetesClusterChangeSpecification,
     ) -> Result<(), Refusal> {
-        if !matches!(change.request, KubernetesRequest::Delete) {
-            return Ok(());
+        match &change.request {
+            KubernetesRequest::Create { cluster } => {
+                return self.require_platform_api(project, &cluster.network).await;
+            }
+            KubernetesRequest::Delete => {}
+            _ => return Ok(()),
         }
         let controllers = list::<JujuController>(self.store, project, Consistency::Linearizable).await?;
         let hosted: Vec<String> = controllers
@@ -198,10 +203,25 @@ impl StoreAdmission<'_> {
         let JujuRequest::Create { controller } = &change.request else {
             return Ok(());
         };
-        let Some(cluster) = controller.substrate.hosting_cluster() else {
-            return Ok(());
-        };
-        self.require_ready_cluster(project, cluster).await
+        match &controller.substrate {
+            Substrate::Vms { network, .. } => self.require_platform_api(project, network).await,
+            Substrate::Kubernetes { cluster } => self.require_ready_cluster(project, cluster).await,
+        }
+    }
+
+    async fn require_platform_api(
+        &self,
+        project: Option<&ProjectName>,
+        network: &ObjectName,
+    ) -> Result<(), Refusal> {
+        let reference = ObjectReference::of::<Network>(project.cloned(), network.clone());
+        match get::<Network>(self.store, &reference, Consistency::Linearizable).await? {
+            Some(found) if found.specification.is_platform_api_allowed => Ok(()),
+            Some(_) => Err(Refusal::Unready(format!(
+                "network {network} does not let its VMs reach the Amafu API, which Kubernetes and Juju need; run amafu network allow-platform-api {network}"
+            ))),
+            None => Err(Refusal::Unready(format!("there is no network {network} in this project"))),
+        }
     }
 
     async fn require_controller_on_vms(
