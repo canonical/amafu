@@ -221,8 +221,6 @@ impl EnvironmentWorld {
     async fn settle_vm(&self, index: usize, vm: &Object<Vm>) {
         if let Some(version) = vm.specification.user_data.as_deref().and_then(bootstrapped_version) {
             self.juju.bootstrap(version);
-            self.set_status::<Vm>(vm, |status| status.phase = VmPhase::Stopped).await;
-            return;
         }
         if let BootSource::Container { environment, .. } = &vm.specification.boot {
             self.juju.bootstrap(environment.get("JUJU_VERSION").map_or("4.2.1", String::as_str));

@@ -34,6 +34,7 @@ use amafu_ssh_key_pair::SshKeyPair;
 use crate::environments::{AuthorityKey, CertificateAuthority, ContainerPlan, MachinePlan, Settings};
 
 const RUNNER: &str = "runner";
+const BOOTSTRAP_DEADLINE: time::Duration = time::Duration::minutes(45);
 const FIRST_CONTROLLER: &str = "controller-0";
 const JUJU_NAMESPACE: &str = "kube-system";
 
@@ -433,15 +434,19 @@ impl Bootstrap {
         scope: &ControllerScope<'_>,
         runner: &ObjectName,
     ) -> Result<bool, ActionError> {
-        if !matches!(scope.specification().await?.substrate, Substrate::Vms { .. }) {
+        if let Ok(Some(_)) = self.environment.platform.controller(&scope.endpoint().await?).await {
             return Ok(true);
         }
-        match self.environment.platform.controller(&scope.endpoint().await?).await {
-            Ok(Some(_)) => Ok(true),
-            _ => Err(ActionError::fatal(format!(
-                "the Juju bootstrap runner stopped but no controller answers; start VM {runner} and read {RUNNER_LOG}"
-            ))),
+        let started = scope.context.operation.status.current_step.as_ref().map(|step| step.started_at);
+        let is_overdue =
+            started.is_some_and(|started| scope.context.clock.now() - started > BOOTSTRAP_DEADLINE);
+        if is_overdue {
+            return Err(ActionError::fatal(format!(
+                "no Juju controller answered within {} minutes of starting its bootstrap; VM {runner} keeps the log in {RUNNER_LOG}",
+                BOOTSTRAP_DEADLINE.whole_minutes()
+            )));
         }
+        Ok(false)
     }
 }
 
@@ -450,8 +455,11 @@ impl Step<JujuControllerChange> for Bootstrap {
     async fn is_complete(&self, context: &ChangeContext<'_>) -> Result<bool, ActionError> {
         let scope = ControllerScope::new(context, &self.environment)?;
         let runner = scope.machine(RUNNER)?;
+        if matches!(scope.specification().await?.substrate, Substrate::Vms { .. }) {
+            return self.has_bootstrapped(&scope, runner.name()).await;
+        }
         match runner.phase().await? {
-            Some(VmPhase::Stopped) => self.has_bootstrapped(&scope, runner.name()).await,
+            Some(VmPhase::Stopped) => Ok(true),
             Some(VmPhase::Failed) => {
                 Err(ActionError::fatal("the Juju bootstrap runner failed; see its console"))
             }

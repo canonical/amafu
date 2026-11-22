@@ -73,7 +73,7 @@ impl BootstrapPlan {
             lines
         });
         let script = format!(
-            "cd {RUNNER_DIRECTORY} && mkdir -p work && . ./environment && HOME=/root TMPDIR={RUNNER_DIRECTORY}/work ./bootstrap 2>&1 | tee {RUNNER_LOG}; poweroff"
+            "cd {RUNNER_DIRECTORY} && mkdir -p work && . ./environment && HOME=/root TMPDIR={RUNNER_DIRECTORY}/work ./bootstrap 2>&1 | tee {RUNNER_LOG}"
         );
         let document = json!({
             "write_files": [
@@ -161,7 +161,7 @@ mod tests {
         let script = document["runcmd"][1][2].as_str().unwrap();
         assert!(script.starts_with("cd /root/amafu-juju && "));
         assert!(script.contains("HOME=/root TMPDIR=/root/amafu-juju/work ./bootstrap"));
-        assert!(script.ends_with("; poweroff"));
+        assert!(script.ends_with("| tee /root/amafu-juju/bootstrap.log"));
         assert_eq!(document["write_files"][0]["content"], BOOTSTRAP_SCRIPT);
         let environment = document["write_files"][1]["content"].as_str().unwrap();
         assert!(environment.contains("export JUJU_MACHINE_ADDRESS='10.1.0.4'\n"));

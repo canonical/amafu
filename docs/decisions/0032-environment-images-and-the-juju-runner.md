@@ -9,8 +9,8 @@ The Ubuntu image environments boot from and the Juju runner container were set i
 ## Decision
 
 - One cluster-scoped `EnvironmentSettings` object named `cluster`, changed only by admins, holds the Ubuntu disk image and the Juju runner image. `amafu environment-settings set` takes the Ubuntu image as a catalog ID; the Settings page offers the same.
-- A Juju controller on VMs is bootstrapped from a short-lived Ubuntu VM outside the controller's anti-affinity group. Cloud-init installs the `juju` snap for the controller's version and runs the same `bootstrap` script the container uses, from `/root` because the snap is strictly confined, then powers off whatever happened.
-- When that VM stops, the bootstrap counts as done only if a controller answers; otherwise the change fails and names the VM and `/root/amafu-juju/bootstrap.log`, which stays on its kept disk.
+- A Juju controller on VMs is bootstrapped from a short-lived Ubuntu VM outside the controller's anti-affinity group. Cloud-init installs the `juju` snap for the controller's version and runs the same `bootstrap` script the container uses, from `/root` because the snap is strictly confined.
+- The bootstrap is done when the controller answers. The runner does not power off: Amafu starts again any VM that should be running and whose guest stops. If no controller answers within 45 minutes, the change fails and names the runner, whose `/root/amafu-juju/bootstrap.log` holds the client's output.
 - Juju on Kubernetes keeps the runner container, so only it needs the runner image.
 - Platform signing keys are served at `/.well-known/jwks.json`, because Juju derives its discharge URL by removing that suffix from `login-token-refresh-url`.
 
