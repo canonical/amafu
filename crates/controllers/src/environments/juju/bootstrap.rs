@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::fmt::Write;
 use std::net::Ipv4Addr;
 
 use amafu_domain::kinds::juju_controller::{JujuVersion, SignInMode};
@@ -53,6 +54,38 @@ impl BootstrapPlan {
             }
         }
         environment
+    }
+}
+
+const BOOTSTRAP_SCRIPT: &str = include_str!("../../../../../image/juju-runner/bootstrap");
+const RUNNER_DIRECTORY: &str = "/root/amafu-juju";
+pub const RUNNER_LOG: &str = "/root/amafu-juju/bootstrap.log";
+
+fn shell_quoted(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
+}
+
+impl BootstrapPlan {
+    #[must_use]
+    pub fn runner_user_data(&self) -> String {
+        let environment = self.environment().iter().fold(String::new(), |mut lines, (name, value)| {
+            let _ = writeln!(lines, "export {name}={}", shell_quoted(value));
+            lines
+        });
+        let script = format!(
+            "cd {RUNNER_DIRECTORY} && mkdir -p work && . ./environment && HOME=/root TMPDIR={RUNNER_DIRECTORY}/work ./bootstrap 2>&1 | tee {RUNNER_LOG}; poweroff"
+        );
+        let document = json!({
+            "write_files": [
+                {"path": format!("{RUNNER_DIRECTORY}/bootstrap"), "permissions": "0700", "content": BOOTSTRAP_SCRIPT},
+                {"path": format!("{RUNNER_DIRECTORY}/environment"), "permissions": "0600", "content": environment},
+            ],
+            "runcmd": [
+                ["snap", "install", "juju", format!("--channel={}", self.version.snap_channel())],
+                ["sh", "-c", script],
+            ],
+        });
+        format!("#cloud-config\n{}", serde_yaml_ng::to_string(&document).unwrap_or_default())
     }
 }
 
@@ -112,6 +145,28 @@ mod tests {
         let cluster = plan(Target::Cluster { kubeconfig: String::from("config") }).environment();
         assert_eq!(cluster["JUJU_SUBSTRATE"], "kubernetes");
         assert!(!cluster.contains_key("JUJU_SSH_PRIVATE_KEY"));
+    }
+
+    #[test]
+    fn a_runner_vm_installs_juju_and_runs_the_bootstrap_script_from_roots_home() {
+        let mut machine = plan(Target::Machine {
+            address: Ipv4Addr::new(10, 1, 0, 4),
+            ssh_private_key: String::from("ssh"),
+        });
+        machine.private_key = String::from("it's secret");
+        let user_data = machine.runner_user_data();
+        let document: Value =
+            serde_yaml_ng::from_str(user_data.strip_prefix("#cloud-config\n").unwrap()).unwrap();
+        assert_eq!(document["runcmd"][0], json!(["snap", "install", "juju", "--channel=4.2/stable"]));
+        let script = document["runcmd"][1][2].as_str().unwrap();
+        assert!(script.starts_with("cd /root/amafu-juju && "));
+        assert!(script.contains("HOME=/root TMPDIR=/root/amafu-juju/work ./bootstrap"));
+        assert!(script.ends_with("; poweroff"));
+        assert_eq!(document["write_files"][0]["content"], BOOTSTRAP_SCRIPT);
+        let environment = document["write_files"][1]["content"].as_str().unwrap();
+        assert!(environment.contains("export JUJU_MACHINE_ADDRESS='10.1.0.4'\n"));
+        assert!(environment.contains(r"export JUJU_CA_PRIVATE_KEY='it'\''s secret'"));
+        assert_eq!(document["write_files"][1]["permissions"], "0600");
     }
 
     #[test]

@@ -9,6 +9,7 @@ use amafu_domain::kinds::juju_controller::{
     JujuController, JujuControllerChange, JujuRequest, JujuVersion, Substrate,
 };
 use amafu_domain::kinds::kubernetes_cluster::KubernetesCluster;
+use amafu_domain::kinds::machine_shape::MachineShape;
 use amafu_domain::kinds::security_group::{
     Direction, PortRange, Protocol, Remote, SecurityGroup, SecurityGroupRule, SecurityGroupSpecification,
 };
@@ -22,7 +23,7 @@ use base64::engine::general_purpose::STANDARD;
 use serde_json::{Value, json};
 
 use super::JujuEnvironment;
-use super::bootstrap::{self, BOOTSTRAP_KEY_COMMENT, BootstrapPlan, Target};
+use super::bootstrap::{self, BOOTSTRAP_KEY_COMMENT, BootstrapPlan, RUNNER_LOG, Target};
 use super::provisioning::ProvisionedMachine;
 use super::scope::{
     CA_CERTIFICATE, CA_KEY, CONTROLLER_MODEL, CREDENTIAL_SECRET, ChangeContext, ControllerScope,
@@ -30,7 +31,7 @@ use super::scope::{
 };
 use amafu_ssh_key_pair::SshKeyPair;
 
-use crate::environments::{AuthorityKey, CertificateAuthority, ContainerPlan, Settings};
+use crate::environments::{AuthorityKey, CertificateAuthority, ContainerPlan, MachinePlan, Settings};
 
 const RUNNER: &str = "runner";
 const FIRST_CONTROLLER: &str = "controller-0";
@@ -426,12 +427,31 @@ impl Bootstrap {
     }
 }
 
+impl Bootstrap {
+    async fn has_bootstrapped(
+        &self,
+        scope: &ControllerScope<'_>,
+        runner: &ObjectName,
+    ) -> Result<bool, ActionError> {
+        if !matches!(scope.specification().await?.substrate, Substrate::Vms { .. }) {
+            return Ok(true);
+        }
+        match self.environment.platform.controller(&scope.endpoint().await?).await {
+            Ok(Some(_)) => Ok(true),
+            _ => Err(ActionError::fatal(format!(
+                "the Juju bootstrap runner stopped but no controller answers; start VM {runner} and read {RUNNER_LOG}"
+            ))),
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl Step<JujuControllerChange> for Bootstrap {
     async fn is_complete(&self, context: &ChangeContext<'_>) -> Result<bool, ActionError> {
         let scope = ControllerScope::new(context, &self.environment)?;
-        match scope.machine(RUNNER)?.phase().await? {
-            Some(VmPhase::Stopped) => Ok(true),
+        let runner = scope.machine(RUNNER)?;
+        match runner.phase().await? {
+            Some(VmPhase::Stopped) => self.has_bootstrapped(&scope, runner.name()).await,
             Some(VmPhase::Failed) => {
                 Err(ActionError::fatal("the Juju bootstrap runner failed; see its console"))
             }
@@ -459,18 +479,31 @@ impl Step<JujuControllerChange> for Bootstrap {
             token_refresh_url: self.environment.settings.token_refresh_url.clone(),
             target,
         };
-        let security_groups = match specification.substrate {
-            Substrate::Vms { .. } => vec![scope.named("controller")?],
-            Substrate::Kubernetes { .. } => Vec::new(),
-        };
-        runner
-            .run_container(ContainerPlan {
-                image: ObjectName::new(RUNNER_IMAGE).map_err(ActionError::fatal)?,
-                environment: plan.environment(),
-                network,
-                security_groups,
-            })
-            .await
+        match specification.substrate {
+            Substrate::Vms { storage_backend, .. } => {
+                runner
+                    .run_once(MachinePlan {
+                        shape: MachineShape::Small,
+                        image: ObjectName::new(UBUNTU_IMAGE).map_err(ActionError::fatal)?,
+                        network,
+                        storage_backend,
+                        security_groups: vec![scope.named("controller")?],
+                        user_data: plan.runner_user_data(),
+                        labels: BTreeMap::new(),
+                    })
+                    .await
+            }
+            Substrate::Kubernetes { .. } => {
+                runner
+                    .run_container(ContainerPlan {
+                        image: ObjectName::new(RUNNER_IMAGE).map_err(ActionError::fatal)?,
+                        environment: plan.environment(),
+                        network,
+                        security_groups: Vec::new(),
+                    })
+                    .await
+            }
+        }
     }
 }
 

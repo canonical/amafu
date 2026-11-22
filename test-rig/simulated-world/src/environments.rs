@@ -70,6 +70,11 @@ fn trust() -> IssuerTrust {
     }
 }
 
+fn bootstrapped_version(user_data: &str) -> Option<&str> {
+    let (_, rest) = user_data.split_once("export JUJU_VERSION='")?;
+    rest.split_once('\'').map(|(version, _)| version)
+}
+
 pub struct EnvironmentWorld {
     pub store: Arc<MemoryStore>,
     pub kubernetes: Arc<FakeKubernetes>,
@@ -214,6 +219,11 @@ impl EnvironmentWorld {
     }
 
     async fn settle_vm(&self, index: usize, vm: &Object<Vm>) {
+        if let Some(version) = vm.specification.user_data.as_deref().and_then(bootstrapped_version) {
+            self.juju.bootstrap(version);
+            self.set_status::<Vm>(vm, |status| status.phase = VmPhase::Stopped).await;
+            return;
+        }
         if let BootSource::Container { environment, .. } = &vm.specification.boot {
             self.juju.bootstrap(environment.get("JUJU_VERSION").map_or("4.2.1", String::as_str));
             if environment.get("JUJU_SUBSTRATE").map(String::as_str) == Some("kubernetes") {

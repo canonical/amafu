@@ -73,6 +73,19 @@ impl<'a> Machine<'a> {
     }
 
     pub async fn create(&self, plan: MachinePlan) -> Result<(), ActionError> {
+        let spread = Some(self.ownership.environment().clone());
+        self.create_with(plan, spread).await
+    }
+
+    pub async fn run_once(&self, plan: MachinePlan) -> Result<(), ActionError> {
+        self.create_with(plan, None).await
+    }
+
+    async fn create_with(
+        &self,
+        plan: MachinePlan,
+        anti_affinity_group: Option<ObjectName>,
+    ) -> Result<(), ActionError> {
         let labels = self.labels(plan.labels);
         let volume = VolumeSpecification {
             size_gibibytes: plan.shape.disk_gibibytes(),
@@ -93,7 +106,7 @@ impl<'a> Machine<'a> {
             power_state: PowerState::Running,
             user_data: Some(plan.user_data),
             priority: 0,
-            anti_affinity_group: Some(self.ownership.environment().clone()),
+            anti_affinity_group,
             minimum_cpu_baseline: None,
             ssh_keys: Vec::new(),
         };
