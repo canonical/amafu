@@ -435,7 +435,7 @@ mod tests {
         let unset = EnvironmentsSection::default();
         assert_eq!(unset.address(&api("0.0.0.0:7443"), underlay), "10.20.0.11:7443");
         assert_eq!(unset.address(&api("10.20.0.12:7443"), underlay), "10.20.0.12:7443");
-        let configured = EnvironmentsSection { api_address: Some(String::from("api.lab:7443")), ..unset };
+        let configured = EnvironmentsSection { api_address: Some(String::from("api.lab:7443")) };
         assert_eq!(configured.address(&api("0.0.0.0:7443"), underlay), "api.lab:7443");
     }
 
