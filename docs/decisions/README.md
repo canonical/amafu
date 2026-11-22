@@ -34,3 +34,4 @@ Each record states a decision that is hard to reverse, why it was taken, and wha
 | [0028](0028-kubernetes-and-juju-environments.md) | Kubernetes clusters and Juju controllers as environments run by step plans |
 | [0029](0029-cloud-hypervisor-v55-and-taps-over-the-api-socket.md) | Cloud Hypervisor v55, configurations built from safe parts, and taps handed over the API socket |
 | [0030](0030-ssh-keys-and-key-groups.md) | SSH keys and key groups, granted at first placement |
+| [0031](0031-guests-reaching-the-platform-api.md) | Guests reach the platform API only on networks that ask for it |
