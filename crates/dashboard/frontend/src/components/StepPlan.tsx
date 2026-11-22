@@ -21,6 +21,30 @@ export function planPhase<Step>(plan: Plan<Step>): { phase: string; label?: stri
   return { phase: "in-progress", label: "In progress", detail: plan.status.current_step?.last_error };
 }
 
+export function startedAt<Step>(plan: Plan<Step>): number {
+  const moment = plan.status.finished_steps?.[0]?.started_at ?? plan.status.current_step?.started_at;
+  return moment ? Date.parse(moment) : Number.POSITIVE_INFINITY;
+}
+
+export function sinceCreation<Change extends Plan<unknown> & { specification: { request: { kind: string } } }>(
+  changes: Change[],
+): Change[] {
+  const newestFirst = [...changes].sort((first, second) => startedAt(second) - startedAt(first));
+  const creation = newestFirst.findIndex((change) => change.specification.request.kind === "create");
+  return creation < 0 ? newestFirst : newestFirst.slice(0, creation + 1);
+}
+
+export function StartedAt<Step>({ plan }: { plan: Plan<Step> }) {
+  const moment = startedAt(plan);
+  return Number.isFinite(moment) ? (
+    <time dateTime={new Date(moment).toISOString()} title={new Date(moment).toLocaleString()}>
+      {sinceNow(new Date(moment).toISOString())}
+    </time>
+  ) : (
+    <span className="u-text--muted">Waiting</span>
+  );
+}
+
 export function currentStep<Step>(plan: Plan<Step>, describe: (step: Step) => string): string {
   const step = plan.specification.steps[plan.status.completed_steps ?? 0];
   return plan.status.outcome || !step ? "" : describe(step);

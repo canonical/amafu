@@ -12,7 +12,7 @@ import PageHeader from "../components/PageHeader";
 import Panel from "../components/Panel";
 import PanelTabs from "../components/PanelTabs";
 import Status from "../components/Status";
-import StepPlan, { PlanProgress, planPhase } from "../components/StepPlan";
+import StepPlan, { PlanProgress, StartedAt, planPhase, sinceCreation } from "../components/StepPlan";
 import SubjectLink from "../components/SubjectLink";
 import { usePanel } from "../components/panels";
 import type { PanelState } from "../components/panels";
@@ -32,7 +32,7 @@ function describer(cluster: string) {
 }
 
 function changesOf(changes: KubernetesClusterChange[], cluster: string): KubernetesClusterChange[] {
-  return changes.filter((change) => change.specification.cluster === cluster);
+  return sinceCreation(changes.filter((change) => change.specification.cluster === cluster));
 }
 
 function ChangeList({ changes }: { changes: KubernetesClusterChange[] }) {
@@ -41,11 +41,12 @@ function ChangeList({ changes }: { changes: KubernetesClusterChange[] }) {
   }
   return (
     <MainTable
-      headers={[{ content: "Change" }, { content: "Progress" }, { content: "Status" }]}
+      headers={[{ content: "Change" }, { content: "Started" }, { content: "Progress" }, { content: "Status" }]}
       rows={changes.map((change) => ({
         key: change.metadata.name,
         columns: [
           { content: change.specification.request.kind.replaceAll("-", " ") },
+          { content: <StartedAt plan={change} /> },
           { content: <PlanProgress plan={change} describe={describer(change.specification.cluster)} /> },
           { content: <Status {...planPhase(change)} /> },
         ],

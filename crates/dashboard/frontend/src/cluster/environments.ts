@@ -167,8 +167,10 @@ export function memberName(cluster: string, member: ClusterMember): string {
   return member.pool ? `${cluster}-${member.pool}-${member.index}` : `${cluster}-cp-${member.index}`;
 }
 
+const ACRONYMS: Record<string, string> = { api: "API", ha: "HA", dns: "DNS", ca: "CA", vm: "VM", vms: "VMs" };
+
 export function describePlanStep(step: PlanStep, cluster = ""): string {
-  const words = step.step.replaceAll("-", " ");
+  const words = step.step.split("-").map((word) => ACRONYMS[word] ?? word).join(" ");
   const action = words.charAt(0).toUpperCase() + words.slice(1);
   const subject = step.member
     ? memberName(cluster, step.member)

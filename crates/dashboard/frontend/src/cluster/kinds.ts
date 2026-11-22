@@ -192,6 +192,7 @@ export type Operation = ClusterObject<
   {
     completed_steps?: number;
     current_step?: { attempts: number; last_error?: string; started_at: string };
+    finished_steps?: { started_at: string; finished_at: string }[];
     rollback?: { remaining_steps: number };
     outcome?: OperationOutcome;
   }
