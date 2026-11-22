@@ -473,7 +473,7 @@ async fn seed_environments(store: &dyn Store) -> anyhow::Result<()> {
     )
     .await?;
     let controller = json!({
-        "version": "4.2.1", "first_model": "default",
+        "version": "3.6.29", "first_model": "default",
         "substrate": {"on": "vms", "controllers": 1, "shape": "medium", "network": "app",
                       "storage_backend": "ceph-prod", "external_network": "public"},
     });
@@ -482,7 +482,7 @@ async fn seed_environments(store: &dyn Store) -> anyhow::Result<()> {
         Some(DEFAULT_PROJECT),
         "observability",
         controller,
-        json!({"phase": "ready", "uuid": "5e1d", "addresses": ["203.0.113.21"], "version": "4.2.1",
+        json!({"phase": "ready", "uuid": "5e1d", "addresses": ["203.0.113.21"], "version": "3.6.29",
                "models": [{"name": "default", "uuid": "a1b2c3d4"}, {"name": "monitoring", "uuid": "e5f6a7b8"}]}),
     )
     .await?;

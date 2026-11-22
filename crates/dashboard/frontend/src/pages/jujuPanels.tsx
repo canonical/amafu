@@ -12,7 +12,7 @@ import { useSubmission } from "../components/submission";
 import { useProject } from "../session";
 import { NumberField, PlacementFields, ShapeSelect, chosen, isPlacementReady, nameProblem, usePlacementChoices } from "./environmentForms";
 
-const VERSIONS = ["4.2.1", "4.1.3", "3.6.11"];
+const VERSIONS = ["3.6.29", "4.0.16"];
 const MAXIMUM_UNITS = 100;
 
 export function CreateControllerPanel({

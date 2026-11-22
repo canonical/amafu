@@ -27,7 +27,7 @@ pub enum SignIn {
 
 #[derive(Args)]
 pub struct ControllerArguments {
-    #[arg(long, value_parser = version, help = "For example 4.2.1")]
+    #[arg(long, value_parser = version, help = "A released Juju version, such as 3.6.29")]
     version: JujuVersion,
     #[arg(long = "on", value_enum, default_value = "vms")]
     substrate: SubstrateKind,
