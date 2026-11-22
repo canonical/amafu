@@ -15,6 +15,7 @@ import Status from "../components/Status";
 import { usePanel } from "../components/panels";
 import { useSubmission } from "../components/submission";
 import { shortDigest } from "../format";
+import EnvironmentImages from "./environmentSettings";
 import { DetailList } from "./instances";
 
 const SINKS = clusterScope("audit-sinks");
@@ -107,6 +108,7 @@ export default function Settings() {
         Upgrades are started from the command line, where the signed image is checked before any node writes it.
       </p>
       <Command words={["amafu", "upgrade", "start", "--image", "image-manifest.json"]} title="Upgrade" />
+      <EnvironmentImages />
       <div className="section-header">
         <h2 className="p-heading--4 u-no-margin--bottom">Audit export</h2>
         <Button appearance="positive" className="u-no-margin--bottom" onClick={() => panel.open("create")}>

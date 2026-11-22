@@ -75,6 +75,8 @@ export type Vm = ClusterObject<VmSpecification, VmStatus>;
 
 export type ImageSource = { type: "disk"; url: string; sha256: string } | { type: "container"; reference: string };
 
+export type EnvironmentSettings = ClusterObject<{ ubuntu_image?: ImageSource; juju_runner_image?: string }, object>;
+
 export type Image = ClusterObject<
   { source: ImageSource },
   { phase?: "pending" | "ready" | "failed"; size_bytes?: number; cached_on?: string[]; message?: string }

@@ -23,7 +23,10 @@ export function planPhase<Step>(plan: Plan<Step>): { phase: string; label?: stri
 
 export function startedAt<Step>(plan: Plan<Step>): number {
   const moment = plan.status.finished_steps?.[0]?.started_at ?? plan.status.current_step?.started_at;
-  return moment ? Date.parse(moment) : Number.POSITIVE_INFINITY;
+  if (moment) {
+    return Date.parse(moment);
+  }
+  return plan.status.outcome ? Number.NEGATIVE_INFINITY : Number.POSITIVE_INFINITY;
 }
 
 export function sinceCreation<Change extends Plan<unknown> & { specification: { request: { kind: string } } }>(
@@ -41,7 +44,7 @@ export function StartedAt<Step>({ plan }: { plan: Plan<Step> }) {
       {sinceNow(new Date(moment).toISOString())}
     </time>
   ) : (
-    <span className="u-text--muted">Waiting</span>
+    <span className="u-text--muted">{plan.status.outcome ? "—" : "Waiting"}</span>
   );
 }
 

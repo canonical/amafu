@@ -199,6 +199,14 @@ async function workloads(browser) {
     await shoot(page, "networks-platform-api");
   });
 
+  await attempt("the environment images are chosen in settings", async () => {
+    await page.goto(`${base}/settings`);
+    await page.getByText("Environment images").waitFor();
+    await page.getByRole("button", { name: "Change" }).click();
+    await page.getByText("amafu environment-settings set").waitFor();
+    await shoot(page, "settings-environment-images");
+  });
+
   await attempt("creating a cluster previews its command", async () => {
     await page.goto(`${base}/kubernetes?panel=create`);
     await page.getByLabel("Name").fill("analytics");
