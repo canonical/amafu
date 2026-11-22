@@ -7,6 +7,9 @@ use serde_json::{Value, json};
 use crate::environments::CertificateAuthority;
 
 const CONFIGURATION_FILE: &str = "/root/k8s-configuration.yaml";
+const CONTROLLER_BINDING: &str = "amafu-controller";
+const API_WAIT_SECONDS: u32 = 900;
+const RETRY_SECONDS: u32 = 5;
 const AUTHENTICATION_FILE: &str = "authentication.yaml";
 const ARGUMENTS_DIRECTORY: &str = "/var/snap/k8s/common/args/conf.d";
 
@@ -84,15 +87,9 @@ pub fn bootstrap(
         &[
             command(&["k8s", "bootstrap", "--file", CONFIGURATION_FILE]),
             command(&["k8s", "x-capi", "set-auth-token", k8sd_token]),
-            command(&[
-                "k8s",
-                "kubectl",
-                "create",
-                "clusterrolebinding",
-                "amafu-controller",
-                "--clusterrole=cluster-admin",
-                &format!("--user={SERVICE_SUBJECT}"),
-            ]),
+            until_it_succeeds(&format!(
+                "k8s kubectl get clusterrolebinding {CONTROLLER_BINDING} || k8s kubectl create clusterrolebinding {CONTROLLER_BINDING} --clusterrole=cluster-admin --user={SERVICE_SUBJECT}"
+            )),
         ],
     )
 }
@@ -109,6 +106,17 @@ pub fn join(version: &KubernetesVersion, token: &str, control_plane: Option<&Con
 
 fn command(arguments: &[&str]) -> Value {
     json!(arguments)
+}
+
+fn until_it_succeeds(script: &str) -> Value {
+    let attempts = API_WAIT_SECONDS / RETRY_SECONDS;
+    command(&[
+        "sh",
+        "-c",
+        &format!(
+            "for attempt in $(seq {attempts}); do ({script}) && exit 0; sleep {RETRY_SECONDS}; done; exit 1"
+        ),
+    ])
 }
 
 fn user_data(version: &KubernetesVersion, settings: Option<&Value>, commands: &[Value]) -> String {
@@ -166,6 +174,9 @@ mod tests {
         assert_eq!(commands[0][4], "--channel=1.34-classic/stable");
         assert_eq!(commands[1][1], "bootstrap");
         assert_eq!(commands[2], json!(["k8s", "x-capi", "set-auth-token", "secret"]));
+        let binding = commands[3][2].as_str().unwrap();
+        assert_eq!((&commands[3][0], &commands[3][1]), (&json!("sh"), &json!("-c")));
+        assert!(binding.starts_with("for attempt in $(seq 180); do (k8s kubectl get clusterrolebinding amafu-controller || k8s kubectl create clusterrolebinding amafu-controller --clusterrole=cluster-admin --user=amafu@amafu) && exit 0; sleep 5; done"));
         let settings = written_settings(&document);
         assert_eq!(settings["extra-sans"], json!(["203.0.113.7"]));
         assert_eq!(settings["ca-crt"], "ca");
