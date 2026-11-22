@@ -24,6 +24,7 @@ Generated from the kind registry by `cargo rig reference`. Do not edit it by han
 | SshKey | `/v1/ssh-keys` | 1 | project | members of the project |
 | SshKeyGroup | `/v1/ssh-key-groups` | 1 | project | members of the project |
 | EnvironmentSecret | `/v1/environment-secrets` | 1 | cluster | admins |
+| EnvironmentSettings | `/v1/environment-settings` | 1 | cluster | admins |
 | KubernetesCluster | `/v1/kubernetes-clusters` | 1 | project | nodes |
 | KubernetesClusterChange | `/v1/kubernetes-cluster-changes` | 1 | project | members of the project |
 | JujuController | `/v1/juju-controllers` | 1 | project | nodes |

@@ -3,6 +3,7 @@ mod catalog;
 mod connection;
 mod container;
 mod dashboard;
+mod environment_settings;
 mod floating_ip;
 mod image;
 mod install;
@@ -80,6 +81,11 @@ enum Command {
     Kubernetes(kubernetes::KubernetesCommand),
     #[command(subcommand, about = "Bootstrap and change Juju controllers")]
     Juju(juju::JujuCommand),
+    #[command(
+        subcommand,
+        about = "Choose the images Kubernetes clusters and Juju controllers are built from"
+    )]
+    EnvironmentSettings(environment_settings::EnvironmentSettingsCommand),
     #[command(subcommand, about = "Give automation its own credentials")]
     ServiceAccount(service_account::ServiceAccountCommand),
     #[command(subcommand, about = "Add, generate and import the SSH keys VMs and containers accept")]
@@ -115,6 +121,9 @@ async fn run(arguments: Arguments) -> anyhow::Result<()> {
         Command::Node(command) => node::run(&client, command, arguments.output).await,
         Command::Operation(command) => operation::run(&client, command, arguments.output).await,
         Command::AuditSink(command) => audit_sink::run(&client, command, arguments.output).await,
+        Command::EnvironmentSettings(command) => {
+            environment_settings::run(&client, command, arguments.output).await
+        }
         Command::Upgrade(command) => upgrade::run(&client, command, arguments.output).await,
         Command::Kubernetes(command) => kubernetes::run(&client, command, arguments.output).await,
         Command::Juju(command) => juju::run(&client, command, arguments.output).await,

@@ -34,7 +34,7 @@ pub fn print_catalog(entries: &[CatalogEntry], format: OutputFormat) -> anyhow::
     Ok(())
 }
 
-async fn find(client: &ApiClient, id: &str, kind: CatalogKind) -> anyhow::Result<CatalogEntry> {
+pub async fn find(client: &ApiClient, id: &str, kind: CatalogKind) -> anyhow::Result<CatalogEntry> {
     client
         .image_catalog()
         .await?
