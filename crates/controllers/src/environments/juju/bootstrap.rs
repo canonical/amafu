@@ -94,7 +94,7 @@ mod tests {
             sign_in: SignInMode::Amafu,
             certificate: String::from("ca"),
             private_key: String::from("key"),
-            token_refresh_url: String::from("https://amafu.example/v1/jwks"),
+            token_refresh_url: String::from("https://amafu.example/.well-known/jwks.json"),
             target,
         }
     }
@@ -108,7 +108,7 @@ mod tests {
         .environment();
         assert_eq!(machine["JUJU_SUBSTRATE"], "machine");
         assert_eq!(machine["JUJU_MACHINE_ADDRESS"], "10.1.0.4");
-        assert_eq!(machine["JUJU_LOGIN_TOKEN_REFRESH_URL"], "https://amafu.example/v1/jwks");
+        assert_eq!(machine["JUJU_LOGIN_TOKEN_REFRESH_URL"], "https://amafu.example/.well-known/jwks.json");
         let cluster = plan(Target::Cluster { kubeconfig: String::from("config") }).environment();
         assert_eq!(cluster["JUJU_SUBSTRATE"], "kubernetes");
         assert!(!cluster.contains_key("JUJU_SSH_PRIVATE_KEY"));

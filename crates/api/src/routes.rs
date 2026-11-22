@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use amafu_domain::platform_access::JWKS_PATH;
 use amafu_domain::registry;
 use amafu_interfaces::{AuditLog, Clock, Identifiers, ImageCatalog, Store};
 use axum::body::Bytes;
@@ -158,7 +159,7 @@ fn credential_routes(router: Router<ApiState>) -> Router<ApiState> {
 
 fn public_router(state: ApiState) -> Router<ApiState> {
     Router::new()
-        .route("/v1/jwks", get(move || platform_tokens::json_web_keys(state.clone())))
+        .route(JWKS_PATH, get(move || platform_tokens::json_web_keys(state.clone())))
         .route("/.well-known/openid-configuration", get(platform_tokens::discovery))
         .route(
             "/v1/tokens",

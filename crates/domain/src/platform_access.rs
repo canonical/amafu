@@ -4,6 +4,7 @@ use crate::access::Role;
 use crate::name::ProjectName;
 
 pub const ISSUER: &str = "https://amafu.internal";
+pub const JWKS_PATH: &str = "/.well-known/jwks.json";
 pub const SERVICE_SUBJECT: &str = "amafu@amafu";
 pub const ROLES: [Role; 4] = [Role::Viewer, Role::Member, Role::Operator, Role::Admin];
 

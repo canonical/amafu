@@ -115,7 +115,7 @@ impl EnvironmentWorld {
             settings: JujuSettings {
                 ubuntu_image: Some(ubuntu_image()),
                 runner_image: Some(RUNNER_IMAGE.parse().unwrap_or_else(|error| panic!("{error}"))),
-                token_refresh_url: String::from("https://amafu.example/v1/jwks"),
+                token_refresh_url: String::from("https://amafu.example/.well-known/jwks.json"),
                 amafu_certificate_authority: String::from("amafu-ca"),
             },
         })

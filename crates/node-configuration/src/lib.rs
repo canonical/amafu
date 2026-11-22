@@ -10,6 +10,7 @@ use amafu_controllers::{BootSlotsSettings, SchedulingSettings};
 use amafu_domain::kinds::image::ImageSource;
 use amafu_domain::kinds::node::NodeRole;
 use amafu_domain::kinds::node_lease::LeaseTerms;
+use amafu_domain::platform_access::{ISSUER, JWKS_PATH};
 use amafu_domain::{NodeName, OciReference, ZoneName};
 use amafu_interfaces::{ExternalTool, TrustedImageKeys};
 use amafu_network::UnderlayConfiguration;
@@ -81,7 +82,7 @@ impl EnvironmentsSection {
         JujuSettings {
             ubuntu_image: self.ubuntu_image.clone(),
             runner_image: self.juju_runner_image.clone(),
-            token_refresh_url: format!("https://{}/v1/jwks", self.address(api, underlay)),
+            token_refresh_url: format!("https://{}{JWKS_PATH}", self.address(api, underlay)),
             amafu_certificate_authority: certificate_authority.to_owned(),
         }
     }
@@ -97,7 +98,7 @@ impl EnvironmentsSection {
         KubernetesSettings {
             ubuntu_image: self.ubuntu_image.clone(),
             trust: IssuerTrust {
-                issuer: amafu_domain::platform_access::ISSUER.to_owned(),
+                issuer: ISSUER.to_owned(),
                 discovery_url: format!("https://{address}/.well-known/openid-configuration"),
                 certificate_authority: certificate_authority.to_owned(),
             },

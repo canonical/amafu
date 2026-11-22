@@ -109,7 +109,7 @@ mod platform_tokens {
         let minted = client.raw(Method::POST, "/v1/kubernetes-clusters/platform/tokens", None).await.unwrap();
         assert_eq!(minted.status, 201);
         let issued: amafu_token_issuer::Issued = serde_json::from_slice(&minted.body).unwrap();
-        let keys = anonymous.raw(Method::GET, "/v1/jwks", None).await.unwrap();
+        let keys = anonymous.raw(Method::GET, "/.well-known/jwks.json", None).await.unwrap();
         assert_eq!(keys.status, 200);
         let set: JwkSet = serde_json::from_slice(&keys.body).unwrap();
         let claims = Claims::verified(&issued.token, &published_key(&set, &key)).unwrap();

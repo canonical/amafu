@@ -1,7 +1,9 @@
 use amafu_domain::access::Verb;
 use amafu_domain::kinds::juju_controller::JujuController;
 use amafu_domain::kinds::kubernetes_cluster::KubernetesCluster;
-use amafu_domain::platform_access::{ISSUER, juju_access, juju_user, kubernetes_group, platform_user};
+use amafu_domain::platform_access::{
+    ISSUER, JWKS_PATH, juju_access, juju_user, kubernetes_group, platform_user,
+};
 use amafu_domain::registry::KindDescriptor;
 use amafu_domain::{Object, ObjectReference, Resource};
 use std::sync::Arc;
@@ -20,7 +22,6 @@ use crate::routes::ApiState;
 use crate::wire::ErrorCode;
 
 const TOKEN_LIFETIME: Duration = Duration::minutes(5);
-const JWKS_PATH: &str = "/v1/jwks";
 
 pub async fn json_web_keys(state: ApiState) -> Response {
     match Keyring::new(Arc::clone(&state.store)).published(state.clock.now()).await {

@@ -76,8 +76,8 @@ mod tests {
 
     #[test]
     fn discovery_points_at_the_key_set() {
-        let document = discovery_document("https://amafu.example", "https://amafu.example/v1/jwks");
-        assert_eq!(document["jwks_uri"], "https://amafu.example/v1/jwks");
+        let document = discovery_document("https://amafu.example", "https://amafu.example/.well-known/jwks.json");
+        assert_eq!(document["jwks_uri"], "https://amafu.example/.well-known/jwks.json");
         assert_eq!(document["id_token_signing_alg_values_supported"][0], "ES256");
     }
 }
