@@ -7,11 +7,10 @@ use amafu_api::TokenIdentity;
 use amafu_controllers::environments::juju::JujuSettings;
 use amafu_controllers::environments::kubernetes::{IssuerTrust, KubernetesSettings};
 use amafu_controllers::{BootSlotsSettings, SchedulingSettings};
-use amafu_domain::kinds::image::ImageSource;
 use amafu_domain::kinds::node::NodeRole;
 use amafu_domain::kinds::node_lease::LeaseTerms;
 use amafu_domain::platform_access::{ISSUER, JWKS_PATH};
-use amafu_domain::{NodeName, OciReference, ZoneName};
+use amafu_domain::{NodeName, ZoneName};
 use amafu_interfaces::{ExternalTool, TrustedImageKeys};
 use amafu_network::UnderlayConfiguration;
 use serde::{Deserialize, Serialize};
@@ -52,10 +51,6 @@ pub struct NodeConfiguration {
 #[serde(deny_unknown_fields, default)]
 pub struct EnvironmentsSection {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ubuntu_image: Option<ImageSource>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub juju_runner_image: Option<OciReference>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub api_address: Option<String>,
 }
 
@@ -80,8 +75,6 @@ impl EnvironmentsSection {
         certificate_authority: &str,
     ) -> JujuSettings {
         JujuSettings {
-            ubuntu_image: self.ubuntu_image.clone(),
-            runner_image: self.juju_runner_image.clone(),
             token_refresh_url: format!("https://{}{JWKS_PATH}", self.address(api, underlay)),
             amafu_certificate_authority: certificate_authority.to_owned(),
         }
@@ -96,7 +89,6 @@ impl EnvironmentsSection {
     ) -> KubernetesSettings {
         let address = self.address(api, underlay);
         KubernetesSettings {
-            ubuntu_image: self.ubuntu_image.clone(),
             trust: IssuerTrust {
                 issuer: ISSUER.to_owned(),
                 discovery_url: format!("https://{address}/.well-known/openid-configuration"),

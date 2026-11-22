@@ -6,7 +6,6 @@ mod scope;
 
 use std::sync::Arc;
 
-use amafu_domain::kinds::image::ImageSource;
 use amafu_domain::kinds::kubernetes_cluster::{KubernetesClusterChange, KubernetesStep};
 use amafu_interfaces::{ActionError, Identifiers, KubernetesPlatform};
 use amafu_reconciler::{Step, StepRegistry};
@@ -16,7 +15,6 @@ pub use cloud_init::IssuerTrust;
 pub use scope::{endpoint_of, ownership_of};
 
 pub struct KubernetesSettings {
-    pub ubuntu_image: Option<ImageSource>,
     pub trust: IssuerTrust,
 }
 

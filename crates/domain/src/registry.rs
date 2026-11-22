@@ -9,6 +9,7 @@ use crate::kinds::audit_sink::AuditSink;
 use crate::kinds::certificate_revocation::CertificateRevocation;
 use crate::kinds::cluster_version::ClusterVersion;
 use crate::kinds::environment_secret::EnvironmentSecret;
+use crate::kinds::environment_settings::EnvironmentSettings;
 use crate::kinds::external_network::ExternalNetwork;
 use crate::kinds::floating_ip::FloatingIp;
 use crate::kinds::image::Image;
@@ -102,7 +103,7 @@ impl KindDescriptor {
 }
 
 #[must_use]
-pub fn kinds() -> [KindDescriptor; 24] {
+pub fn kinds() -> [KindDescriptor; 25] {
     [
         KindDescriptor::of::<Node>(),
         KindDescriptor::of::<NodeLease>(),
@@ -124,6 +125,7 @@ pub fn kinds() -> [KindDescriptor; 24] {
         KindDescriptor::of::<SshKey>(),
         KindDescriptor::of::<SshKeyGroup>(),
         KindDescriptor::of::<EnvironmentSecret>(),
+        KindDescriptor::of::<EnvironmentSettings>(),
         KindDescriptor::of::<KubernetesCluster>(),
         KindDescriptor::of::<KubernetesClusterChange>(),
         KindDescriptor::of::<JujuController>(),

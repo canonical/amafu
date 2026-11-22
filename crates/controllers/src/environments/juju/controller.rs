@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use amafu_domain::ObjectName;
 use amafu_domain::kinds::environment::EnvironmentPhase;
 use amafu_domain::kinds::environment_secret::{EnvironmentSecret, EnvironmentSecretSpecification};
 use amafu_domain::kinds::floating_ip::{FloatingIp, FloatingIpSpecification, FloatingIpTarget};
@@ -14,6 +13,7 @@ use amafu_domain::kinds::security_group::{
     Direction, PortRange, Protocol, Remote, SecurityGroup, SecurityGroupRule, SecurityGroupSpecification,
 };
 use amafu_domain::kinds::vm::VmPhase;
+use amafu_domain::{ObjectName, ObjectReference};
 use amafu_interfaces::ActionError;
 use amafu_interfaces::juju::JUJU_API_PORT;
 use amafu_reconciler::Step;
@@ -30,7 +30,7 @@ use super::scope::{
 };
 use amafu_ssh_key_pair::SshKeyPair;
 
-use crate::environments::{AuthorityKey, CertificateAuthority, ContainerPlan};
+use crate::environments::{AuthorityKey, CertificateAuthority, ContainerPlan, Settings};
 
 const RUNNER: &str = "runner";
 const FIRST_CONTROLLER: &str = "controller-0";
@@ -261,21 +261,22 @@ impl Step<JujuControllerChange> for CheckHostCluster {
 }
 
 impl ImportImages {
-    fn wanted(&self, substrate: &Substrate) -> Result<Vec<(&'static str, ImageSource)>, ActionError> {
-        let settings = &self.environment.settings;
-        let runner = settings
-            .runner_image
-            .clone()
-            .ok_or_else(|| ActionError::fatal("no Juju runner image is configured for environments"))?;
-        let mut images = vec![(RUNNER_IMAGE, ImageSource::Container { reference: runner })];
-        if matches!(substrate, Substrate::Vms { .. }) {
-            let ubuntu = settings
-                .ubuntu_image
-                .clone()
-                .ok_or_else(|| ActionError::fatal("no Ubuntu image source is configured for environments"))?;
-            images.push((UBUNTU_IMAGE, ubuntu));
+    async fn image(scope: &ControllerScope<'_>) -> Result<ObjectReference, ActionError> {
+        let name = match scope.specification().await?.substrate {
+            Substrate::Vms { .. } => UBUNTU_IMAGE,
+            Substrate::Kubernetes { .. } => RUNNER_IMAGE,
+        };
+        Ok(scope.ownership.reference::<Image>(ObjectName::new(name).map_err(ActionError::fatal)?))
+    }
+
+    async fn source(scope: &ControllerScope<'_>) -> Result<ImageSource, ActionError> {
+        let settings = Settings::read(scope.objects()).await?;
+        match scope.specification().await?.substrate {
+            Substrate::Vms { .. } => settings.ubuntu_image(),
+            Substrate::Kubernetes { .. } => {
+                Ok(ImageSource::Container { reference: settings.juju_runner_image()? })
+            }
         }
-        Ok(images)
     }
 }
 
@@ -283,30 +284,21 @@ impl ImportImages {
 impl Step<JujuControllerChange> for ImportImages {
     async fn is_complete(&self, context: &ChangeContext<'_>) -> Result<bool, ActionError> {
         let scope = ControllerScope::new(context, &self.environment)?;
-        for (name, _) in self.wanted(&scope.specification().await?.substrate)? {
-            let reference =
-                scope.ownership.reference::<Image>(ObjectName::new(name).map_err(ActionError::fatal)?);
-            match scope.objects().read::<Image>(&reference).await? {
-                Some(image) if image.status.phase == ImagePhase::Ready => {}
-                Some(image) if image.status.phase == ImagePhase::Failed => {
-                    return Err(ActionError::fatal(format!("image {name} failed to import")));
-                }
-                _ => return Ok(false),
+        let reference = Self::image(&scope).await?;
+        match scope.objects().read::<Image>(&reference).await? {
+            Some(image) if image.status.phase == ImagePhase::Failed => {
+                Err(ActionError::fatal(format!("image {} failed to import", reference.name)))
             }
+            Some(image) => Ok(image.status.phase == ImagePhase::Ready),
+            None => Ok(false),
         }
-        Ok(true)
     }
 
     async fn run(&self, context: &ChangeContext<'_>) -> Result<(), ActionError> {
         let scope = ControllerScope::new(context, &self.environment)?;
-        for (name, source) in self.wanted(&scope.specification().await?.substrate)? {
-            let reference =
-                scope.ownership.reference::<Image>(ObjectName::new(name).map_err(ActionError::fatal)?);
-            scope
-                .objects()
-                .ensure::<Image>(&reference, BTreeMap::new(), ImageSpecification { source })
-                .await?;
-        }
+        let reference = Self::image(&scope).await?;
+        let specification = ImageSpecification { source: Self::source(&scope).await? };
+        scope.objects().ensure::<Image>(&reference, BTreeMap::new(), specification).await?;
         Ok(())
     }
 }

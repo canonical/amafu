@@ -7,8 +7,6 @@ mod scope;
 
 use std::sync::Arc;
 
-use amafu_domain::OciReference;
-use amafu_domain::kinds::image::ImageSource;
 use amafu_domain::kinds::juju_controller::{JujuControllerChange, JujuStep};
 use amafu_interfaces::{ActionError, Identifiers, JujuPlatform, KubernetesPlatform};
 use amafu_reconciler::{Step, StepRegistry};
@@ -17,8 +15,6 @@ use amafu_token_issuer::Keyring;
 pub use bootstrap::BOOTSTRAP_KEY_COMMENT;
 
 pub struct JujuSettings {
-    pub ubuntu_image: Option<ImageSource>,
-    pub runner_image: Option<OciReference>,
     pub token_refresh_url: String,
     pub amafu_certificate_authority: String,
 }

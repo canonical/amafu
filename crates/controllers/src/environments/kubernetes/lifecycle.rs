@@ -21,7 +21,7 @@ use amafu_reconciler::Step;
 use super::KubernetesEnvironment;
 use super::add_ons;
 use super::scope::{CA_CERTIFICATE, CA_KEY, ChangeContext, ClusterScope, K8SD_TOKEN, UBUNTU_IMAGE, reshaped};
-use crate::environments::{AuthorityKey, CertificateAuthority};
+use crate::environments::{AuthorityKey, CertificateAuthority, Settings};
 
 fn with_status(
     cluster: &Object<KubernetesCluster>,
@@ -190,12 +190,7 @@ impl Step<KubernetesClusterChange> for ImportImage {
 
     async fn run(&self, context: &ChangeContext<'_>) -> Result<(), ActionError> {
         let scope = ClusterScope::new(context, &self.environment)?;
-        let source = self
-            .environment
-            .settings
-            .ubuntu_image
-            .clone()
-            .ok_or_else(|| ActionError::fatal("no Ubuntu image source is configured for environments"))?;
+        let source = Settings::read(scope.objects()).await?.ubuntu_image()?;
         let name = ObjectName::new(UBUNTU_IMAGE).map_err(ActionError::fatal)?;
         let reference = scope.ownership.reference::<Image>(name);
         scope.objects().ensure::<Image>(&reference, BTreeMap::new(), ImageSpecification { source }).await?;

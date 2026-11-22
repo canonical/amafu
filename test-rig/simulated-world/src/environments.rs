@@ -6,6 +6,9 @@ use amafu_controllers::environments::juju::{JujuEnvironment, JujuSettings, JujuS
 use amafu_controllers::environments::kubernetes::{
     IssuerTrust, KubernetesEnvironment, KubernetesSettings, KubernetesSteps,
 };
+use amafu_domain::kinds::environment_settings::{
+    ENVIRONMENT_SETTINGS_NAME, EnvironmentSettings, EnvironmentSettingsSpecification,
+};
 use amafu_domain::kinds::floating_ip::FloatingIp;
 use amafu_domain::kinds::image::{Image, ImagePhase, ImageSource};
 use amafu_domain::kinds::operation::OperationOutcome;
@@ -87,6 +90,11 @@ impl EnvironmentWorld {
             clock: VirtualClock::starting_at(now),
         };
         world.create::<SigningKey>(None, "key-1", signing).await;
+        let settings = EnvironmentSettingsSpecification {
+            ubuntu_image: Some(ubuntu_image()),
+            juju_runner_image: Some(RUNNER_IMAGE.parse().unwrap_or_else(|error| panic!("{error}"))),
+        };
+        world.create::<EnvironmentSettings>(None, ENVIRONMENT_SETTINGS_NAME, settings).await;
         world
     }
 
@@ -101,7 +109,7 @@ impl EnvironmentWorld {
             platform: Arc::clone(&self.kubernetes) as Arc<dyn KubernetesPlatform>,
             keyring: self.keyring(),
             identifiers: Arc::new(SeededIdentifiers::new(7)),
-            settings: KubernetesSettings { ubuntu_image: Some(ubuntu_image()), trust: trust() },
+            settings: KubernetesSettings { trust: trust() },
         })
     }
 
@@ -113,8 +121,6 @@ impl EnvironmentWorld {
             keyring: self.keyring(),
             identifiers: Arc::new(SeededIdentifiers::new(11)),
             settings: JujuSettings {
-                ubuntu_image: Some(ubuntu_image()),
-                runner_image: Some(RUNNER_IMAGE.parse().unwrap_or_else(|error| panic!("{error}"))),
                 token_refresh_url: String::from("https://amafu.example/.well-known/jwks.json"),
                 amafu_certificate_authority: String::from("amafu-ca"),
             },
