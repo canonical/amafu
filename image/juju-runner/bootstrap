@@ -31,6 +31,10 @@ machine)
     printf '%s\n' "$JUJU_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
     chmod 600 "$HOME/.ssh/id_ed25519"
     printf 'Host *\n    StrictHostKeyChecking accept-new\n    User ubuntu\n' > "$HOME/.ssh/config"
+    until ssh -o ConnectTimeout=10 "$JUJU_MACHINE_ADDRESS" "cloud-init status --wait > /dev/null; true" 2> /dev/null; do
+        echo "waiting for $JUJU_MACHINE_ADDRESS to finish its first boot"
+        sleep 10
+    done
     printf 'clouds:\n  %s:\n    type: manual\n    endpoint: ubuntu@%s\n' "$cloud" "$JUJU_MACHINE_ADDRESS" > "$workdir/cloud.yaml"
     juju add-cloud --client "$cloud" "$workdir/cloud.yaml"
     ;;
