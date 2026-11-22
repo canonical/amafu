@@ -1,5 +1,5 @@
 use std::collections::BTreeSet;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -359,6 +359,22 @@ pub enum ConfigurationError {
 }
 
 impl NodeConfiguration {
+    #[must_use]
+    pub fn platform_api(&self) -> Vec<SocketAddrV4> {
+        let port = self.api.listen.port();
+        let voters = self.state.voters.iter().filter_map(|voter| match voter.ip() {
+            IpAddr::V4(address) => Some(SocketAddrV4::new(address, port)),
+            IpAddr::V6(_) => None,
+        });
+        let members = self.state.core_members.iter().filter_map(|member| {
+            member.strip_prefix("https://")?.trim_end_matches('/').parse::<SocketAddrV4>().ok()
+        });
+        let mut addresses: Vec<SocketAddrV4> = voters.chain(members).collect();
+        addresses.sort();
+        addresses.dedup();
+        addresses
+    }
+
     pub fn parse(contents: &str) -> Result<Self, ConfigurationError> {
         let configuration: Self = serde_yaml_ng::from_str(contents)?;
         if configuration.version != SUPPORTED_VERSION {
@@ -399,6 +415,20 @@ impl NodeConfiguration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_platform_api_is_every_core_members_api_address() {
+        let mut configuration = NodeConfiguration::parse(MINIMAL).unwrap();
+        configuration.api.listen = "0.0.0.0:7443".parse().unwrap();
+        configuration.state.voters = vec!["10.0.0.2:7445".parse().unwrap(), "10.0.0.1:7445".parse().unwrap()];
+        configuration.state.core_members =
+            vec![String::from("https://10.0.0.3:7443/"), String::from("https://core.lab:7443")];
+        let expected: Vec<SocketAddrV4> = ["10.0.0.1:7443", "10.0.0.2:7443", "10.0.0.3:7443"]
+            .iter()
+            .map(|address| address.parse().unwrap())
+            .collect();
+        assert_eq!(configuration.platform_api(), expected);
+    }
 
     #[test]
     fn guests_are_told_a_reachable_api_address() {

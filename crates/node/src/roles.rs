@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::future::Future;
+use std::net::SocketAddrV4;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -694,6 +695,7 @@ fn compute_roles(
     adapters: &ComputeAdapters,
     identity: &NodeIdentity,
     lease: &NodeLeaseState,
+    platform_api: Vec<SocketAddrV4>,
     settings: ReconcilerSettings,
 ) {
     let (node, underlay_address) = (&identity.name, identity.underlay_address);
@@ -731,7 +733,8 @@ fn compute_roles(
         Arc::clone(&services.store),
         Arc::clone(&adapters.datapath) as Arc<dyn Datapath>,
         Arc::clone(&adapters.local_services) as Arc<dyn LocalServices>,
-    );
+    )
+    .with_platform_api(platform_api);
     controller_role(roles, "node-network", Arc::new(node_network), services, settings);
 }
 
@@ -954,7 +957,8 @@ pub async fn run(configuration: NodeConfiguration, boot: Option<BootServices>) -
         if let Err(error) = prepare_kvm_access() {
             tracing::warn!(%error, "VM processes cannot be given access to /dev/kvm");
         }
-        compute_roles(&mut roles, &node_services, &adapters, &identity, &lease, responsive);
+        let platform_api = configuration.platform_api();
+        compute_roles(&mut roles, &node_services, &adapters, &identity, &lease, platform_api, responsive);
         receive_migrations(&mut roles, &configuration, transport);
     }
     crate::diagnostics::start(&mut roles, &configuration, &services, &adapters);
