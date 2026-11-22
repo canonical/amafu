@@ -10,6 +10,7 @@ fn desired() -> Result<NodeNetworkState, Box<dyn std::error::Error>> {
             key: segment.clone(),
             subnet: "10.250.0.0/24".parse()?,
             is_outbound_access_allowed: true,
+            is_platform_api_allowed: false,
             domain: String::from("default.contract.internal"),
             segment_id: None,
         }],

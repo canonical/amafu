@@ -313,6 +313,7 @@ pub mod tests {
                 key: segment(),
                 subnet: "10.1.0.0/24".parse().unwrap(),
                 is_outbound_access_allowed: true,
+                is_platform_api_allowed: false,
                 domain: String::from("default.project-a.internal"),
                 segment_id: None,
             }],

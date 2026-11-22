@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use amafu_domain::kinds::floating_ip::FloatingIp;
@@ -24,6 +24,7 @@ pub struct NodeNetworkController {
     store: Arc<dyn Store>,
     datapath: Arc<dyn Datapath>,
     local_services: Arc<dyn LocalServices>,
+    platform_api: Vec<SocketAddrV4>,
     last_applied: Mutex<Option<NodeNetworkState>>,
 }
 
@@ -36,7 +37,20 @@ impl NodeNetworkController {
         datapath: Arc<dyn Datapath>,
         local_services: Arc<dyn LocalServices>,
     ) -> Self {
-        Self { node, underlay_address, store, datapath, local_services, last_applied: Mutex::new(None) }
+        Self {
+            node,
+            underlay_address,
+            store,
+            datapath,
+            local_services,
+            platform_api: Vec::new(),
+            last_applied: Mutex::new(None),
+        }
+    }
+
+    #[must_use]
+    pub fn with_platform_api(self, platform_api: Vec<SocketAddrV4>) -> Self {
+        Self { platform_api, ..self }
     }
 }
 
@@ -49,6 +63,7 @@ pub struct NetworkView {
     pub groups: Vec<Object<SecurityGroup>>,
     pub endpoints: Vec<Object<NetworkEndpoint>>,
     pub floating_ips: Vec<Object<FloatingIp>>,
+    pub platform_api: Vec<SocketAddrV4>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -153,6 +168,7 @@ fn add_segment(state: &mut NodeNetworkState, network: &Object<Network>) -> Segme
             key: key.clone(),
             subnet: network.specification.subnet,
             is_outbound_access_allowed: network.specification.is_outbound_access_allowed,
+            is_platform_api_allowed: network.specification.is_platform_api_allowed,
             domain: format!("{}.{}.internal", network.metadata.name, project_key(project)),
             segment_id: network.status.segment_id,
         });
@@ -162,8 +178,11 @@ fn add_segment(state: &mut NodeNetworkState, network: &Object<Network>) -> Segme
 
 #[must_use]
 pub fn desired_network_state(view: &NetworkView) -> NodeNetworkState {
-    let mut state =
-        NodeNetworkState { underlay_address: view.underlay_address, ..NodeNetworkState::default() };
+    let mut state = NodeNetworkState {
+        underlay_address: view.underlay_address,
+        platform_api: view.platform_api.clone(),
+        ..NodeNetworkState::default()
+    };
     for vm in with_ports(view) {
         let project = vm.metadata.project.as_ref();
         for (index, (interface, allocated)) in
@@ -335,6 +354,7 @@ impl NodeNetworkController {
             groups: self.list_preferring_fresh::<SecurityGroup>().await?,
             endpoints: self.list_preferring_fresh::<NetworkEndpoint>().await?,
             floating_ips: self.list_preferring_fresh::<FloatingIp>().await?,
+            platform_api: self.platform_api.clone(),
         })
     }
 }
@@ -440,6 +460,7 @@ mod tests {
             specification: NetworkSpecification {
                 subnet: "10.1.0.0/24".parse().unwrap(),
                 is_outbound_access_allowed: true,
+                is_platform_api_allowed: false,
             },
             status: NetworkStatus {
                 phase: NetworkPhase::Ready,
@@ -496,6 +517,7 @@ mod tests {
             groups: Vec::new(),
             endpoints: Vec::new(),
             floating_ips: Vec::new(),
+            platform_api: Vec::new(),
         }
     }
 

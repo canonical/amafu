@@ -6,6 +6,7 @@ use amafu_interfaces::network::{PortRule, RemoteAddresses, bridge_name};
 use amafu_interfaces::{NodeNetworkState, Port};
 
 use crate::metadata::METADATA_ADDRESS;
+use crate::platform_api::PlatformApiRules;
 
 pub const TABLE: &str = "amafu";
 const BRIDGE_PREFIX: &str = "amb*";
@@ -116,10 +117,12 @@ fn port_at(state: &NodeNetworkState, address: std::net::Ipv4Addr) -> Option<&Por
 }
 
 fn inet_table(output: &mut String, state: &NodeNetworkState, infrastructure: &[Ipv4Network]) {
+    let platform_api = PlatformApiRules::new(state);
     let _ = writeln!(output, "table inet {TABLE} {{");
     for port in &state.ports {
         port_chains(output, port);
     }
+    platform_api.declare(output);
     output.push_str("\tchain prerouting {\n\t\ttype nat hook prerouting priority -100; policy accept;\n");
     for floating in &state.floating_addresses {
         let _ = writeln!(output, "\t\tip daddr {} dnat ip to {}", floating.address, floating.private_address);
@@ -137,6 +140,7 @@ fn inet_table(output: &mut String, state: &NodeNetworkState, infrastructure: &[I
         let _ = writeln!(output, "\t\tiifname \"{bridge}\" ip daddr {gateway} meta l4proto icmp accept");
         let _ = writeln!(output, "\t\tiifname \"{bridge}\" ip daddr {METADATA_ADDRESS} tcp dport 80 accept");
     }
+    platform_api.admit_to_node(output, BRIDGE_PREFIX);
     let _ = writeln!(output, "\t\tiifname \"{BRIDGE_PREFIX}\" drop\n\t}}");
     output.push_str("\tchain forward {\n\t\ttype filter hook forward priority 0; policy accept;\n");
     let _ = writeln!(output, "\t\toifname \"{BRIDGE_PREFIX}\" ct state established,related accept");
@@ -151,16 +155,22 @@ fn inet_table(output: &mut String, state: &NodeNetworkState, infrastructure: &[I
         }
     }
     let _ = writeln!(output, "\t\toifname \"{BRIDGE_PREFIX}\" drop");
+    platform_api.admit_through_node(output);
     if !infrastructure.is_empty() {
         let networks: Vec<String> = infrastructure.iter().map(ToString::to_string).collect();
         let _ = writeln!(output, "\t\tiifname \"{BRIDGE_PREFIX}\" ct state established,related accept");
-        let _ =
-            writeln!(output, "\t\tiifname \"{BRIDGE_PREFIX}\" ip daddr {{ {} }} drop", networks.join(", "));
+        let _ = writeln!(
+            output,
+            "\t\tiifname \"{BRIDGE_PREFIX}\" {}ip daddr {{ {} }} drop",
+            platform_api.infrastructure_exemption(),
+            networks.join(", ")
+        );
     }
     for port in &state.ports {
         let _ =
             writeln!(output, "\t\tip saddr {} jump {}", port.address, chain_name(Direction::Egress, port));
     }
+    platform_api.accept_through_node(output, BRIDGE_PREFIX);
     for segment in &state.segments {
         let bridge = bridge_name(&segment.key);
         let verdict = if segment.is_outbound_access_allowed { "accept" } else { "drop" };
@@ -178,6 +188,7 @@ fn inet_table(output: &mut String, state: &NodeNetworkState, infrastructure: &[I
     for segment in state.segments.iter().filter(|segment| segment.is_outbound_access_allowed) {
         let _ = writeln!(output, "\t\tip saddr {} oifname != \"{BRIDGE_PREFIX}\" masquerade", segment.subnet);
     }
+    platform_api.masquerade(output, BRIDGE_PREFIX);
     output.push_str("\t}\n}\n");
 }
 
@@ -349,5 +360,53 @@ mod nft_tests {
             .unwrap();
         let output = check.wait_with_output().unwrap();
         assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    fn reaching_platform_api(is_outbound_access_allowed: bool) -> NodeNetworkState {
+        let mut state = state();
+        state.platform_api = vec!["10.20.0.11:7443".parse().unwrap(), "10.20.0.12:7443".parse().unwrap()];
+        state.segments[0].is_platform_api_allowed = true;
+        state.segments[0].is_outbound_access_allowed = is_outbound_access_allowed;
+        state
+    }
+
+    #[test]
+    fn guests_reach_only_the_platform_api_and_within_limits() {
+        let infrastructure: Vec<Ipv4Network> = vec!["10.20.0.0/24".parse().unwrap()];
+        let ruleset = compile_ruleset(&reaching_platform_api(true), &infrastructure);
+        let bridge = bridge_name(&state().segments[0].key);
+        let admission = format!(
+            "iifname \"{bridge}\" ip daddr . tcp dport {{ 10.20.0.11 . 7443, 10.20.0.12 . 7443 }} jump platform_api"
+        );
+        assert_eq!(ruleset.matches(&admission).count(), 2);
+        assert!(ruleset.contains(
+            "ct state new add @platform_api_connections { ip saddr ct count over 64 } reject with tcp reset"
+        ));
+        assert!(ruleset.contains("ct state new update @platform_api_rate { ip saddr limit rate over 20/second burst 40 packets } drop"));
+        assert!(ruleset.contains("iifname \"amb*\" meta mark != 0x414d4150 ip daddr { 10.20.0.0/24 } drop"));
+        let forward = &ruleset[ruleset.find("chain forward").unwrap()..];
+        let egress = forward.find("jump from_").unwrap();
+        let accepted = forward.find("iifname \"amb*\" meta mark 0x414d4150 accept").unwrap();
+        assert!(egress < accepted, "a guest's own egress rules still apply first");
+    }
+
+    #[test]
+    fn guests_without_outbound_access_are_translated_only_towards_the_platform_api() {
+        let ruleset = compile_ruleset(&reaching_platform_api(false), &[]);
+        let subnet = state().segments[0].subnet;
+        assert!(
+            ruleset
+                .contains(&format!("ip saddr {subnet} meta mark 0x414d4150 oifname != \"amb*\" masquerade"))
+        );
+        assert!(!ruleset.contains(&format!("ip saddr {subnet} oifname != \"amb*\" masquerade")));
+    }
+
+    #[test]
+    fn networks_that_do_not_ask_for_the_platform_api_stay_closed() {
+        let mut closed = reaching_platform_api(true);
+        closed.segments[0].is_platform_api_allowed = false;
+        let ruleset = compile_ruleset(&closed, &["10.20.0.0/24".parse().unwrap()]);
+        assert!(!ruleset.contains("platform_api"));
+        assert!(!ruleset.contains("meta mark"));
     }
 }

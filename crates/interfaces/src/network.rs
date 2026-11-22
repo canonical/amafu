@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 use std::fmt;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddrV4};
 
 use amafu_domain::kinds::security_group::{Direction, PortRange, Protocol};
 use amafu_domain::{Ipv4Network, MacAddress, ObjectId, SegmentId};
@@ -57,6 +57,8 @@ pub struct Segment {
     pub key: SegmentKey,
     pub subnet: Ipv4Network,
     pub is_outbound_access_allowed: bool,
+    #[serde(default)]
+    pub is_platform_api_allowed: bool,
     pub domain: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub segment_id: Option<SegmentId>,
@@ -134,6 +136,8 @@ pub struct NodeNetworkState {
     pub floating_addresses: Vec<FloatingAddress>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub underlay_address: Option<Ipv4Addr>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub platform_api: Vec<SocketAddrV4>,
 }
 
 impl NodeNetworkState {

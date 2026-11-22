@@ -6,6 +6,7 @@ pub mod floating;
 pub mod metadata;
 pub mod nftables;
 pub mod overlay;
+pub mod platform_api;
 pub mod policy;
 pub mod services;
 pub mod underlay;

@@ -17,6 +17,7 @@ pub fn state() -> NodeNetworkState {
             key: segment(),
             subnet,
             is_outbound_access_allowed: true,
+            is_platform_api_allowed: false,
             domain: String::from("default.project-a.internal"),
             segment_id: None,
         }],
