@@ -291,10 +291,11 @@ pub fn desired_network_state(view: &NetworkView) -> NodeNetworkState {
         .iter()
         .filter_map(|floating_ip| {
             let binding = floating_ip.status.binding.as_ref().filter(|binding| binding.node == view.node)?;
-            let port = state
-                .ports
-                .iter()
-                .find(|port| port.key.vm_id == binding.vm_id && port.address == binding.private_address)?;
+            let port = state.ports.iter().find(|port| {
+                port.key.vm_id == binding.vm_id
+                    && (port.address == binding.private_address
+                        || port.guest_pool.contains(&binding.private_address))
+            })?;
             Some(FloatingAddress {
                 address: floating_ip.status.address?,
                 private_address: binding.private_address,

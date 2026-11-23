@@ -136,7 +136,7 @@ impl Controller for ApiFailoverController {
         };
         tracing::info!(address = %address, %vm, "moving a Kubernetes API address to a running control-plane VM");
         let specification = FloatingIpSpecification {
-            target: Some(FloatingIpTarget { vm, interface: 0 }),
+            target: Some(FloatingIpTarget { guest_address: None, vm, interface: 0 }),
             ..current.specification
         };
         let change =

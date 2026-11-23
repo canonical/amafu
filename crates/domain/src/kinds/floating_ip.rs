@@ -26,6 +26,8 @@ pub struct FloatingIpTarget {
     pub vm: ObjectName,
     #[serde(default)]
     pub interface: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_address: Option<Ipv4Addr>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,10 +106,18 @@ mod tests {
         let previous = FloatingIpSpecification {
             external_network: ObjectName::new("lab").unwrap(),
             address: None,
-            target: Some(FloatingIpTarget { vm: ObjectName::new("web-1").unwrap(), interface: 0 }),
+            target: Some(FloatingIpTarget {
+                guest_address: None,
+                vm: ObjectName::new("web-1").unwrap(),
+                interface: 0,
+            }),
         };
         let moved = FloatingIpSpecification {
-            target: Some(FloatingIpTarget { vm: ObjectName::new("web-2").unwrap(), interface: 0 }),
+            target: Some(FloatingIpTarget {
+                guest_address: None,
+                vm: ObjectName::new("web-2").unwrap(),
+                interface: 0,
+            }),
             ..previous.clone()
         };
         assert_eq!(moved.validate_update(&previous), Ok(()));

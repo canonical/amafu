@@ -92,7 +92,7 @@ impl Step<KubernetesClusterChange> for BootstrapControlPlane {
             machine.create(scope.node_plan(&cluster, &self.member, user_data)?).await?;
             record(&scope, &cluster, &self.member, &machine).await?;
         }
-        let target = FloatingIpTarget { vm: machine.name().clone(), interface: 0 };
+        let target = FloatingIpTarget { guest_address: None, vm: machine.name().clone(), interface: 0 };
         let reference = scope.ownership.reference::<FloatingIp>(scope.api_address_name()?);
         scope
             .objects()
@@ -164,7 +164,11 @@ impl RemoveNode {
             .change_specification::<FloatingIp>(&reference, |current| {
                 let points_here = current.target.as_ref().is_some_and(|target| &target.vm == machine.name());
                 points_here.then(|| FloatingIpSpecification {
-                    target: successor.clone().map(|vm| FloatingIpTarget { vm, interface: 0 }),
+                    target: successor.clone().map(|vm| FloatingIpTarget {
+                        guest_address: None,
+                        vm,
+                        interface: 0,
+                    }),
                     ..current.clone()
                 })
             })

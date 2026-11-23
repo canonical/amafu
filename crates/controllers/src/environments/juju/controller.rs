@@ -362,7 +362,7 @@ impl Step<JujuControllerChange> for CreateControllerMachines {
                 labels: BTreeMap::new(),
             })
             .await?;
-        let target = FloatingIpTarget { vm: machine.name().clone(), interface: 0 };
+        let target = FloatingIpTarget { guest_address: None, vm: machine.name().clone(), interface: 0 };
         let address = scope.ownership.reference::<FloatingIp>(scope.named("api")?);
         scope
             .objects()

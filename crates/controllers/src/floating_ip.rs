@@ -74,7 +74,11 @@ fn binding(floating_ip: &Object<FloatingIp>, target: Option<&Object<Vm>>) -> Opt
     let vm = target.filter(|vm| vm.metadata.name == wanted.vm && !vm.metadata.is_deleting)?;
     let node = vm.status.node.clone()?;
     let interface = vm.status.interfaces.get(usize::from(wanted.interface))?;
-    Some(FloatingIpBinding { node, vm_id: vm.metadata.id, private_address: interface.address })
+    let private_address = match wanted.guest_address {
+        Some(guest) => interface.guest_addresses.contains(&guest).then_some(guest)?,
+        None => interface.address,
+    };
+    Some(FloatingIpBinding { node, vm_id: vm.metadata.id, private_address })
 }
 
 #[must_use]
@@ -208,7 +212,7 @@ mod tests {
             specification: FloatingIpSpecification {
                 external_network: name("lab"),
                 address: None,
-                target: target.map(|vm| FloatingIpTarget { vm: name(vm), interface: 0 }),
+                target: target.map(|vm| FloatingIpTarget { guest_address: None, vm: name(vm), interface: 0 }),
             },
             status: FloatingIpStatus::default(),
         }
@@ -250,6 +254,18 @@ mod tests {
         assert_eq!(status.address, Some(Ipv4Addr::new(198, 51, 100, 11)));
         assert_eq!(status.phase, FloatingIpPhase::Bound);
         assert_eq!(status.binding.unwrap().node.as_str(), "node-2");
+    }
+
+    #[test]
+    fn a_target_can_name_one_of_the_guest_addresses_of_its_interface() {
+        let mut pod = placed_vm("node-2");
+        pod.status.interfaces[0].guest_addresses = vec![Ipv4Addr::new(10, 1, 0, 3)];
+        let mut targeted = floating(Some("web"));
+        let target = targeted.specification.target.as_mut().unwrap();
+        target.guest_address = Some(Ipv4Addr::new(10, 1, 0, 3));
+        assert_eq!(binding(&targeted, Some(&pod)).unwrap().private_address, Ipv4Addr::new(10, 1, 0, 3));
+        targeted.specification.target.as_mut().unwrap().guest_address = Some(Ipv4Addr::new(10, 1, 0, 9));
+        assert_eq!(binding(&targeted, Some(&pod)), None);
     }
 
     #[test]

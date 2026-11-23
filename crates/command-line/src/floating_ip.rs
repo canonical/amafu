@@ -79,7 +79,7 @@ impl Tabulated for FloatingIp {
 }
 
 fn target(vm: Option<ObjectName>, interface: u8) -> Option<FloatingIpTarget> {
-    vm.map(|vm| FloatingIpTarget { vm, interface })
+    vm.map(|vm| FloatingIpTarget { guest_address: None, vm, interface })
 }
 
 pub async fn run_external(

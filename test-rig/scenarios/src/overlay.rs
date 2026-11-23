@@ -206,7 +206,7 @@ async fn bound_to(
 }
 
 fn target(vm: &str) -> Result<Option<FloatingIpTarget>, ScenarioError> {
-    Ok(Some(FloatingIpTarget { vm: name(vm)?, interface: 0 }))
+    Ok(Some(FloatingIpTarget { guest_address: None, vm: name(vm)?, interface: 0 }))
 }
 
 async fn a_floating_ip_follows_its_target(cluster: &dyn Cluster) -> ScenarioResult {
