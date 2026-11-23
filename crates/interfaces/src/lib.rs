@@ -11,6 +11,7 @@ pub mod images;
 pub mod juju;
 pub mod kubernetes;
 pub mod lease;
+pub mod lxd;
 pub mod network;
 pub mod node_image;
 pub mod node_lease;
@@ -40,6 +41,7 @@ pub use juju::{
 };
 pub use kubernetes::{DrainState, KubernetesEndpoint, KubernetesPlatform, NodeRole};
 pub use lease::{HeldLease, Leases};
+pub use lxd::{LXD_PORT, LxdEndpoint, LxdPlatform};
 pub use network::{
     Datapath, FloatingAddress, GuestSighting, LeasedGuest, LocalServices, NodeNetworkState, Port, PortKey,
     RealizedNetwork, RemoteEndpoint, Segment, SegmentKey,

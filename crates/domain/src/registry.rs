@@ -12,9 +12,11 @@ use crate::kinds::environment_secret::EnvironmentSecret;
 use crate::kinds::environment_settings::EnvironmentSettings;
 use crate::kinds::external_network::ExternalNetwork;
 use crate::kinds::floating_ip::FloatingIp;
+use crate::kinds::guest_inventory::GuestInventory;
 use crate::kinds::image::Image;
 use crate::kinds::juju_controller::{JujuController, JujuControllerChange};
 use crate::kinds::kubernetes_cluster::{KubernetesCluster, KubernetesClusterChange};
+use crate::kinds::lxd_identity::LxdIdentity;
 use crate::kinds::network::Network;
 use crate::kinds::network_endpoint::NetworkEndpoint;
 use crate::kinds::node::Node;
@@ -103,7 +105,7 @@ impl KindDescriptor {
 }
 
 #[must_use]
-pub fn kinds() -> [KindDescriptor; 25] {
+pub fn kinds() -> [KindDescriptor; 27] {
     [
         KindDescriptor::of::<Node>(),
         KindDescriptor::of::<NodeLease>(),
@@ -126,6 +128,8 @@ pub fn kinds() -> [KindDescriptor; 25] {
         KindDescriptor::of::<SshKeyGroup>(),
         KindDescriptor::of::<EnvironmentSecret>(),
         KindDescriptor::of::<EnvironmentSettings>(),
+        KindDescriptor::of::<LxdIdentity>(),
+        KindDescriptor::of::<GuestInventory>(),
         KindDescriptor::of::<KubernetesCluster>(),
         KindDescriptor::of::<KubernetesClusterChange>(),
         KindDescriptor::of::<JujuController>(),

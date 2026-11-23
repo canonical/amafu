@@ -406,6 +406,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "amafu-lxd-client"
+version = "0.1.0"
+dependencies = [
+ "amafu-client-tls",
+ "amafu-domain",
+ "amafu-interfaces",
+ "async-trait",
+ "reqwest",
+ "serde_json",
+]
+
+[[package]]
 name = "amafu-lxd-lab"
 version = "0.1.0"
 dependencies = [

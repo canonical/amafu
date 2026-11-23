@@ -25,6 +25,7 @@ amafu-token-issuer = { path = "crates/token-issuer" }
 amafu-ssh-key-pair = { path = "crates/ssh-key-pair" }
 amafu-client-tls = { path = "crates/client-tls" }
 amafu-kubernetes-client = { path = "crates/kubernetes-client" }
+amafu-lxd-client = { path = "crates/lxd-client" }
 amafu-juju-client = { path = "crates/juju-client" }
 amafu-image-catalog = { path = "crates/image-catalog" }
 amafu-api = { path = "crates/api" }
