@@ -108,6 +108,37 @@ pub struct Port {
     pub user_data: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub public_keys: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guest_pool: Vec<Ipv4Addr>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guests: Vec<LeasedGuest>,
+}
+
+impl Port {
+    #[must_use]
+    pub fn hosts_guests(&self) -> bool {
+        !self.guest_pool.is_empty()
+    }
+
+    pub fn addresses(&self) -> impl Iterator<Item = Ipv4Addr> + '_ {
+        std::iter::once(self.address).chain(self.guests.iter().map(|guest| guest.address))
+    }
+
+    pub fn macs(&self) -> impl Iterator<Item = MacAddress> + '_ {
+        std::iter::once(self.mac).chain(self.guests.iter().map(|guest| guest.mac))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct LeasedGuest {
+    pub mac: MacAddress,
+    pub address: Ipv4Addr,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GuestSighting {
+    pub segment: SegmentKey,
+    pub mac: MacAddress,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -173,10 +204,18 @@ pub trait Datapath: Send + Sync {
     async fn converge(&self, desired: &NodeNetworkState) -> Result<RealizedNetwork, ActionError>;
 
     async fn current(&self) -> Result<RealizedNetwork, ActionError>;
+
+    async fn learned_port(
+        &self,
+        segment: &SegmentKey,
+        mac: MacAddress,
+    ) -> Result<Option<String>, ActionError>;
 }
 
 pub trait LocalServices: Send + Sync {
     fn update(&self, state: &NodeNetworkState);
+
+    fn take_guest_sightings(&self) -> Vec<GuestSighting>;
 }
 
 #[cfg(test)]

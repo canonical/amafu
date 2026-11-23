@@ -41,8 +41,8 @@ pub use juju::{
 pub use kubernetes::{DrainState, KubernetesEndpoint, KubernetesPlatform, NodeRole};
 pub use lease::{HeldLease, Leases};
 pub use network::{
-    Datapath, FloatingAddress, LocalServices, NodeNetworkState, Port, PortKey, RealizedNetwork,
-    RemoteEndpoint, Segment, SegmentKey,
+    Datapath, FloatingAddress, GuestSighting, LeasedGuest, LocalServices, NodeNetworkState, Port, PortKey,
+    RealizedNetwork, RemoteEndpoint, Segment, SegmentKey,
 };
 pub use node_image::{ImageSigningKey, ImageTrustError, TrustedImageKeys};
 pub use node_lease::{HeldNodeLease, NodeLeaseAuthority, NodeLeaseError, NodeLeaseGrant, NodeLeaseState};
