@@ -6,7 +6,7 @@ use crate::kinds::node::NodeRole;
 use crate::name::NodeName;
 
 const CLUSTER_WIDE_KINDS: &[&str] =
-    &["Image", "StorageBackend", "Network", "SecurityGroup", "ExternalNetwork"];
+    &["Image", "StorageBackend", "Network", "SecurityGroup", "ExternalNetwork", "LxdIdentity"];
 
 pub const SUBSCRIBED_KINDS: &[&str] = &[
     "Image",
@@ -20,6 +20,8 @@ pub const SUBSCRIBED_KINDS: &[&str] = &[
     "NetworkEndpoint",
     "FloatingIp",
     "CertificateRevocation",
+    "LxdIdentity",
+    "GuestInventory",
 ];
 
 #[must_use]
@@ -175,8 +177,14 @@ impl NodeSlice {
                     || names_node(object, "/specification/node", &self.node)
             }
             "FloatingIp" => names_node(object, "/status/binding/node", &self.node),
+            "GuestInventory" => self.owns_inventory(object),
             _ => false,
         }
+    }
+
+    fn owns_inventory(&self, inventory: &Value) -> bool {
+        let (project, name) = project_and_name(inventory);
+        self.hosts_vm(&project, &name) || names_node(inventory, "/specification/node", &self.node)
     }
 
     #[must_use]
@@ -207,8 +215,14 @@ impl NodeSlice {
                 text(created, "/metadata/name") == Some(self.node.as_str()) && claimed.is_subset(&held)
             }
             "NetworkEndpoint" => self.owns_endpoint(created),
+            "GuestInventory" => self.records_hosted_inventory(created),
             _ => false,
         }
+    }
+
+    fn records_hosted_inventory(&self, inventory: &Value) -> bool {
+        let (project, name) = project_and_name(inventory);
+        self.hosts_vm(&project, &name) && names_node(inventory, "/specification/node", &self.node)
     }
 
     fn may_update(&self, kind: &str, current: &Value, updated: &Value) -> bool {
@@ -219,6 +233,11 @@ impl NodeSlice {
                 && names_node(updated, "/specification/node", &self.node);
             return is_same
                 && (is_withdrawal || (self.owns_endpoint(current) && self.owns_endpoint(updated)));
+        }
+        if kind == "GuestInventory" {
+            let is_same = project_and_name(current) == project_and_name(updated);
+            let is_withdrawal = is_deleting(updated) && self.owns_inventory(current);
+            return is_same && (is_withdrawal || self.records_hosted_inventory(updated));
         }
         if !changes_only_status(current, updated) {
             return false;
@@ -261,6 +280,7 @@ impl NodeSlice {
                         .all(|cached| cached == self.node.as_str())
             }
             "NetworkEndpoint" => names_node(current, "/specification/node", &self.node),
+            "GuestInventory" => self.owns_inventory(current),
             _ => false,
         }
     }
@@ -307,6 +327,35 @@ mod tests {
 
     fn compute() -> BTreeSet<NodeRole> {
         BTreeSet::from([NodeRole::Compute])
+    }
+
+    fn inventory(vm: &str, on: &str) -> Value {
+        json!({
+            "metadata": {"name": vm, "project": "project-a"},
+            "specification": {"node": on, "lxd": {"access": "untrusted"}},
+        })
+    }
+
+    #[test]
+    fn a_node_reads_the_lxd_identity_and_keeps_the_inventories_of_what_it_hosts() {
+        let slice = slice_with(&[vm("pod-0", Some("node-1"), &[])]);
+        let identity = json!({"metadata": {"name": "cluster"}});
+        assert!(slice.includes("LxdIdentity", &identity));
+        assert!(!slice.may_write(&compute(), "LxdIdentity", None, Some(&identity)));
+        let hosted = inventory("pod-0", "node-1");
+        assert!(slice.includes("GuestInventory", &hosted));
+        assert!(slice.may_write(&compute(), "GuestInventory", None, Some(&hosted)));
+        assert!(slice.may_write(
+            &compute(),
+            "GuestInventory",
+            Some(&inventory("pod-0", "node-2")),
+            Some(&hosted)
+        ));
+        let elsewhere = inventory("pod-9", "node-2");
+        assert!(!slice.includes("GuestInventory", &elsewhere));
+        assert!(!slice.may_write(&compute(), "GuestInventory", None, Some(&inventory("pod-9", "node-1"))));
+        assert!(slice.may_write(&compute(), "GuestInventory", Some(&inventory("pod-9", "node-1")), None));
+        assert!(!slice.may_write(&compute(), "GuestInventory", Some(&elsewhere), None));
     }
 
     #[test]
