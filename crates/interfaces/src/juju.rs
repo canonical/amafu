@@ -1,8 +1,11 @@
 use std::net::Ipv4Addr;
 
+use amafu_domain::kinds::machine_shape::MachineShape;
+
 use crate::error::ActionError;
 
 pub const JUJU_API_PORT: u16 = 17070;
+const MEBIBYTES_PER_GIBIBYTE: u32 = 1024;
 
 #[must_use]
 pub fn cloud_name(controller: &str) -> String {
@@ -43,10 +46,28 @@ pub struct JujuMachine {
     pub units: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MachineHardware {
+    pub cpu_cores: u16,
+    pub memory_mebibytes: u32,
+    pub root_disk_mebibytes: u32,
+}
+
+impl From<MachineShape> for MachineHardware {
+    fn from(shape: MachineShape) -> Self {
+        Self {
+            cpu_cores: shape.cpu_count(),
+            memory_mebibytes: shape.memory_mebibytes(),
+            root_disk_mebibytes: shape.disk_gibibytes() * MEBIBYTES_PER_GIBIBYTE,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManualMachine {
     pub instance_id: String,
     pub nonce: String,
+    pub hardware: MachineHardware,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

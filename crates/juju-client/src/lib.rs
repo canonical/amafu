@@ -6,7 +6,7 @@ use std::time::Duration;
 use amafu_interfaces::{
     ActionError, Charm, JujuControllerInfo, JujuEndpoint, JujuMachine, JujuModel, JujuPlatform, ManualMachine,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::connection::{Connection, Scope};
 
@@ -14,6 +14,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const SERVICE_USER: &str = "user-amafu@amafu";
 const BOOTSTRAP_USER: &str = "admin";
 const MACHINE_BASE: (&str, &str) = ("ubuntu", "24.04");
+const MACHINE_ARCHITECTURE: &str = "amd64";
 
 #[derive(Debug, Clone, Copy)]
 pub struct WebSocketJuju {
@@ -42,6 +43,22 @@ impl WebSocketJuju {
     fn cloud_credential(cloud: &str) -> String {
         format!("cloudcred-{cloud}_{BOOTSTRAP_USER}_{cloud}")
     }
+}
+
+fn add_machine_request(machine: &ManualMachine) -> Value {
+    let (name, channel) = MACHINE_BASE;
+    json!({"params": [{
+        "jobs": ["JobHostUnits"],
+        "instance-id": machine.instance_id,
+        "nonce": machine.nonce,
+        "base": {"name": name, "channel": channel},
+        "hardware-characteristics": {
+            "arch": MACHINE_ARCHITECTURE,
+            "cpu-cores": machine.hardware.cpu_cores,
+            "mem": machine.hardware.memory_mebibytes,
+            "root-disk": machine.hardware.root_disk_mebibytes,
+        },
+    }]})
 }
 
 #[async_trait::async_trait]
@@ -110,14 +127,7 @@ impl JujuPlatform for WebSocketJuju {
         machine: &ManualMachine,
     ) -> Result<String, ActionError> {
         let mut connection = self.model_connection(endpoint, model).await?;
-        let (name, channel) = MACHINE_BASE;
-        let request = json!({"params": [{
-            "jobs": ["JobHostUnits"],
-            "instance-id": machine.instance_id,
-            "nonce": machine.nonce,
-            "base": {"name": name, "channel": channel},
-            "hardware-characteristics": {},
-        }]});
+        let request = add_machine_request(machine);
         let added = connection.call("MachineManager", "AddMachines", request).await?;
         added["machines"][0]["machine"]
             .as_str()
@@ -259,5 +269,25 @@ impl JujuPlatform for WebSocketJuju {
         }]});
         connection.call("Cloud", "UpdateCredentialsCheckModels", request).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_manual_machine_is_added_with_its_hardware() {
+        let machine = ManualMachine {
+            instance_id: String::from("manual:apps-db-0"),
+            nonce: String::from("amafu:apps-db-0"),
+            hardware: amafu_interfaces::MachineHardware {
+                cpu_cores: 2,
+                memory_mebibytes: 4096,
+                root_disk_mebibytes: 20480,
+            },
+        };
+        let hardware = &add_machine_request(&machine)["params"][0]["hardware-characteristics"];
+        assert_eq!(hardware, &json!({"arch": "amd64", "cpu-cores": 2, "mem": 4096, "root-disk": 20480}));
     }
 }

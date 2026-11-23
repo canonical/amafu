@@ -1,7 +1,7 @@
 use amafu_domain::ObjectName;
 use amafu_domain::kinds::machine_shape::MachineShape;
 use amafu_domain::labels::JUJU_MACHINE;
-use amafu_interfaces::{ActionError, JujuEndpoint, JujuMachine, ManualMachine};
+use amafu_interfaces::{ActionError, JujuEndpoint, JujuMachine, MachineHardware, ManualMachine};
 
 use super::scope::{ControllerScope, UBUNTU_IMAGE, substrate_network};
 use crate::environments::{Machine, MachinePlan};
@@ -50,7 +50,11 @@ impl<'a> ProvisionedMachine<'a> {
         let id = if let Some(found) = self.in_juju(&known) {
             found.id.clone()
         } else {
-            let manual = ManualMachine { instance_id: self.instance_id.clone(), nonce: nonce.clone() };
+            let manual = ManualMachine {
+                instance_id: self.instance_id.clone(),
+                nonce: nonce.clone(),
+                hardware: MachineHardware::from(shape),
+            };
             platform.add_machine(endpoint, model_uuid, &manual).await?
         };
         let user_data = platform.provisioning_script(endpoint, model_uuid, &id, &nonce).await?;

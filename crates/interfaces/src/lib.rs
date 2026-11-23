@@ -36,7 +36,7 @@ pub use image_catalog::{CatalogEntry, CatalogKind, FixedImageCatalog, ImageCatal
 pub use images::{CachedImage, ContainerConfiguration, ImageRequest, ImageStore};
 pub use juju::{
     Charm, JujuControllerInfo, JujuCredentials, JujuEndpoint, JujuMachine, JujuModel, JujuPlatform,
-    ManualMachine,
+    MachineHardware, ManualMachine,
 };
 pub use kubernetes::{DrainState, KubernetesEndpoint, KubernetesPlatform, NodeRole};
 pub use lease::{HeldLease, Leases};
