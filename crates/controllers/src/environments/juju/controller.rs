@@ -9,7 +9,6 @@ use amafu_domain::kinds::juju_controller::{
     JujuController, JujuControllerChange, JujuRequest, JujuVersion, Substrate,
 };
 use amafu_domain::kinds::kubernetes_cluster::KubernetesCluster;
-use amafu_domain::kinds::machine_shape::MachineShape;
 use amafu_domain::kinds::security_group::{
     Direction, PortRange, Protocol, Remote, SecurityGroup, SecurityGroupRule, SecurityGroupSpecification,
 };
@@ -23,18 +22,18 @@ use base64::engine::general_purpose::STANDARD;
 use serde_json::{Value, json};
 
 use super::JujuEnvironment;
-use super::bootstrap::{self, BOOTSTRAP_KEY_COMMENT, BootstrapPlan, RUNNER_LOG, Target};
+use super::bootstrap::{self, BOOTSTRAP_KEY_COMMENT, BOOTSTRAP_LOG, BootstrapPlan, Target};
 use super::provisioning::ProvisionedMachine;
 use super::scope::{
-    CA_CERTIFICATE, CA_KEY, CONTROLLER_MODEL, CREDENTIAL_SECRET, ChangeContext, ControllerScope,
-    RUNNER_IMAGE, SSH_PRIVATE_KEY, SSH_PUBLIC_KEY, UBUNTU_IMAGE, substrate_network,
+    ADMIN_PASSWORD, CA_CERTIFICATE, CA_KEY, CONTROLLER_MODEL, CREDENTIAL_SECRET, ChangeContext,
+    ControllerScope, RUNNER_IMAGE, SSH_PRIVATE_KEY, SSH_PUBLIC_KEY, UBUNTU_IMAGE, substrate_network,
 };
 use amafu_ssh_key_pair::SshKeyPair;
 
-use crate::environments::{AuthorityKey, CertificateAuthority, ContainerPlan, MachinePlan, Settings};
+use crate::environments::{AuthorityKey, CertificateAuthority, ContainerPlan, Settings};
 
 const RUNNER: &str = "runner";
-const BOOTSTRAP_DEADLINE: time::Duration = time::Duration::minutes(45);
+const BOOTSTRAP_DEADLINE: time::Duration = time::Duration::minutes(60);
 const FIRST_CONTROLLER: &str = "controller-0";
 const JUJU_NAMESPACE: &str = "kube-system";
 
@@ -106,6 +105,13 @@ juju_step!(EnableHa);
 juju_step!(CleanUpBootstrap);
 juju_step!(MarkReady);
 
+fn random_password() -> Result<String, ActionError> {
+    let mut bytes = [0_u8; 32];
+    ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut bytes)
+        .map_err(|_| ActionError::retryable("the system could not provide random bytes"))?;
+    Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes))
+}
+
 async fn ensure_secret(
     scope: &ControllerScope<'_>,
     with_ssh: bool,
@@ -127,6 +133,7 @@ async fn ensure_secret(
         let keys = SshKeyPair::generate(BOOTSTRAP_KEY_COMMENT).map_err(ActionError::fatal)?;
         values.insert(SSH_PRIVATE_KEY.to_owned(), keys.private_key);
         values.insert(SSH_PUBLIC_KEY.to_owned(), keys.public_key);
+        values.insert(ADMIN_PASSWORD.to_owned(), random_password()?);
     }
     let secret = EnvironmentSecretSpecification {
         project: scope.ownership.project().clone(),
@@ -134,6 +141,18 @@ async fn ensure_secret(
         values,
     };
     Ok(scope.objects().ensure::<EnvironmentSecret>(&reference, BTreeMap::new(), secret).await?.specification)
+}
+
+async fn forget_bootstrap_key(scope: &ControllerScope<'_>) -> Result<(), ActionError> {
+    let reference = ControllerScope::secret_reference(&scope.controller().await?)?;
+    scope
+        .objects()
+        .change_specification::<EnvironmentSecret>(&reference, |current| {
+            let mut values = current.values.clone();
+            let removed = [SSH_PRIVATE_KEY, SSH_PUBLIC_KEY].iter().any(|key| values.remove(*key).is_some());
+            removed.then(|| EnvironmentSecretSpecification { values, ..current.clone() })
+        })
+        .await
 }
 
 async fn record_authority(
@@ -322,7 +341,11 @@ impl Step<JujuControllerChange> for CreateControllerMachines {
             return Err(ActionError::fatal("only a controller on VMs has controller machines"));
         };
         let (network, storage_backend) = substrate_network(&specification)?;
-        let user_data = bootstrap::controller_user_data(
+        let target = Target::Itself {
+            ssh_private_key: scope.secret_value(SSH_PRIVATE_KEY).await?,
+            admin_password: scope.secret_value(ADMIN_PASSWORD).await?,
+        };
+        let user_data = bootstrap_plan(&scope, &self.environment, target).await?.controller_user_data(
             &scope.secret_value(SSH_PUBLIC_KEY).await?,
             &self.environment.settings.amafu_certificate_authority,
         );
@@ -382,27 +405,25 @@ impl Step<JujuControllerChange> for CreateClusterServiceAccount {
     }
 }
 
-impl Bootstrap {
-    async fn target(&self, scope: &ControllerScope<'_>) -> Result<Option<(Target, ObjectName)>, ActionError> {
-        if let Some(cluster) = scope.host_cluster().await? {
-            return Ok(Some((
-                self.cluster_target(scope, &cluster).await?,
-                cluster.specification.network.clone(),
-            )));
-        }
-        let controller = scope.machine(FIRST_CONTROLLER)?;
-        let Some(vm) = controller.vm().await? else {
-            return Ok(None);
-        };
-        let Some(address) = vm.status.interfaces.first().map(|interface| interface.address) else {
-            return Ok(None);
-        };
-        let network = vm.specification.network_interfaces.first().map(|interface| interface.network.clone());
-        let network = network.ok_or_else(|| ActionError::fatal("the controller machine has no network"))?;
-        let ssh_private_key = scope.secret_value(SSH_PRIVATE_KEY).await?;
-        Ok(Some((Target::Machine { address, ssh_private_key }, network)))
-    }
+async fn bootstrap_plan(
+    scope: &ControllerScope<'_>,
+    environment: &JujuEnvironment,
+    target: Target,
+) -> Result<BootstrapPlan, ActionError> {
+    let specification = scope.specification().await?;
+    let secret = scope.secret().await?;
+    Ok(BootstrapPlan {
+        controller: scope.ownership.environment().to_string(),
+        version: specification.version.clone(),
+        sign_in: specification.sign_in,
+        certificate: secret.value(CA_CERTIFICATE).unwrap_or_default().to_owned(),
+        private_key: secret.value(CA_KEY).unwrap_or_default().to_owned(),
+        token_refresh_url: environment.settings.token_refresh_url.clone(),
+        target,
+    })
+}
 
+impl Bootstrap {
     async fn cluster_target(
         &self,
         scope: &ControllerScope<'_>,
@@ -426,14 +447,8 @@ impl Bootstrap {
             ),
         })
     }
-}
 
-impl Bootstrap {
-    async fn has_bootstrapped(
-        &self,
-        scope: &ControllerScope<'_>,
-        runner: &ObjectName,
-    ) -> Result<bool, ActionError> {
+    async fn has_bootstrapped(&self, scope: &ControllerScope<'_>) -> Result<bool, ActionError> {
         if let Ok(Some(_)) = self.environment.platform.controller(&scope.endpoint().await?).await {
             return Ok(true);
         }
@@ -442,8 +457,9 @@ impl Bootstrap {
             started.is_some_and(|started| scope.context.clock.now() - started > BOOTSTRAP_DEADLINE);
         if is_overdue {
             return Err(ActionError::fatal(format!(
-                "no Juju controller answered within {} minutes of starting its bootstrap; VM {runner} keeps the log in {RUNNER_LOG}",
-                BOOTSTRAP_DEADLINE.whole_minutes()
+                "no Juju controller answered within {} minutes of starting its bootstrap; VM {} keeps the log in {BOOTSTRAP_LOG}",
+                BOOTSTRAP_DEADLINE.whole_minutes(),
+                scope.machine(FIRST_CONTROLLER)?.name()
             )));
         }
         Ok(false)
@@ -454,11 +470,10 @@ impl Bootstrap {
 impl Step<JujuControllerChange> for Bootstrap {
     async fn is_complete(&self, context: &ChangeContext<'_>) -> Result<bool, ActionError> {
         let scope = ControllerScope::new(context, &self.environment)?;
-        let runner = scope.machine(RUNNER)?;
         if matches!(scope.specification().await?.substrate, Substrate::Vms { .. }) {
-            return self.has_bootstrapped(&scope, runner.name()).await;
+            return self.has_bootstrapped(&scope).await;
         }
-        match runner.phase().await? {
+        match scope.machine(RUNNER)?.phase().await? {
             Some(VmPhase::Stopped) => Ok(true),
             Some(VmPhase::Failed) => {
                 Err(ActionError::fatal("the Juju bootstrap runner failed; see its console"))
@@ -470,48 +485,22 @@ impl Step<JujuControllerChange> for Bootstrap {
     async fn run(&self, context: &ChangeContext<'_>) -> Result<(), ActionError> {
         let scope = ControllerScope::new(context, &self.environment)?;
         let runner = scope.machine(RUNNER)?;
+        let Some(cluster) = scope.host_cluster().await? else {
+            return Ok(());
+        };
         if runner.vm().await?.is_some() {
             return Ok(());
         }
-        let Some((target, network)) = self.target(&scope).await? else {
-            return Ok(());
-        };
-        let specification = scope.specification().await?;
-        let secret = scope.secret().await?;
-        let plan = BootstrapPlan {
-            controller: scope.ownership.environment().to_string(),
-            version: specification.version.clone(),
-            sign_in: specification.sign_in,
-            certificate: secret.value(CA_CERTIFICATE).unwrap_or_default().to_owned(),
-            private_key: secret.value(CA_KEY).unwrap_or_default().to_owned(),
-            token_refresh_url: self.environment.settings.token_refresh_url.clone(),
-            target,
-        };
-        match specification.substrate {
-            Substrate::Vms { storage_backend, .. } => {
-                runner
-                    .run_once(MachinePlan {
-                        shape: MachineShape::Small,
-                        image: ObjectName::new(UBUNTU_IMAGE).map_err(ActionError::fatal)?,
-                        network,
-                        storage_backend,
-                        security_groups: vec![scope.named("controller")?],
-                        user_data: plan.runner_user_data(),
-                        labels: BTreeMap::new(),
-                    })
-                    .await
-            }
-            Substrate::Kubernetes { .. } => {
-                runner
-                    .run_container(ContainerPlan {
-                        image: ObjectName::new(RUNNER_IMAGE).map_err(ActionError::fatal)?,
-                        environment: plan.environment(),
-                        network,
-                        security_groups: Vec::new(),
-                    })
-                    .await
-            }
-        }
+        let target = self.cluster_target(&scope, &cluster).await?;
+        let plan = bootstrap_plan(&scope, &self.environment, target).await?;
+        runner
+            .run_container(ContainerPlan {
+                image: ObjectName::new(RUNNER_IMAGE).map_err(ActionError::fatal)?,
+                environment: plan.environment(),
+                network: cluster.specification.network.clone(),
+                security_groups: Vec::new(),
+            })
+            .await
     }
 }
 
@@ -675,16 +664,18 @@ impl Step<JujuControllerChange> for EnableHa {
 impl Step<JujuControllerChange> for CleanUpBootstrap {
     async fn is_complete(&self, context: &ChangeContext<'_>) -> Result<bool, ActionError> {
         let scope = ControllerScope::new(context, &self.environment)?;
-        Ok(scope.machine(RUNNER)?.vm().await?.is_none())
+        let holds_key = scope.secret().await?.value(SSH_PRIVATE_KEY).is_some();
+        Ok(!holds_key && scope.machine(RUNNER)?.vm().await?.is_none())
     }
 
     async fn run(&self, context: &ChangeContext<'_>) -> Result<(), ActionError> {
         let scope = ControllerScope::new(context, &self.environment)?;
-        if matches!(scope.specification().await?.substrate, Substrate::Vms { .. }) {
+        if scope.secret().await?.value(SSH_PRIVATE_KEY).is_some() {
             let endpoint = scope.endpoint().await?;
             let model =
                 scope.model_uuid(&ObjectName::new(CONTROLLER_MODEL).map_err(ActionError::fatal)?).await?;
             self.environment.platform.remove_authorized_key(&endpoint, &model, BOOTSTRAP_KEY_COMMENT).await?;
+            forget_bootstrap_key(&scope).await?;
         }
         scope.machine(RUNNER)?.remove().await?;
         Ok(())

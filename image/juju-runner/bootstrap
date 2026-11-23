@@ -31,12 +31,9 @@ machine)
     printf '%s\n' "$JUJU_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
     chmod 600 "$HOME/.ssh/id_ed25519"
     printf 'Host *\n    StrictHostKeyChecking accept-new\n    User ubuntu\n' > "$HOME/.ssh/config"
-    until ssh -o ConnectTimeout=10 "$JUJU_MACHINE_ADDRESS" "cloud-init status --wait > /dev/null; true" 2> /dev/null; do
-        echo "waiting for $JUJU_MACHINE_ADDRESS to finish its first boot"
-        sleep 10
-    done
     printf 'clouds:\n  %s:\n    type: manual\n    endpoint: ubuntu@%s\n' "$cloud" "$JUJU_MACHINE_ADDRESS" > "$workdir/cloud.yaml"
     juju add-cloud --client "$cloud" "$workdir/cloud.yaml"
+    printf 'bootstrap-timeout: 3600\nenable-os-upgrade: false\n' >> "$workdir/bootstrap.yaml"
     ;;
 kubernetes)
     : "${JUJU_KUBECONFIG:?}"
@@ -54,3 +51,7 @@ juju bootstrap "$cloud" "$JUJU_CONTROLLER_NAME" \
     --agent-version "$JUJU_VERSION" \
     --config "$workdir/bootstrap.yaml" \
     --no-switch
+
+if [ -n "${JUJU_ADMIN_PASSWORD:-}" ]; then
+    printf '%s\n' "$JUJU_ADMIN_PASSWORD" | juju change-user-password admin -c "$JUJU_CONTROLLER_NAME" --no-prompt
+fi
