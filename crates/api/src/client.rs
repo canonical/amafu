@@ -378,6 +378,10 @@ impl ApiClient {
         self.call(Method::GET, "/v1/image-catalog", None).await
     }
 
+    pub async fn lxd_certificate(&self) -> Result<crate::lxd::LxdCertificate, ClientError> {
+        self.call(Method::GET, "/v1/lxd-certificate", None).await
+    }
+
     pub async fn look_up_ssh_keys(&self, source: KeySource, account: &str) -> Result<KeyLookup, ClientError> {
         let path =
             format!("/v1/ssh-key-sources/{}/{account}{}", source.as_str(), self.project_query::<SshKey>());

@@ -8,6 +8,7 @@ mod handlers;
 mod https;
 pub mod identity;
 pub mod key_directory;
+pub mod lxd;
 pub mod node_client;
 pub mod node_identity;
 pub mod node_routes;

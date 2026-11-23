@@ -113,6 +113,13 @@ pub struct CreateArguments {
     pub volumes: Vec<ObjectName>,
     #[command(flatten)]
     pub attachments: Attachments,
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value_t = 0,
+        help = "Let up to this many LXD guests take addresses on the first interface, at most 64"
+    )]
+    pub guests: u16,
     #[command(flatten)]
     pub placement: Placement,
     #[command(flatten)]
@@ -135,6 +142,8 @@ pub enum VmCommand {
     List,
     #[command(about = "Show a virtual machine")]
     Show { name: String },
+    #[command(about = "List the LXD containers and VMs a virtual machine hosts")]
+    Guests { name: String },
     #[command(about = "Start a stopped virtual machine")]
     Start { name: String },
     #[command(about = "Stop a running virtual machine")]
@@ -276,6 +285,7 @@ pub async fn run(client: &ApiClient, command: VmCommand, format: OutputFormat) -
                 disk,
                 mut volumes,
                 attachments,
+                guests,
                 placement,
                 ssh,
                 user_data,
@@ -294,12 +304,16 @@ pub async fn run(client: &ApiClient, command: VmCommand, format: OutputFormat) -
             }
             let power_state = if stopped { PowerState::Stopped } else { PowerState::Running };
             let user_data = user_data.map(std::fs::read_to_string).transpose()?;
+            let mut network_interfaces = attachments.interfaces();
+            if let Some(first) = network_interfaces.first_mut() {
+                first.guests = guests;
+            }
             let specification = VmSpecification {
                 cpu_count: cpus,
                 memory_mebibytes,
                 boot: boot.source(),
                 volumes,
-                network_interfaces: attachments.interfaces(),
+                network_interfaces,
                 power_state,
                 user_data,
                 priority: placement.priority,
@@ -311,6 +325,7 @@ pub async fn run(client: &ApiClient, command: VmCommand, format: OutputFormat) -
         }
         VmCommand::List => print_vms(&client.list::<Vm>().await?, format),
         VmCommand::Show { name } => print_structured(&client.get::<Vm>(&name).await?, format),
+        VmCommand::Guests { name } => crate::guests::print_guests(client, &name, format).await,
         VmCommand::Start { name } => {
             print_vms(&[set_power_state(client, &name, PowerState::Running).await?], format)
         }

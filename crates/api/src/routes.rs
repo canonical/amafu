@@ -100,6 +100,7 @@ pub fn router(state: ApiState) -> Router {
 fn credential_routes(router: Router<ApiState>) -> Router<ApiState> {
     router
         .route("/v1/image-catalog", get(|State(state): State<ApiState>| crate::catalog::image_catalog(state)))
+        .route("/v1/lxd-certificate", get(|State(state): State<ApiState>| crate::lxd::certificate(state)))
         .route(
             "/v1/ssh-key-sources/{source}/{account}",
             get(
