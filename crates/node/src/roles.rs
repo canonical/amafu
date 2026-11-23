@@ -23,6 +23,8 @@ use amafu_controllers::environments::outcomes::{
     CreationOutcomeController, EnvironmentKinds, JujuKinds, KubernetesKinds,
 };
 use amafu_controllers::environments::rotation::CredentialRotationController;
+use amafu_controllers::guest_inventory::GuestInventoryController;
+use amafu_controllers::lxd_identity::LxdIdentityController;
 use amafu_controllers::node_lease::{LeaseKeeper, LeaseKeeperSettings, feed_while_leased};
 use amafu_controllers::retirement::SshKeyRetirementController;
 use amafu_controllers::root_volumes::RootVolumeController;
@@ -53,6 +55,7 @@ use amafu_interfaces::{
 use amafu_interfaces::{FixedImageCatalog, ImageCatalog, KubernetesPlatform};
 use amafu_juju_client::WebSocketJuju;
 use amafu_kubernetes_client::HttpKubernetes;
+use amafu_lxd_client::HttpsLxd;
 use amafu_network::{KernelDatapath, LocalServicesServer};
 use amafu_reconciler::{Controller, ReconcilerSettings, StepRegistry, run_controller, run_singleton};
 use amafu_state::{
@@ -389,6 +392,20 @@ fn cluster_record_roles(roles: &mut JoinSet<()>, services: &Services, settings: 
             SigningKeysController::new(
                 Arc::clone(&keys_store),
                 Arc::clone(&keys_clock),
+                Arc::new(RandomIdentifiers),
+            )
+        },
+        services,
+        settings,
+    );
+    let (identity_store, identity_clock) = (Arc::clone(&services.store), Arc::clone(&services.clock));
+    singleton_role(
+        roles,
+        "lxd-identity",
+        move |_| {
+            LxdIdentityController::new(
+                Arc::clone(&identity_store),
+                Arc::clone(&identity_clock),
                 Arc::new(RandomIdentifiers),
             )
         },
@@ -737,6 +754,14 @@ fn compute_roles(
     )
     .with_platform_api(platform_api);
     controller_role(roles, "node-network", Arc::new(node_network), services, settings);
+    let guest_inventory = GuestInventoryController::new(
+        node.clone(),
+        Arc::clone(&services.store),
+        Arc::new(HttpsLxd::default()),
+        Arc::clone(&services.clock),
+        Arc::new(RandomIdentifiers),
+    );
+    controller_role(roles, "guest-inventory", Arc::new(guest_inventory), services, settings);
 }
 
 async fn core_member_services(configuration: &NodeConfiguration) -> anyhow::Result<Services> {

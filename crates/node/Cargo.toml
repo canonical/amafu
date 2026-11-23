@@ -24,6 +24,7 @@ amafu-image-catalog.workspace = true
 amafu-interfaces.workspace = true
 amafu-juju-client.workspace = true
 amafu-kubernetes-client.workspace = true
+amafu-lxd-client.workspace = true
 amafu-network.workspace = true
 amafu-node-configuration.workspace = true
 amafu-reconciler.workspace = true
