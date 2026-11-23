@@ -149,8 +149,9 @@ async fn forget_bootstrap_key(scope: &ControllerScope<'_>) -> Result<(), ActionE
         .objects()
         .change_specification::<EnvironmentSecret>(&reference, |current| {
             let mut values = current.values.clone();
-            let removed = [SSH_PRIVATE_KEY, SSH_PUBLIC_KEY].iter().any(|key| values.remove(*key).is_some());
-            removed.then(|| EnvironmentSecretSpecification { values, ..current.clone() })
+            let before = values.len();
+            values.retain(|key, _| key != SSH_PRIVATE_KEY && key != SSH_PUBLIC_KEY);
+            (values.len() != before).then(|| EnvironmentSecretSpecification { values, ..current.clone() })
         })
         .await
 }
@@ -664,13 +665,15 @@ impl Step<JujuControllerChange> for EnableHa {
 impl Step<JujuControllerChange> for CleanUpBootstrap {
     async fn is_complete(&self, context: &ChangeContext<'_>) -> Result<bool, ActionError> {
         let scope = ControllerScope::new(context, &self.environment)?;
-        let holds_key = scope.secret().await?.value(SSH_PRIVATE_KEY).is_some();
+        let secret = scope.secret().await?;
+        let holds_key = [SSH_PRIVATE_KEY, SSH_PUBLIC_KEY].iter().any(|key| secret.value(key).is_some());
         Ok(!holds_key && scope.machine(RUNNER)?.vm().await?.is_none())
     }
 
     async fn run(&self, context: &ChangeContext<'_>) -> Result<(), ActionError> {
         let scope = ControllerScope::new(context, &self.environment)?;
-        if scope.secret().await?.value(SSH_PRIVATE_KEY).is_some() {
+        let secret = scope.secret().await?;
+        if [SSH_PRIVATE_KEY, SSH_PUBLIC_KEY].iter().any(|key| secret.value(key).is_some()) {
             let endpoint = scope.endpoint().await?;
             let model =
                 scope.model_uuid(&ObjectName::new(CONTROLLER_MODEL).map_err(ActionError::fatal)?).await?;

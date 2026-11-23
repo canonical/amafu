@@ -1,5 +1,8 @@
 #[cfg(test)]
 mod juju_environment {
+    use amafu_domain::kinds::environment_secret::EnvironmentSecret;
+    use amafu_interfaces::Consistency;
+    use amafu_interfaces::objects::list;
     use std::collections::BTreeMap;
 
     use amafu_controllers::environments::juju::{BOOTSTRAP_KEY_COMMENT, JujuSteps};
@@ -73,6 +76,15 @@ mod juju_environment {
         let controllers = world.juju.machines("model-controller");
         assert_eq!(controllers.iter().filter(|machine| !machine.units.is_empty()).count(), 3);
         assert_eq!(world.juju.removed_keys(), [BOOTSTRAP_KEY_COMMENT]);
+        let secrets =
+            list::<EnvironmentSecret>(&*world.store, None, Consistency::Linearizable).await.unwrap();
+        assert!(
+            secrets.iter().all(|secret| !secret
+                .specification
+                .values
+                .keys()
+                .any(|key| key.starts_with("ssh-")))
+        );
         let vms = world.owned::<Vm>().await;
         assert!(!vms.iter().any(|vm| matches!(vm.specification.boot, BootSource::Container { .. })));
         assert_eq!(vms.len(), 3);
