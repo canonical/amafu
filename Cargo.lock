@@ -486,6 +486,7 @@ dependencies = [
  "amafu-interfaces",
  "amafu-juju-client",
  "amafu-kubernetes-client",
+ "amafu-lxd-client",
  "amafu-network",
  "amafu-node-configuration",
  "amafu-reconciler",
