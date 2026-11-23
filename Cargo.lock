@@ -188,7 +188,6 @@ dependencies = [
  "amafu-interfaces",
  "amafu-reconciler",
  "amafu-scheduler",
- "amafu-ssh-key-pair",
  "amafu-token-issuer",
  "async-trait",
  "base64",

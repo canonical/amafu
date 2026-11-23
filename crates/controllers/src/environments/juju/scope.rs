@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 
 use amafu_domain::kinds::environment_secret::{EnvironmentSecret, EnvironmentSecretSpecification};
@@ -8,7 +7,8 @@ use amafu_domain::kinds::juju_controller::{
     JujuRequest, Substrate,
 };
 use amafu_domain::kinds::kubernetes_cluster::KubernetesCluster;
-use amafu_domain::labels::{JUJU_APPLICATION, JUJU_CONTROLLER, JUJU_MACHINE, JUJU_MODEL};
+use amafu_domain::kinds::machine_shape::MachineShape;
+use amafu_domain::labels::JUJU_CONTROLLER;
 use amafu_domain::platform_access::{ISSUER, SERVICE_SUBJECT, juju_user};
 use amafu_domain::{Object, ObjectName, ObjectReference};
 use amafu_interfaces::{ActionError, JujuCredentials, JujuEndpoint, KubernetesEndpoint};
@@ -18,6 +18,7 @@ use serde_json::{Value, json};
 use time::Duration;
 
 use super::JujuEnvironment;
+use super::bootstrap::{BootstrapPlan, Target};
 use crate::environments::kubernetes::endpoint_of;
 use crate::environments::{EnvironmentObjects, Machine, Ownership};
 
@@ -26,8 +27,6 @@ pub const UBUNTU_IMAGE: &str = "ubuntu-24-04";
 pub const RUNNER_IMAGE: &str = "amafu-juju-runner";
 pub const CA_CERTIFICATE: &str = "ca-crt";
 pub const CA_KEY: &str = "ca-key";
-pub const SSH_PRIVATE_KEY: &str = "ssh-private-key";
-pub const SSH_PUBLIC_KEY: &str = "ssh-public-key";
 pub const CREDENTIAL_SECRET: &str = "credential-secret";
 pub const ADMIN_PASSWORD: &str = "admin-password";
 pub const ADMIN_USER: &str = "admin";
@@ -221,6 +220,25 @@ impl<'a> ControllerScope<'a> {
         endpoint_of(self.objects(), &self.environment.keyring, self.context.clock.now(), cluster).await
     }
 
+    pub fn step_is_overdue(&self, deadline: Duration) -> bool {
+        let started = self.context.operation.status.current_step.as_ref().map(|step| step.started_at);
+        started.is_some_and(|started| self.context.clock.now() - started > deadline)
+    }
+
+    pub async fn bootstrap_plan(&self, target: Target) -> Result<BootstrapPlan, ActionError> {
+        let specification = self.specification().await?;
+        let secret = self.secret().await?;
+        Ok(BootstrapPlan {
+            controller: self.ownership.environment().to_string(),
+            version: specification.version.clone(),
+            sign_in: specification.sign_in,
+            certificate: secret.value(CA_CERTIFICATE).unwrap_or_default().to_owned(),
+            private_key: secret.value(CA_KEY).unwrap_or_default().to_owned(),
+            token_refresh_url: self.environment.settings.token_refresh_url.clone(),
+            target,
+        })
+    }
+
     pub async fn update_status(
         &self,
         change: impl Fn(&mut JujuControllerStatus) + Send + Sync,
@@ -233,32 +251,25 @@ impl<'a> ControllerScope<'a> {
             })
             .await
     }
-
-    #[must_use]
-    pub fn machine_labels(
-        model: &ObjectName,
-        machine: &str,
-        application: Option<&ObjectName>,
-    ) -> BTreeMap<String, String> {
-        let mut labels = BTreeMap::from([
-            (JUJU_MODEL.to_owned(), model.to_string()),
-            (JUJU_MACHINE.to_owned(), machine.to_owned()),
-        ]);
-        if let Some(application) = application {
-            labels.insert(JUJU_APPLICATION.to_owned(), application.to_string());
-        }
-        labels
-    }
 }
 
-pub fn substrate_network(
-    specification: &JujuControllerSpecification,
-) -> Result<(&ObjectName, &ObjectName), ActionError> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PodSubstrate {
+    pub pods: u8,
+    pub shape: MachineShape,
+    pub network: ObjectName,
+    pub storage_backend: ObjectName,
+}
+
+pub fn pod_substrate(specification: &JujuControllerSpecification) -> Result<PodSubstrate, ActionError> {
     match &specification.substrate {
-        Substrate::Vms { network, storage_backend, .. } => Ok((network, storage_backend)),
-        Substrate::Kubernetes { .. } => {
-            Err(ActionError::fatal("a controller on Kubernetes has no machines of its own"))
-        }
+        Substrate::Pods { pods, shape, network, storage_backend, .. } => Ok(PodSubstrate {
+            pods: *pods,
+            shape: *shape,
+            network: network.clone(),
+            storage_backend: storage_backend.clone(),
+        }),
+        Substrate::Kubernetes { .. } => Err(ActionError::fatal("a controller on Kubernetes has no pods")),
     }
 }
 

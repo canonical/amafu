@@ -1,37 +1,62 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Mutex;
 
 use amafu_interfaces::{
-    ActionError, Charm, JujuControllerInfo, JujuEndpoint, JujuMachine, JujuModel, JujuPlatform, ManualMachine,
+    ActionError, Charm, JujuApplication, JujuControllerInfo, JujuEndpoint, JujuMachine, JujuModel,
+    JujuPlatform,
 };
 
-const CONTROLLER_MODEL: &str = "controller";
+const CONTROLLER_MODEL: &str = "model-controller";
+const CONTROLLER_APPLICATION: &str = "controller";
+
+#[derive(Debug, Default)]
+struct Model {
+    machines: Vec<JujuMachine>,
+    applications: BTreeMap<String, bool>,
+    next_machine: u32,
+    next_unit: BTreeMap<String, u32>,
+}
+
+impl Model {
+    fn add_unit(&mut self, application: &str) {
+        let number = self.next_unit.entry(application.to_owned()).or_default();
+        let unit = format!("{application}/{number}");
+        *number += 1;
+        let id = self.next_machine.to_string();
+        self.next_machine += 1;
+        self.machines.push(JujuMachine { id, is_started: true, units: vec![unit] });
+    }
+
+    fn remove_units(&mut self, doomed: impl Fn(&str) -> bool) {
+        for machine in &mut self.machines {
+            machine.units.retain(|unit| !doomed(unit));
+        }
+        self.machines.retain(|machine| !machine.units.is_empty());
+    }
+
+    fn units_of(&self, application: &str) -> Vec<String> {
+        let prefix = format!("{application}/");
+        self.machines
+            .iter()
+            .flat_map(|machine| &machine.units)
+            .filter(|unit| unit.starts_with(&prefix))
+            .cloned()
+            .collect()
+    }
+}
 
 #[derive(Debug, Default)]
 struct State {
     is_bootstrapped: bool,
     version: String,
     models: Vec<JujuModel>,
-    machines: BTreeMap<String, Vec<JujuMachine>>,
-    next_machine: u32,
-    next_unit: BTreeMap<String, u32>,
-    removed_keys: Vec<String>,
-    exposed: Vec<String>,
+    contents: BTreeMap<String, Model>,
     credential: Option<String>,
 }
 
 impl State {
-    fn machines_of(&mut self, model: &str) -> &mut Vec<JujuMachine> {
-        self.machines.entry(model.to_owned()).or_default()
-    }
-
-    fn place(&mut self, model: &str, application: &str, machine: &str) {
-        let next = self.next_unit.entry(application.to_owned()).or_default();
-        let unit = format!("{application}/{next}");
-        *next += 1;
-        if let Some(found) = self.machines_of(model).iter_mut().find(|found| found.id == machine) {
-            found.units.push(unit);
-        }
+    fn model(&mut self, uuid: &str) -> &mut Model {
+        self.contents.entry(uuid.to_owned()).or_default()
     }
 }
 
@@ -58,40 +83,24 @@ impl FakeJuju {
             state.is_bootstrapped = true;
             version.clone_into(&mut state.version);
             state.models.push(JujuModel {
-                name: CONTROLLER_MODEL.to_owned(),
-                uuid: String::from("model-controller"),
+                name: String::from("controller"),
+                uuid: CONTROLLER_MODEL.to_owned(),
                 version: version.to_owned(),
             });
-            state.machines.insert(
-                String::from("model-controller"),
-                vec![JujuMachine {
-                    id: String::from("0"),
-                    instance_id: String::from("manual:bootstrap"),
-                    is_started: true,
-                    units: vec![String::from("controller/0")],
-                }],
-            );
-            state.next_machine = 1;
-            state.next_unit.insert(String::from("controller"), 1);
+            let controller = state.model(CONTROLLER_MODEL);
+            controller.applications.insert(CONTROLLER_APPLICATION.to_owned(), false);
+            controller.add_unit(CONTROLLER_APPLICATION);
         });
     }
 
-    pub fn start(&self, machine: &str) {
-        self.with(|state| {
-            for found in state.machines.values_mut().flatten().filter(|found| found.id == machine) {
-                found.is_started = true;
-            }
-        });
+    #[must_use]
+    pub fn is_bootstrapped(&self) -> bool {
+        self.with(|state| state.is_bootstrapped)
     }
 
     #[must_use]
     pub fn machines(&self, model: &str) -> Vec<JujuMachine> {
-        self.with(|state| state.machines_of(model).clone())
-    }
-
-    #[must_use]
-    pub fn removed_keys(&self) -> Vec<String> {
-        self.with(|state| state.removed_keys.clone())
+        self.with(|state| state.model(model).machines.clone())
     }
 
     #[must_use]
@@ -99,13 +108,8 @@ impl FakeJuju {
         self.with(|state| state.credential.clone())
     }
 
-    #[must_use]
-    pub fn exposed(&self) -> Vec<String> {
-        self.with(|state| state.exposed.clone())
-    }
-
     fn require_bootstrapped(&self) -> Result<(), ActionError> {
-        if self.with(|state| state.is_bootstrapped) {
+        if self.is_bootstrapped() {
             Ok(())
         } else {
             Err(ActionError::retryable("the controller does not answer yet"))
@@ -145,7 +149,7 @@ impl JujuPlatform for FakeJuju {
     async fn destroy_model(&self, _endpoint: &JujuEndpoint, model: &str) -> Result<(), ActionError> {
         self.with(|state| {
             state.models.retain(|known| known.uuid != model);
-            state.machines.remove(model);
+            state.contents.remove(model);
         });
         Ok(())
     }
@@ -159,7 +163,7 @@ impl JujuPlatform for FakeJuju {
         self.with(|state| {
             for known in state.models.iter_mut().filter(|known| known.uuid == model) {
                 version.clone_into(&mut known.version);
-                if known.name == CONTROLLER_MODEL {
+                if known.uuid == CONTROLLER_MODEL {
                     version.clone_into(&mut state.version);
                 }
             }
@@ -172,55 +176,31 @@ impl JujuPlatform for FakeJuju {
         Ok(self.machines(model))
     }
 
-    async fn add_machine(
+    async fn applications(
         &self,
         _endpoint: &JujuEndpoint,
         model: &str,
-        machine: &ManualMachine,
-    ) -> Result<String, ActionError> {
+    ) -> Result<Vec<JujuApplication>, ActionError> {
+        self.require_bootstrapped()?;
         Ok(self.with(|state| {
-            let id = state.next_machine.to_string();
-            state.next_machine += 1;
-            state.machines_of(model).push(JujuMachine {
-                id: id.clone(),
-                instance_id: machine.instance_id.clone(),
-                is_started: false,
-                units: Vec::new(),
-            });
-            id
+            let model = state.model(model);
+            model
+                .applications
+                .iter()
+                .map(|(name, is_exposed)| JujuApplication {
+                    name: name.clone(),
+                    units: model.units_of(name),
+                    is_exposed: *is_exposed,
+                })
+                .collect()
         }))
     }
 
-    async fn provisioning_script(
-        &self,
-        _endpoint: &JujuEndpoint,
-        _model: &str,
-        machine: &str,
-        nonce: &str,
-    ) -> Result<String, ActionError> {
-        Ok(format!("#!/bin/sh\nexec juju-provision {machine} {nonce}\n"))
-    }
-
-    async fn remove_machine(
-        &self,
-        _endpoint: &JujuEndpoint,
-        model: &str,
-        machine: &str,
-    ) -> Result<(), ActionError> {
-        self.with(|state| state.machines_of(model).retain(|found| found.id != machine));
-        Ok(())
-    }
-
-    async fn enable_ha(&self, _endpoint: &JujuEndpoint, machines: &[String]) -> Result<(), ActionError> {
+    async fn enable_ha(&self, _endpoint: &JujuEndpoint, controllers: u8) -> Result<(), ActionError> {
         self.with(|state| {
-            for machine in machines {
-                let hosts_controller = state
-                    .machines_of("model-controller")
-                    .iter()
-                    .any(|found| &found.id == machine && !found.units.is_empty());
-                if !hosts_controller {
-                    state.place("model-controller", "controller", machine);
-                }
+            let model = state.model(CONTROLLER_MODEL);
+            while model.units_of(CONTROLLER_APPLICATION).len() < usize::from(controllers) {
+                model.add_unit(CONTROLLER_APPLICATION);
             }
         });
         Ok(())
@@ -231,11 +211,13 @@ impl JujuPlatform for FakeJuju {
         _endpoint: &JujuEndpoint,
         model: &str,
         charm: &Charm,
-        machines: &[String],
+        units: u16,
     ) -> Result<(), ActionError> {
         self.with(|state| {
-            for machine in machines {
-                state.place(model, &charm.application, machine);
+            let model = state.model(model);
+            model.applications.insert(charm.application.clone(), false);
+            for _ in 0..units {
+                model.add_unit(&charm.application);
             }
         });
         Ok(())
@@ -246,11 +228,12 @@ impl JujuPlatform for FakeJuju {
         _endpoint: &JujuEndpoint,
         model: &str,
         application: &str,
-        machines: &[String],
+        units: u16,
     ) -> Result<(), ActionError> {
         self.with(|state| {
-            for machine in machines {
-                state.place(model, application, machine);
+            let model = state.model(model);
+            for _ in 0..units {
+                model.add_unit(application);
             }
         });
         Ok(())
@@ -262,11 +245,8 @@ impl JujuPlatform for FakeJuju {
         model: &str,
         units: &[String],
     ) -> Result<(), ActionError> {
-        self.with(|state| {
-            for machine in state.machines_of(model) {
-                machine.units.retain(|unit| !units.contains(unit));
-            }
-        });
+        let doomed: BTreeSet<&str> = units.iter().map(String::as_str).collect();
+        self.with(|state| state.model(model).remove_units(|unit| doomed.contains(unit)));
         Ok(())
     }
 
@@ -278,9 +258,9 @@ impl JujuPlatform for FakeJuju {
     ) -> Result<(), ActionError> {
         let prefix = format!("{application}/");
         self.with(|state| {
-            for machine in state.machines_of(model) {
-                machine.units.retain(|unit| !unit.starts_with(&prefix));
-            }
+            let model = state.model(model);
+            model.remove_units(|unit| unit.starts_with(&prefix));
+            model.applications.remove(application);
         });
         Ok(())
     }
@@ -288,20 +268,14 @@ impl JujuPlatform for FakeJuju {
     async fn expose(
         &self,
         _endpoint: &JujuEndpoint,
-        _model: &str,
+        model: &str,
         application: &str,
     ) -> Result<(), ActionError> {
-        self.with(|state| state.exposed.push(application.to_owned()));
-        Ok(())
-    }
-
-    async fn remove_authorized_key(
-        &self,
-        _endpoint: &JujuEndpoint,
-        _model: &str,
-        comment: &str,
-    ) -> Result<(), ActionError> {
-        self.with(|state| state.removed_keys.push(comment.to_owned()));
+        self.with(|state| {
+            if let Some(is_exposed) = state.model(model).applications.get_mut(application) {
+                *is_exposed = true;
+            }
+        });
         Ok(())
     }
 

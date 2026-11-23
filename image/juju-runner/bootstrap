@@ -24,15 +24,12 @@ indent() {
 } > "$workdir/bootstrap.yaml"
 
 case "$JUJU_SUBSTRATE" in
-machine)
-    : "${JUJU_MACHINE_ADDRESS:?}" "${JUJU_SSH_PRIVATE_KEY:?}"
-    mkdir -p "$HOME/.ssh"
-    chmod 700 "$HOME/.ssh"
-    printf '%s\n' "$JUJU_SSH_PRIVATE_KEY" > "$HOME/.ssh/id_ed25519"
-    chmod 600 "$HOME/.ssh/id_ed25519"
-    printf 'Host *\n    StrictHostKeyChecking accept-new\n    User ubuntu\n' > "$HOME/.ssh/config"
-    printf 'clouds:\n  %s:\n    type: manual\n    endpoint: ubuntu@%s\n' "$cloud" "$JUJU_MACHINE_ADDRESS" > "$workdir/cloud.yaml"
-    juju add-cloud --client "$cloud" "$workdir/cloud.yaml"
+lxd)
+    : "${JUJU_PODS:?}"
+    until [ "$(lxc cluster list -f csv 2>/dev/null | grep -c ',ONLINE,')" -ge "$JUJU_PODS" ]; do
+        sleep 10
+    done
+    cloud=localhost
     printf 'bootstrap-timeout: 3600\nenable-os-upgrade: false\n' >> "$workdir/bootstrap.yaml"
     ;;
 kubernetes)

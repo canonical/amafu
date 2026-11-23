@@ -2,9 +2,6 @@ use std::collections::BTreeMap;
 
 pub const KUBERNETES_CLUSTER: &str = "amafu.io/kubernetes-cluster";
 pub const JUJU_CONTROLLER: &str = "amafu.io/juju-controller";
-pub const JUJU_MODEL: &str = "amafu.io/juju-model";
-pub const JUJU_MACHINE: &str = "amafu.io/juju-machine";
-pub const JUJU_APPLICATION: &str = "amafu.io/juju-application";
 pub const ROOT_OF: &str = "amafu.io/root-of";
 
 const ENVIRONMENT_LABELS: [&str; 2] = [KUBERNETES_CLUSTER, JUJU_CONTROLLER];
@@ -48,13 +45,9 @@ mod tests {
 
     #[test]
     fn a_selector_needs_every_pair() {
-        let selector = LabelSelector::parse("amafu.io/juju-model=default, tier=web").unwrap();
-        assert!(selector.matches(&labels(&[
-            ("amafu.io/juju-model", "default"),
-            ("tier", "web"),
-            ("x", "y")
-        ])));
-        assert!(!selector.matches(&labels(&[("amafu.io/juju-model", "default")])));
+        let selector = LabelSelector::parse("team=data, tier=web").unwrap();
+        assert!(selector.matches(&labels(&[("team", "data"), ("tier", "web"), ("x", "y")])));
+        assert!(!selector.matches(&labels(&[("team", "data")])));
     }
 
     #[test]

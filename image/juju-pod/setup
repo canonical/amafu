@@ -1,0 +1,61 @@
+#!/bin/sh
+set -eu
+
+: "${AMAFU_POD_ROLE:?}" "${AMAFU_POD_NAME:?}" "${AMAFU_LXD_CHANNEL:?}" "${AMAFU_TRUSTED_CERTIFICATE:?}"
+
+uplink=$(ip -o route show default | awk '{print $5; exit}')
+mac=$(cat "/sys/class/net/$uplink/address")
+cat > /etc/netplan/60-amafu-pod.yaml <<NETPLAN
+network:
+  version: 2
+  ethernets:
+    $uplink:
+      dhcp4: false
+  bridges:
+    br0:
+      interfaces: [$uplink]
+      macaddress: $mac
+      dhcp4: true
+NETPLAN
+chmod 600 /etc/netplan/60-amafu-pod.yaml
+netplan apply
+
+address=""
+until [ -n "$address" ]; do
+    sleep 2
+    address=$(ip -4 -o addr show br0 scope global | awk '{split($4, parts, "/"); print parts[1]; exit}')
+done
+
+until snap list lxd >/dev/null 2>&1; do
+    snap install lxd --channel="$AMAFU_LXD_CHANNEL" || sleep 15
+done
+lxd waitready --timeout=600
+
+case "$AMAFU_POD_ROLE" in
+founder)
+    lxc config set core.https_address "$address:8443"
+    lxc config trust list -f csv | grep -q ',amafu,' || lxc config trust add "$AMAFU_TRUSTED_CERTIFICATE" --name amafu
+    lxc storage show default >/dev/null 2>&1 || lxc storage create default dir
+    lxc profile device show default | grep -q '^root:' || lxc profile device add default root disk path=/ pool=default
+    lxc profile device show default | grep -q '^eth0:' || lxc profile device add default eth0 nic nictype=bridged parent=br0 name=eth0
+    ;;
+member)
+    : "${AMAFU_JOIN_TOKEN:?}"
+    lxd init --preseed <<PRESEED
+cluster:
+  enabled: true
+  server_name: $AMAFU_POD_NAME
+  server_address: $address:8443
+  cluster_token: $AMAFU_JOIN_TOKEN
+  member_config:
+  - entity: storage-pool
+    name: default
+    key: source
+    value: ""
+PRESEED
+    ;;
+*)
+    echo "unknown pod role $AMAFU_POD_ROLE" >&2
+    exit 2
+    ;;
+esac

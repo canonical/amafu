@@ -15,7 +15,7 @@ use crate::step_plans::{Waiting, plan_columns, submit, unique_name};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum SubstrateKind {
-    Vms,
+    Pods,
     Kubernetes,
 }
 
@@ -29,8 +29,10 @@ pub enum SignIn {
 pub struct ControllerArguments {
     #[arg(long, value_parser = version, help = "A released Juju version, such as 3.6.29")]
     version: JujuVersion,
-    #[arg(long = "on", value_enum, default_value = "vms")]
+    #[arg(long = "on", value_enum, default_value = "pods")]
     substrate: SubstrateKind,
+    #[arg(long, default_value_t = 1, help = "LXD pods to run the controller and units on: 1, or 3 to 16")]
+    pods: u8,
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u8).range(1..=3), help = "1, or 3 for high availability")]
     controllers: u8,
     #[arg(long, value_parser = shape, default_value = "medium")]
@@ -58,8 +60,9 @@ impl ControllerArguments {
             self.external_network,
             self.cluster,
         ) {
-            (SubstrateKind::Vms, Some(network), Some(storage_backend), Some(external_network), _) => {
-                Substrate::Vms {
+            (SubstrateKind::Pods, Some(network), Some(storage_backend), Some(external_network), _) => {
+                Substrate::Pods {
+                    pods: self.pods,
                     controllers: self.controllers,
                     shape: self.shape,
                     network,
@@ -69,7 +72,7 @@ impl ControllerArguments {
             }
             (SubstrateKind::Kubernetes, _, _, _, Some(cluster)) => Substrate::Kubernetes { cluster },
             _ => bail!(
-                "a controller on VMs needs --network, --storage-backend and --external-network; one on Kubernetes needs --cluster"
+                "a controller on pods needs --network, --storage-backend and --external-network; one on Kubernetes needs --cluster"
             ),
         };
         let sign_in = match self.sign_in {
@@ -95,7 +98,7 @@ pub struct Application {
 
 #[derive(Subcommand)]
 pub enum JujuCommand {
-    #[command(about = "Bootstrap a Juju controller on Amafu VMs or on an Amafu Kubernetes cluster")]
+    #[command(about = "Bootstrap a Juju controller on LXD pods or on an Amafu Kubernetes cluster")]
     Create {
         name: ObjectName,
         #[command(flatten)]
@@ -125,13 +128,21 @@ pub enum JujuCommand {
         #[command(flatten)]
         waiting: Waiting,
     },
-    #[command(name = "enable-ha", about = "Add two controller machines")]
+    #[command(name = "enable-ha", about = "Run three controllers spread over the pods")]
     EnableHa {
         name: String,
         #[command(flatten)]
         waiting: Waiting,
     },
-    #[command(about = "Deploy a charm onto new Amafu VMs")]
+    #[command(name = "scale-pods", about = "Add pods to the LXD cluster, or retire empty ones")]
+    ScalePods {
+        name: String,
+        #[arg(long, help = "1, or 3 to 16")]
+        pods: u8,
+        #[command(flatten)]
+        waiting: Waiting,
+    },
+    #[command(about = "Deploy a charm; Juju runs each unit in an LXD container on the pods")]
     Deploy {
         name: String,
         #[command(flatten)]
@@ -142,26 +153,22 @@ pub enum JujuCommand {
         channel: Option<String>,
         #[arg(long, default_value_t = 1)]
         units: u16,
-        #[arg(long, value_parser = shape, default_value = "medium")]
-        shape: MachineShape,
-        #[arg(long, help = "Make the application reachable through floating IPs")]
+        #[arg(long, help = "Expose the application through Juju")]
         expose: bool,
         #[command(flatten)]
         waiting: Waiting,
     },
-    #[command(name = "add-units", about = "Add units on new Amafu VMs")]
-    AddUnits {
+    #[command(about = "Add or remove units until the application has this many")]
+    Scale {
         name: String,
         #[command(flatten)]
         target: Application,
-        #[arg(long, default_value_t = 1)]
+        #[arg(long)]
         units: u16,
-        #[arg(long, value_parser = shape, default_value = "medium")]
-        shape: MachineShape,
         #[command(flatten)]
         waiting: Waiting,
     },
-    #[command(name = "remove-units", about = "Remove units and delete the VMs they leave empty")]
+    #[command(name = "remove-units", about = "Remove these units")]
     RemoveUnits {
         name: String,
         #[command(flatten)]
@@ -171,24 +178,11 @@ pub enum JujuCommand {
         #[command(flatten)]
         waiting: Waiting,
     },
-    #[command(
-        name = "remove-application",
-        about = "Remove an application and delete the VMs it leaves empty"
-    )]
+    #[command(name = "remove-application", about = "Remove an application and its units")]
     RemoveApplication {
         name: String,
         #[command(flatten)]
         target: Application,
-        #[command(flatten)]
-        waiting: Waiting,
-    },
-    #[command(name = "replace-machine", about = "Move the units of a machine whose VM is gone onto a new VM")]
-    ReplaceMachine {
-        name: String,
-        #[arg(long, value_name = "MODEL")]
-        model: ObjectName,
-        #[arg(long, value_name = "MACHINE")]
-        machine: String,
         #[command(flatten)]
         waiting: Waiting,
     },
@@ -225,7 +219,7 @@ impl Tabulated for JujuController {
 
     fn row(controller: &Object<Self>) -> Vec<String> {
         let substrate = match &controller.specification.substrate {
-            Substrate::Vms { controllers, .. } => format!("{controllers} VM(s)"),
+            Substrate::Pods { pods, .. } => format!("{pods} pod(s)"),
             Substrate::Kubernetes { cluster } => format!("cluster {cluster}"),
         };
         vec![
@@ -278,21 +272,21 @@ fn translate(command: JujuCommand) -> anyhow::Result<(String, JujuRequest, Waiti
             (name, JujuRequest::DestroyModel { model }, waiting)
         }
         JujuCommand::EnableHa { name, waiting } => (name, JujuRequest::EnableHa, waiting),
-        JujuCommand::Deploy { name, target, charm, channel, units, shape, expose, waiting } => {
+        JujuCommand::ScalePods { name, pods, waiting } => (name, JujuRequest::ScalePods { pods }, waiting),
+        JujuCommand::Deploy { name, target, charm, channel, units, expose, waiting } => {
             let deployment = Deployment {
                 model: target.model,
                 application: target.application,
                 charm,
                 channel,
                 units,
-                shape,
                 expose,
             };
             (name, JujuRequest::Deploy { deployment }, waiting)
         }
-        JujuCommand::AddUnits { name, target, units, shape, waiting } => (
+        JujuCommand::Scale { name, target, units, waiting } => (
             name,
-            JujuRequest::AddUnits { model: target.model, application: target.application, units, shape },
+            JujuRequest::ScaleApplication { model: target.model, application: target.application, units },
             waiting,
         ),
         JujuCommand::RemoveUnits { name, target, units, waiting } => (
@@ -305,9 +299,6 @@ fn translate(command: JujuCommand) -> anyhow::Result<(String, JujuRequest, Waiti
             JujuRequest::RemoveApplication { model: target.model, application: target.application },
             waiting,
         ),
-        JujuCommand::ReplaceMachine { name, model, machine, waiting } => {
-            (name, JujuRequest::ReplaceMachine { model, machine }, waiting)
-        }
         JujuCommand::RotateCredential { name, waiting } => (name, JujuRequest::RotateCredential, waiting),
         JujuCommand::Delete { name, waiting } => (name, JujuRequest::Delete, waiting),
         JujuCommand::List
@@ -368,12 +359,14 @@ mod tests {
     }
 
     #[test]
-    fn a_controller_on_vms_needs_its_network_and_one_on_kubernetes_its_cluster() {
-        let on_vms = parsed(&[
+    fn a_controller_on_pods_needs_its_network_and_one_on_kubernetes_its_cluster() {
+        let on_pods = parsed(&[
             "create",
             "observability",
             "--version",
             "4.2.1",
+            "--pods",
+            "3",
             "--controllers",
             "3",
             "--network",
@@ -383,9 +376,10 @@ mod tests {
             "--external-network",
             "public",
         ]);
-        let (name, JujuRequest::Create { controller }, _) = translate(on_vms).unwrap() else { panic!() };
+        let (name, JujuRequest::Create { controller }, _) = translate(on_pods).unwrap() else { panic!() };
         assert_eq!(name, "observability");
         assert_eq!(controller.substrate.controller_count(), 3);
+        assert!(matches!(controller.substrate, Substrate::Pods { pods: 3, .. }));
         let on_cluster =
             parsed(&["create", "apps", "--version", "4.2.1", "--on", "kubernetes", "--cluster", "platform"]);
         let (_, JujuRequest::Create { controller }, _) = translate(on_cluster).unwrap() else { panic!() };

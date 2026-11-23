@@ -6,7 +6,7 @@ use amafu_domain::kinds::environment_secret::{EnvironmentSecret, EnvironmentSecr
 use amafu_domain::kinds::floating_ip::{FloatingIp, FloatingIpSpecification, FloatingIpTarget};
 use amafu_domain::kinds::image::{Image, ImagePhase, ImageSource, ImageSpecification};
 use amafu_domain::kinds::juju_controller::{
-    JujuController, JujuControllerChange, JujuRequest, JujuVersion, Substrate,
+    HIGHLY_AVAILABLE_CONTROLLERS, JujuController, JujuControllerChange, JujuRequest, JujuVersion, Substrate,
 };
 use amafu_domain::kinds::kubernetes_cluster::KubernetesCluster;
 use amafu_domain::kinds::security_group::{
@@ -14,27 +14,25 @@ use amafu_domain::kinds::security_group::{
 };
 use amafu_domain::kinds::vm::VmPhase;
 use amafu_domain::{ObjectName, ObjectReference};
-use amafu_interfaces::ActionError;
 use amafu_interfaces::juju::JUJU_API_PORT;
+use amafu_interfaces::{ActionError, LXD_PORT};
 use amafu_reconciler::Step;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use serde_json::{Value, json};
 
 use super::JujuEnvironment;
-use super::bootstrap::{self, BOOTSTRAP_KEY_COMMENT, BOOTSTRAP_LOG, BootstrapPlan, Target};
-use super::provisioning::ProvisionedMachine;
+use super::bootstrap::{self, BOOTSTRAP_LOG, Target};
+use super::pods::{LXD_ADDRESS, POD_GROUP, Pods};
 use super::scope::{
     ADMIN_PASSWORD, CA_CERTIFICATE, CA_KEY, CONTROLLER_MODEL, CREDENTIAL_SECRET, ChangeContext,
-    ControllerScope, RUNNER_IMAGE, SSH_PRIVATE_KEY, SSH_PUBLIC_KEY, UBUNTU_IMAGE, substrate_network,
+    ControllerScope, RUNNER_IMAGE, UBUNTU_IMAGE,
 };
-use amafu_ssh_key_pair::SshKeyPair;
 
 use crate::environments::{AuthorityKey, CertificateAuthority, ContainerPlan, Settings};
 
 const RUNNER: &str = "runner";
 const BOOTSTRAP_DEADLINE: time::Duration = time::Duration::minutes(60);
-const FIRST_CONTROLLER: &str = "controller-0";
 const JUJU_NAMESPACE: &str = "kube-system";
 
 fn rule(direction: Direction, protocol: Protocol, ports: Option<u16>, remote: Remote) -> SecurityGroupRule {
@@ -95,12 +93,11 @@ juju_step!(RecordSpecification);
 juju_step!(PrepareNetworkAccess);
 juju_step!(CheckHostCluster);
 juju_step!(ImportImages);
-juju_step!(CreateControllerMachines);
 juju_step!(CreateClusterServiceAccount);
 juju_step!(Bootstrap);
 juju_step!(AwaitControllerService);
+juju_step!(ExposeController);
 juju_step!(RecordController);
-juju_step!(AddControllerMachines);
 juju_step!(EnableHa);
 juju_step!(CleanUpBootstrap);
 juju_step!(MarkReady);
@@ -114,7 +111,7 @@ fn random_password() -> Result<String, ActionError> {
 
 async fn ensure_secret(
     scope: &ControllerScope<'_>,
-    with_ssh: bool,
+    with_admin_password: bool,
 ) -> Result<EnvironmentSecretSpecification, ActionError> {
     let controller = scope.controller().await?;
     let reference = ControllerScope::secret_reference(&controller)?;
@@ -129,10 +126,7 @@ async fn ensure_secret(
         (CA_CERTIFICATE.to_owned(), authority.certificate_pem),
         (CA_KEY.to_owned(), authority.private_key_pem),
     ]);
-    if with_ssh {
-        let keys = SshKeyPair::generate(BOOTSTRAP_KEY_COMMENT).map_err(ActionError::fatal)?;
-        values.insert(SSH_PRIVATE_KEY.to_owned(), keys.private_key);
-        values.insert(SSH_PUBLIC_KEY.to_owned(), keys.public_key);
+    if with_admin_password {
         values.insert(ADMIN_PASSWORD.to_owned(), random_password()?);
     }
     let secret = EnvironmentSecretSpecification {
@@ -141,19 +135,6 @@ async fn ensure_secret(
         values,
     };
     Ok(scope.objects().ensure::<EnvironmentSecret>(&reference, BTreeMap::new(), secret).await?.specification)
-}
-
-async fn forget_bootstrap_key(scope: &ControllerScope<'_>) -> Result<(), ActionError> {
-    let reference = ControllerScope::secret_reference(&scope.controller().await?)?;
-    scope
-        .objects()
-        .change_specification::<EnvironmentSecret>(&reference, |current| {
-            let mut values = current.values.clone();
-            let before = values.len();
-            values.retain(|key, _| key != SSH_PRIVATE_KEY && key != SSH_PUBLIC_KEY);
-            (values.len() != before).then(|| EnvironmentSecretSpecification { values, ..current.clone() })
-        })
-        .await
 }
 
 async fn record_authority(
@@ -185,36 +166,24 @@ impl Step<JujuControllerChange> for RecordSpecification {
 }
 
 impl PrepareNetworkAccess {
-    fn groups(
+    fn pod_group(
         scope: &ControllerScope<'_>,
-    ) -> Result<[(ObjectName, SecurityGroupSpecification); 2], ActionError> {
-        let controller = scope.named("controller")?;
-        let machines = scope.named("machines")?;
-        let from = |group: &ObjectName| Remote::SecurityGroup { name: group.clone() };
-        let egress = rule(Direction::Egress, Protocol::Any, None, Remote::Any);
-        Ok([
-            (
-                controller.clone(),
-                SecurityGroupSpecification {
-                    rules: vec![
-                        rule(Direction::Ingress, Protocol::Tcp, Some(JUJU_API_PORT), Remote::Any),
-                        rule(Direction::Ingress, Protocol::Any, None, from(&controller)),
-                        rule(Direction::Ingress, Protocol::Any, None, from(&machines)),
-                        egress.clone(),
-                    ],
-                },
-            ),
-            (
-                machines.clone(),
-                SecurityGroupSpecification {
-                    rules: vec![
-                        rule(Direction::Ingress, Protocol::Any, None, from(&machines)),
-                        rule(Direction::Ingress, Protocol::Any, None, from(&controller)),
-                        egress,
-                    ],
-                },
-            ),
-        ])
+    ) -> Result<(ObjectReference, SecurityGroupSpecification), ActionError> {
+        let pods = scope.named(POD_GROUP)?;
+        let rules = vec![
+            rule(Direction::Ingress, Protocol::Tcp, Some(JUJU_API_PORT), Remote::Any),
+            rule(Direction::Ingress, Protocol::Tcp, Some(LXD_PORT), Remote::Any),
+            rule(Direction::Ingress, Protocol::Any, None, Remote::SecurityGroup { name: pods.clone() }),
+            rule(Direction::Egress, Protocol::Any, None, Remote::Any),
+        ];
+        Ok((scope.ownership.reference::<SecurityGroup>(pods), SecurityGroupSpecification { rules }))
+    }
+
+    fn addresses(scope: &ControllerScope<'_>) -> Result<[ObjectReference; 2], ActionError> {
+        let address = |suffix: &str| -> Result<ObjectReference, ActionError> {
+            Ok(scope.ownership.reference::<FloatingIp>(scope.named(suffix)?))
+        };
+        Ok([address("api")?, address(LXD_ADDRESS)?])
     }
 }
 
@@ -223,39 +192,35 @@ impl Step<JujuControllerChange> for PrepareNetworkAccess {
     async fn is_complete(&self, context: &ChangeContext<'_>) -> Result<bool, ActionError> {
         let scope = ControllerScope::new(context, &self.environment)?;
         let objects = scope.objects();
-        let address = scope.ownership.reference::<FloatingIp>(scope.named("api")?);
-        for (group, _) in Self::groups(&scope)? {
-            if objects
-                .read::<SecurityGroup>(&scope.ownership.reference::<SecurityGroup>(group))
-                .await?
-                .is_none()
-            {
+        let (group, _) = Self::pod_group(&scope)?;
+        if objects.read::<SecurityGroup>(&group).await?.is_none() {
+            return Ok(false);
+        }
+        for address in Self::addresses(&scope)? {
+            if objects.read::<FloatingIp>(&address).await?.is_none() {
                 return Ok(false);
             }
         }
-        Ok(objects.read::<FloatingIp>(&address).await?.is_some()
-            && scope.controller().await?.status.certificate_authority.is_some())
+        Ok(scope.controller().await?.status.certificate_authority.is_some())
     }
 
     async fn run(&self, context: &ChangeContext<'_>) -> Result<(), ActionError> {
         let scope = ControllerScope::new(context, &self.environment)?;
         let objects = scope.objects();
         let labels = scope.ownership.labels();
-        for (group, rules) in Self::groups(&scope)? {
-            objects
-                .ensure::<SecurityGroup>(
-                    &scope.ownership.reference::<SecurityGroup>(group),
-                    labels.clone(),
-                    rules,
-                )
-                .await?;
-        }
-        let Substrate::Vms { external_network, .. } = scope.specification().await?.substrate else {
-            return Err(ActionError::fatal("only a controller on VMs has its own address"));
+        let (group, rules) = Self::pod_group(&scope)?;
+        objects.ensure::<SecurityGroup>(&group, labels.clone(), rules).await?;
+        let Substrate::Pods { external_network, .. } = scope.specification().await?.substrate else {
+            return Err(ActionError::fatal("only a controller on pods has its own address"));
         };
-        let address = scope.ownership.reference::<FloatingIp>(scope.named("api")?);
-        let floating = FloatingIpSpecification { external_network, address: None, target: None };
-        objects.ensure::<FloatingIp>(&address, labels, floating).await?;
+        for address in Self::addresses(&scope)? {
+            let floating = FloatingIpSpecification {
+                external_network: external_network.clone(),
+                address: None,
+                target: None,
+            };
+            objects.ensure::<FloatingIp>(&address, labels.clone(), floating).await?;
+        }
         let secret = ensure_secret(&scope, true).await?;
         record_authority(&scope, &secret).await
     }
@@ -285,7 +250,7 @@ impl Step<JujuControllerChange> for CheckHostCluster {
 impl ImportImages {
     async fn image(scope: &ControllerScope<'_>) -> Result<ObjectReference, ActionError> {
         let name = match scope.specification().await?.substrate {
-            Substrate::Vms { .. } => UBUNTU_IMAGE,
+            Substrate::Pods { .. } => UBUNTU_IMAGE,
             Substrate::Kubernetes { .. } => RUNNER_IMAGE,
         };
         Ok(scope.ownership.reference::<Image>(ObjectName::new(name).map_err(ActionError::fatal)?))
@@ -294,7 +259,7 @@ impl ImportImages {
     async fn source(scope: &ControllerScope<'_>) -> Result<ImageSource, ActionError> {
         let settings = Settings::read(scope.objects()).await?;
         match scope.specification().await?.substrate {
-            Substrate::Vms { .. } => settings.ubuntu_image(),
+            Substrate::Pods { .. } => settings.ubuntu_image(),
             Substrate::Kubernetes { .. } => {
                 Ok(ImageSource::Container { reference: settings.juju_runner_image()? })
             }
@@ -322,57 +287,6 @@ impl Step<JujuControllerChange> for ImportImages {
         let specification = ImageSpecification { source: Self::source(&scope).await? };
         scope.objects().ensure::<Image>(&reference, BTreeMap::new(), specification).await?;
         Ok(())
-    }
-}
-
-#[async_trait::async_trait]
-impl Step<JujuControllerChange> for CreateControllerMachines {
-    async fn is_complete(&self, context: &ChangeContext<'_>) -> Result<bool, ActionError> {
-        let scope = ControllerScope::new(context, &self.environment)?;
-        let machine = scope.machine(FIRST_CONTROLLER)?;
-        let address = scope.ownership.reference::<FloatingIp>(scope.named("api")?);
-        let target = scope.objects().require::<FloatingIp>(&address).await?.specification.target;
-        Ok(machine.is_running().await? && target.is_some_and(|target| &target.vm == machine.name()))
-    }
-
-    async fn run(&self, context: &ChangeContext<'_>) -> Result<(), ActionError> {
-        let scope = ControllerScope::new(context, &self.environment)?;
-        let specification = scope.specification().await?;
-        let Substrate::Vms { shape, .. } = &specification.substrate else {
-            return Err(ActionError::fatal("only a controller on VMs has controller machines"));
-        };
-        let (network, storage_backend) = substrate_network(&specification)?;
-        let target = Target::Itself {
-            ssh_private_key: scope.secret_value(SSH_PRIVATE_KEY).await?,
-            admin_password: scope.secret_value(ADMIN_PASSWORD).await?,
-        };
-        let user_data = bootstrap_plan(&scope, &self.environment, target).await?.controller_user_data(
-            &scope.secret_value(SSH_PUBLIC_KEY).await?,
-            &self.environment.settings.amafu_certificate_authority,
-        );
-        let machine = scope.machine(FIRST_CONTROLLER)?;
-        machine
-            .create(crate::environments::MachinePlan {
-                shape: *shape,
-                image: ObjectName::new(UBUNTU_IMAGE).map_err(ActionError::fatal)?,
-                network: network.clone(),
-                storage_backend: storage_backend.clone(),
-                security_groups: vec![scope.named("controller")?],
-                user_data,
-                labels: BTreeMap::new(),
-            })
-            .await?;
-        let target = FloatingIpTarget { guest_address: None, vm: machine.name().clone(), interface: 0 };
-        let address = scope.ownership.reference::<FloatingIp>(scope.named("api")?);
-        scope
-            .objects()
-            .change_specification::<FloatingIp>(&address, |current| {
-                current
-                    .target
-                    .is_none()
-                    .then(|| FloatingIpSpecification { target: Some(target), ..current.clone() })
-            })
-            .await
     }
 }
 
@@ -406,24 +320,6 @@ impl Step<JujuControllerChange> for CreateClusterServiceAccount {
     }
 }
 
-async fn bootstrap_plan(
-    scope: &ControllerScope<'_>,
-    environment: &JujuEnvironment,
-    target: Target,
-) -> Result<BootstrapPlan, ActionError> {
-    let specification = scope.specification().await?;
-    let secret = scope.secret().await?;
-    Ok(BootstrapPlan {
-        controller: scope.ownership.environment().to_string(),
-        version: specification.version.clone(),
-        sign_in: specification.sign_in,
-        certificate: secret.value(CA_CERTIFICATE).unwrap_or_default().to_owned(),
-        private_key: secret.value(CA_KEY).unwrap_or_default().to_owned(),
-        token_refresh_url: environment.settings.token_refresh_url.clone(),
-        target,
-    })
-}
-
 impl Bootstrap {
     async fn cluster_target(
         &self,
@@ -448,31 +344,28 @@ impl Bootstrap {
             ),
         })
     }
+}
 
-    async fn has_bootstrapped(&self, scope: &ControllerScope<'_>) -> Result<bool, ActionError> {
-        if let Ok(Some(_)) = self.environment.platform.controller(&scope.endpoint().await?).await {
-            return Ok(true);
-        }
-        let started = scope.context.operation.status.current_step.as_ref().map(|step| step.started_at);
-        let is_overdue =
-            started.is_some_and(|started| scope.context.clock.now() - started > BOOTSTRAP_DEADLINE);
-        if is_overdue {
-            return Err(ActionError::fatal(format!(
-                "no Juju controller answered within {} minutes of starting its bootstrap; VM {} keeps the log in {BOOTSTRAP_LOG}",
-                BOOTSTRAP_DEADLINE.whole_minutes(),
-                scope.machine(FIRST_CONTROLLER)?.name()
-            )));
-        }
-        Ok(false)
-    }
+fn bootstrap_overdue(scope: &ControllerScope<'_>, waiting_for: &str) -> Result<ActionError, ActionError> {
+    Ok(ActionError::fatal(format!(
+        "{waiting_for} within {} minutes of starting the bootstrap; pod {} keeps the log in {BOOTSTRAP_LOG}",
+        BOOTSTRAP_DEADLINE.whole_minutes(),
+        Pods::of(scope).name(0)?
+    )))
 }
 
 #[async_trait::async_trait]
 impl Step<JujuControllerChange> for Bootstrap {
     async fn is_complete(&self, context: &ChangeContext<'_>) -> Result<bool, ActionError> {
         let scope = ControllerScope::new(context, &self.environment)?;
-        if matches!(scope.specification().await?.substrate, Substrate::Vms { .. }) {
-            return self.has_bootstrapped(&scope).await;
+        if matches!(scope.specification().await?.substrate, Substrate::Pods { .. }) {
+            if Pods::of(&scope).controller_guest().await?.is_some() {
+                return Ok(true);
+            }
+            if scope.step_is_overdue(BOOTSTRAP_DEADLINE) {
+                return Err(bootstrap_overdue(&scope, "no Juju controller container appeared")?);
+            }
+            return Ok(false);
         }
         match scope.machine(RUNNER)?.phase().await? {
             Some(VmPhase::Stopped) => Ok(true),
@@ -493,7 +386,7 @@ impl Step<JujuControllerChange> for Bootstrap {
             return Ok(());
         }
         let target = self.cluster_target(&scope, &cluster).await?;
-        let plan = bootstrap_plan(&scope, &self.environment, target).await?;
+        let plan = scope.bootstrap_plan(target).await?;
         runner
             .run_container(ContainerPlan {
                 image: ObjectName::new(RUNNER_IMAGE).map_err(ActionError::fatal)?,
@@ -532,6 +425,45 @@ impl Step<JujuControllerChange> for AwaitControllerService {
             return Ok(());
         };
         scope.update_status(|status| status.addresses = vec![address.clone()]).await
+    }
+}
+
+#[async_trait::async_trait]
+impl Step<JujuControllerChange> for ExposeController {
+    async fn is_complete(&self, context: &ChangeContext<'_>) -> Result<bool, ActionError> {
+        let scope = ControllerScope::new(context, &self.environment)?;
+        let address = scope.ownership.reference::<FloatingIp>(scope.named("api")?);
+        let target = scope.objects().require::<FloatingIp>(&address).await?.specification.target;
+        if target.is_none_or(|target| target.guest_address.is_none()) {
+            return Ok(false);
+        }
+        if let Ok(Some(_)) = self.environment.platform.controller(&scope.endpoint().await?).await {
+            return Ok(true);
+        }
+        if scope.step_is_overdue(BOOTSTRAP_DEADLINE) {
+            return Err(bootstrap_overdue(
+                &scope,
+                "the Juju controller did not answer through its floating IP",
+            )?);
+        }
+        Ok(false)
+    }
+
+    async fn run(&self, context: &ChangeContext<'_>) -> Result<(), ActionError> {
+        let scope = ControllerScope::new(context, &self.environment)?;
+        let guest = Pods::of(&scope)
+            .controller_guest()
+            .await?
+            .ok_or_else(|| ActionError::retryable("the Juju controller container has no address yet"))?;
+        let target = FloatingIpTarget { vm: guest.pod, interface: 0, guest_address: Some(guest.address) };
+        let address = scope.ownership.reference::<FloatingIp>(scope.named("api")?);
+        scope
+            .objects()
+            .change_specification::<FloatingIp>(&address, |current| {
+                (current.target.as_ref() != Some(&target))
+                    .then(|| FloatingIpSpecification { target: Some(target.clone()), ..current.clone() })
+            })
+            .await
     }
 }
 
@@ -583,81 +515,44 @@ impl Step<JujuControllerChange> for RecordController {
     }
 }
 
-impl AddControllerMachines {
-    async fn controllers(
-        scope: &ControllerScope<'_>,
-    ) -> Result<(u8, amafu_domain::kinds::machine_shape::MachineShape), ActionError> {
-        match scope.specification().await?.substrate {
-            Substrate::Vms { controllers, shape, .. } => Ok((controllers, shape)),
-            Substrate::Kubernetes { .. } => {
-                Err(ActionError::fatal("a controller on Kubernetes has no machines"))
-            }
-        }
-    }
-
-    fn suffixes(count: u8) -> Vec<String> {
-        (1..count).map(|index| format!("controller-{index}")).collect()
-    }
-}
-
-#[async_trait::async_trait]
-impl Step<JujuControllerChange> for AddControllerMachines {
-    async fn is_complete(&self, context: &ChangeContext<'_>) -> Result<bool, ActionError> {
-        let scope = ControllerScope::new(context, &self.environment)?;
-        let (count, _) = Self::controllers(&scope).await?;
-        let endpoint = scope.endpoint().await?;
-        let model = scope.model_uuid(&ObjectName::new(CONTROLLER_MODEL).map_err(ActionError::fatal)?).await?;
-        let machines = self.environment.platform.machines(&endpoint, &model).await?;
-        for suffix in Self::suffixes(count) {
-            if !ProvisionedMachine::new(&scope, &suffix)?.is_started(&machines).await? {
-                return Ok(false);
-            }
-        }
-        Ok(true)
-    }
-
-    async fn run(&self, context: &ChangeContext<'_>) -> Result<(), ActionError> {
-        let scope = ControllerScope::new(context, &self.environment)?;
-        let (count, shape) = Self::controllers(&scope).await?;
-        let endpoint = scope.endpoint().await?;
-        let model = ObjectName::new(CONTROLLER_MODEL).map_err(ActionError::fatal)?;
-        let model_uuid = scope.model_uuid(&model).await?;
-        for suffix in Self::suffixes(count) {
-            ProvisionedMachine::new(&scope, &suffix)?
-                .provision(&endpoint, &model, &model_uuid, shape, None)
-                .await?;
-        }
-        Ok(())
-    }
+async fn started_controllers(scope: &ControllerScope<'_>) -> Result<usize, ActionError> {
+    let endpoint = scope.endpoint().await?;
+    let model = scope.model_uuid(&ObjectName::new(CONTROLLER_MODEL).map_err(ActionError::fatal)?).await?;
+    let machines = scope.environment.platform.machines(&endpoint, &model).await?;
+    Ok(machines
+        .iter()
+        .filter(|machine| {
+            machine.is_started && machine.units.iter().any(|unit| unit.starts_with("controller/"))
+        })
+        .count())
 }
 
 #[async_trait::async_trait]
 impl Step<JujuControllerChange> for EnableHa {
     async fn is_complete(&self, context: &ChangeContext<'_>) -> Result<bool, ActionError> {
         let scope = ControllerScope::new(context, &self.environment)?;
-        let (count, _) = AddControllerMachines::controllers(&scope).await?;
-        let endpoint = scope.endpoint().await?;
-        let model = scope.model_uuid(&ObjectName::new(CONTROLLER_MODEL).map_err(ActionError::fatal)?).await?;
-        let machines = self.environment.platform.machines(&endpoint, &model).await?;
-        let controllers = machines
-            .iter()
-            .filter(|machine| {
-                machine.is_started && machine.units.iter().any(|unit| unit.starts_with("controller/"))
-            })
-            .count();
-        Ok(controllers >= usize::from(count))
+        Ok(started_controllers(&scope).await? >= usize::from(HIGHLY_AVAILABLE_CONTROLLERS))
     }
 
     async fn run(&self, context: &ChangeContext<'_>) -> Result<(), ActionError> {
         let scope = ControllerScope::new(context, &self.environment)?;
-        let (count, _) = AddControllerMachines::controllers(&scope).await?;
-        let mut placements = Vec::new();
-        for suffix in AddControllerMachines::suffixes(count) {
-            let id = ProvisionedMachine::new(&scope, &suffix)?.juju_id().await?;
-            placements
-                .push(id.ok_or_else(|| ActionError::retryable(format!("{suffix} has no Juju machine yet")))?);
+        let pods = Pods::of(&scope).wanted().await?;
+        if pods < HIGHLY_AVAILABLE_CONTROLLERS {
+            return Err(ActionError::fatal(format!(
+                "a highly available controller needs {HIGHLY_AVAILABLE_CONTROLLERS} pods; scale the pods first"
+            )));
         }
-        self.environment.platform.enable_ha(&scope.endpoint().await?, &placements).await
+        self.environment.platform.enable_ha(&scope.endpoint().await?, HIGHLY_AVAILABLE_CONTROLLERS).await?;
+        scope
+            .objects()
+            .change_specification::<JujuController>(&scope.controller_reference(), |current| {
+                let mut updated = current.clone();
+                if let Substrate::Pods { controllers, .. } = &mut updated.substrate {
+                    *controllers = HIGHLY_AVAILABLE_CONTROLLERS;
+                }
+                (updated != *current).then_some(updated)
+            })
+            .await
     }
 }
 
@@ -665,21 +560,11 @@ impl Step<JujuControllerChange> for EnableHa {
 impl Step<JujuControllerChange> for CleanUpBootstrap {
     async fn is_complete(&self, context: &ChangeContext<'_>) -> Result<bool, ActionError> {
         let scope = ControllerScope::new(context, &self.environment)?;
-        let secret = scope.secret().await?;
-        let holds_key = [SSH_PRIVATE_KEY, SSH_PUBLIC_KEY].iter().any(|key| secret.value(key).is_some());
-        Ok(!holds_key && scope.machine(RUNNER)?.vm().await?.is_none())
+        Ok(scope.machine(RUNNER)?.vm().await?.is_none())
     }
 
     async fn run(&self, context: &ChangeContext<'_>) -> Result<(), ActionError> {
         let scope = ControllerScope::new(context, &self.environment)?;
-        let secret = scope.secret().await?;
-        if [SSH_PRIVATE_KEY, SSH_PUBLIC_KEY].iter().any(|key| secret.value(key).is_some()) {
-            let endpoint = scope.endpoint().await?;
-            let model =
-                scope.model_uuid(&ObjectName::new(CONTROLLER_MODEL).map_err(ActionError::fatal)?).await?;
-            self.environment.platform.remove_authorized_key(&endpoint, &model, BOOTSTRAP_KEY_COMMENT).await?;
-            forget_bootstrap_key(&scope).await?;
-        }
         scope.machine(RUNNER)?.remove().await?;
         Ok(())
     }

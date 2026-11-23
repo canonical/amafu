@@ -6,23 +6,27 @@ use amafu_controllers::environments::juju::{JujuEnvironment, JujuSettings, JujuS
 use amafu_controllers::environments::kubernetes::{
     IssuerTrust, KubernetesEnvironment, KubernetesSettings, KubernetesSteps,
 };
+use amafu_controllers::lxd_identity::generate_identity;
 use amafu_domain::kinds::environment_settings::{
     ENVIRONMENT_SETTINGS_NAME, EnvironmentSettings, EnvironmentSettingsSpecification,
 };
-use amafu_domain::kinds::floating_ip::FloatingIp;
+use amafu_domain::kinds::floating_ip::{FloatingIp, FloatingIpBinding};
+use amafu_domain::kinds::guest_inventory::{
+    GuestInstance, GuestInstanceKind, GuestInventory, GuestInventorySpecification, LxdAccess,
+};
 use amafu_domain::kinds::image::{Image, ImagePhase, ImageSource};
+use amafu_domain::kinds::lxd_identity::{LXD_IDENTITY_NAME, LxdIdentity};
 use amafu_domain::kinds::operation::OperationOutcome;
 use amafu_domain::kinds::security_group::SecurityGroup;
 use amafu_domain::kinds::signing_key::{SigningKey, SigningKeySpecification};
 use amafu_domain::kinds::vm::{BootSource, InterfaceStatus, PowerState, Vm, VmPhase};
 use amafu_domain::kinds::volume::Volume;
-use amafu_domain::labels::JUJU_MACHINE;
 use amafu_domain::step_plan::Runnable;
 use amafu_domain::{
-    Change, MacAddress, Object, ObjectId, ObjectName, ObjectReference, ProjectName, Resource,
+    Change, MacAddress, NodeName, Object, ObjectId, ObjectName, ObjectReference, ProjectName, Resource,
 };
 use amafu_interfaces::objects::{apply, get, list, remove, update_status};
-use amafu_interfaces::{Consistency, Fence, JujuPlatform, KubernetesPlatform, Store};
+use amafu_interfaces::{Clock, Consistency, Fence, JujuPlatform, KubernetesPlatform, LxdPlatform, Store};
 use amafu_reconciler::{OperationContext, StepRegistry, advance};
 use amafu_token_issuer::{KeyPair, Keyring};
 use base64::Engine;
@@ -31,11 +35,13 @@ use serde_json::json;
 use time::{Duration, OffsetDateTime};
 
 use crate::VirtualClock;
-use crate::fakes::{FakeJuju, FakeKubernetes, MemoryStore, SeededIdentifiers};
+use crate::fakes::{FakeJuju, FakeKubernetes, FakeLxd, MemoryStore, SeededIdentifiers};
 
 pub const PROJECT: &str = "web-team";
 pub const FLOATING_ADDRESS: Ipv4Addr = Ipv4Addr::new(203, 0, 113, 7);
 pub const SERVICE_ADDRESS: Ipv4Addr = Ipv4Addr::new(203, 0, 113, 9);
+pub const LXD_FLOATING_ADDRESS: Ipv4Addr = Ipv4Addr::new(203, 0, 113, 8);
+const LXD_ADDRESS_SUFFIX: &str = "-lxd";
 const PASSES: usize = 400;
 
 #[must_use]
@@ -70,15 +76,20 @@ fn trust() -> IssuerTrust {
     }
 }
 
-fn bootstrapped_version(user_data: &str) -> Option<&str> {
-    let (_, rest) = user_data.split_once("export JUJU_VERSION='")?;
-    rest.split_once('\'').map(|(version, _)| version)
+fn exported<'u>(user_data: &'u str, name: &str) -> Option<&'u str> {
+    let (_, rest) = user_data.split_once(&format!("export {name}='"))?;
+    rest.split_once('\'').map(|(value, _)| value)
+}
+
+fn node() -> NodeName {
+    NodeName::new("node-1").unwrap_or_else(|error| panic!("{error}"))
 }
 
 pub struct EnvironmentWorld {
     pub store: Arc<MemoryStore>,
     pub kubernetes: Arc<FakeKubernetes>,
     pub juju: Arc<FakeJuju>,
+    pub lxd: Arc<FakeLxd>,
     clock: VirtualClock,
 }
 
@@ -92,8 +103,11 @@ impl EnvironmentWorld {
             store,
             kubernetes: Arc::new(FakeKubernetes::new()),
             juju: Arc::new(FakeJuju::new()),
+            lxd: Arc::new(FakeLxd::new()),
             clock: VirtualClock::starting_at(now),
         };
+        let identity = generate_identity(now).unwrap_or_else(|error| panic!("{error}"));
+        world.create::<LxdIdentity>(None, LXD_IDENTITY_NAME, identity).await;
         world.create::<SigningKey>(None, "key-1", signing).await;
         let settings = EnvironmentSettingsSpecification {
             ubuntu_image: Some(ubuntu_image()),
@@ -123,6 +137,7 @@ impl EnvironmentWorld {
         JujuSteps::new(JujuEnvironment {
             platform: Arc::clone(&self.juju) as Arc<dyn JujuPlatform>,
             kubernetes: Arc::clone(&self.kubernetes) as Arc<dyn KubernetesPlatform>,
+            lxd: Arc::clone(&self.lxd) as Arc<dyn LxdPlatform>,
             keyring: self.keyring(),
             identifiers: Arc::new(SeededIdentifiers::new(11)),
             settings: JujuSettings {
@@ -206,11 +221,11 @@ impl EnvironmentWorld {
         for image in self.owned::<Image>().await {
             self.set_status::<Image>(&image, |status| status.phase = ImagePhase::Ready).await;
         }
-        for address in self.owned::<FloatingIp>().await {
-            self.set_status::<FloatingIp>(&address, |status| status.address = Some(FLOATING_ADDRESS)).await;
-        }
         for (index, vm) in self.owned::<Vm>().await.into_iter().enumerate() {
             self.settle_vm(index, &vm).await;
+        }
+        for address in self.owned::<FloatingIp>().await {
+            self.settle_floating_ip(&address).await;
         }
         self.forget_deleted::<Vm>().await;
         self.forget_deleted::<Volume>().await;
@@ -218,10 +233,65 @@ impl EnvironmentWorld {
         self.forget_deleted::<SecurityGroup>().await;
     }
 
-    async fn settle_vm(&self, index: usize, vm: &Object<Vm>) {
-        if let Some(version) = vm.specification.user_data.as_deref().and_then(bootstrapped_version) {
-            self.juju.bootstrap(version);
+    async fn settle_floating_ip(&self, floating: &Object<FloatingIp>) {
+        let is_lxd = floating.metadata.name.as_str().ends_with(LXD_ADDRESS_SUFFIX);
+        let address = if is_lxd { LXD_FLOATING_ADDRESS } else { FLOATING_ADDRESS };
+        let mut binding = None;
+        if let Some(target) = &floating.specification.target
+            && let Some(vm) = self.get::<Vm>(target.vm.as_str()).await
+            && let Some(interface) = vm.status.interfaces.first()
+        {
+            let private_address = target.guest_address.unwrap_or(interface.address);
+            binding = Some(FloatingIpBinding { node: node(), vm_id: vm.metadata.id, private_address });
         }
+        self.set_status::<FloatingIp>(floating, |status| {
+            status.address = Some(address);
+            status.binding.clone_from(&binding);
+        })
+        .await;
+    }
+
+    async fn settle_pod(&self, vm: &Object<Vm>, interface: &InterfaceStatus) {
+        let Some(user_data) = vm.specification.user_data.as_deref() else {
+            return;
+        };
+        let server = vm.metadata.name.to_string();
+        match exported(user_data, "AMAFU_POD_ROLE") {
+            Some("founder") => {
+                let access =
+                    LxdAccess::Trusted { server: server.clone(), is_clustered: true, instances: Vec::new() };
+                self.lxd.serve(LXD_FLOATING_ADDRESS, access);
+            }
+            Some("member") => {
+                let token = exported(user_data, "AMAFU_JOIN_TOKEN").unwrap_or_default();
+                self.lxd.join(interface.address, &server, token);
+            }
+            _ => return,
+        }
+        let Some(version) = exported(user_data, "JUJU_VERSION") else {
+            return;
+        };
+        self.juju.bootstrap(version);
+        let controller = GuestInstance {
+            name: String::from("juju-c0ffee-0"),
+            kind: GuestInstanceKind::Container,
+            status: String::from("Running"),
+            location: Some(server.clone()),
+            addresses: interface.guest_addresses.first().copied().into_iter().collect(),
+            is_juju_controller: true,
+        };
+        let inventory = GuestInventorySpecification {
+            vm_id: vm.metadata.id,
+            node: node(),
+            lxd: LxdAccess::Trusted { server, is_clustered: true, instances: vec![controller] },
+            changed_at: self.clock.now(),
+        };
+        if self.get::<GuestInventory>(vm.metadata.name.as_str()).await.is_none() {
+            self.create::<GuestInventory>(Some(project()), vm.metadata.name.as_str(), inventory).await;
+        }
+    }
+
+    async fn settle_vm(&self, index: usize, vm: &Object<Vm>) {
         if let BootSource::Container { environment, .. } = &vm.specification.boot {
             self.juju.bootstrap(environment.get("JUJU_VERSION").map_or("4.2.1", String::as_str));
             if environment.get("JUJU_SUBSTRATE").map(String::as_str) == Some("kubernetes") {
@@ -246,7 +316,10 @@ impl EnvironmentWorld {
             .network_interfaces
             .iter()
             .map(|interface| InterfaceStatus {
-                guest_addresses: Vec::new(),
+                guest_addresses: (interface.guests > 0)
+                    .then_some(Ipv4Addr::new(10, 1, 1, host))
+                    .into_iter()
+                    .collect(),
                 network: interface.network.clone(),
                 mac: MacAddress::new([2, 0, 0, 0, 0, host]),
                 address: Ipv4Addr::new(10, 1, 0, host),
@@ -257,8 +330,8 @@ impl EnvironmentWorld {
             status.interfaces.clone_from(&interfaces);
         })
         .await;
-        if let Some(machine) = vm.metadata.labels.get(JUJU_MACHINE) {
-            self.juju.start(machine);
+        if let Some(interface) = interfaces.first() {
+            self.settle_pod(vm, interface).await;
         }
         if vm.metadata.name.as_str().ends_with("-cp-0") && self.kubernetes.nodes().is_empty() {
             self.kubernetes.bootstrap(vm.metadata.name.as_str());

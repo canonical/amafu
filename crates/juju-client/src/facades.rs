@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use amafu_interfaces::{ActionError, JujuMachine, JujuModel};
+use amafu_interfaces::{ActionError, JujuApplication, JujuMachine, JujuModel};
 use serde_json::{Value, json};
 
 const KNOWN_VERSIONS: &[(&str, &[u32])] = &[
@@ -177,7 +177,6 @@ pub fn machines(status: &Value) -> Vec<JujuMachine> {
                 .iter()
                 .map(|(id, machine)| JujuMachine {
                     id: id.clone(),
-                    instance_id: machine["instance-id"].as_str().unwrap_or_default().to_owned(),
                     is_started: machine["agent-status"]["status"] == STARTED,
                     units: units.remove(id).unwrap_or_default(),
                 })
@@ -192,8 +191,32 @@ pub fn unit_tag(unit: &str) -> String {
 }
 
 #[must_use]
-pub fn placements(machines: &[String]) -> Vec<Value> {
-    machines.iter().map(|machine| json!({"scope": "#", "directive": machine})).collect()
+pub fn applications(status: &Value) -> Vec<JujuApplication> {
+    let mut applications: Vec<JujuApplication> = status["applications"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(name, application)| {
+            let mut units: Vec<String> = application["units"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .map(|(unit, _)| unit.clone())
+                .collect();
+            units.sort_by_key(|unit| unit_number(unit));
+            JujuApplication {
+                name: name.clone(),
+                units,
+                is_exposed: application["exposed"].as_bool().unwrap_or(false),
+            }
+        })
+        .collect();
+    applications.sort_by(|left, right| left.name.cmp(&right.name));
+    applications
+}
+
+fn unit_number(unit: &str) -> u32 {
+    unit.rsplit_once('/').and_then(|(_, number)| number.parse().ok()).unwrap_or(u32::MAX)
 }
 
 #[cfg(test)]
@@ -234,8 +257,8 @@ mod tests {
     fn units_are_attached_to_the_machines_that_host_them() {
         let status = json!({
             "machines": {
-                "0": {"instance-id": "manual:a", "agent-status": {"status": "started"}},
-                "1": {"instance-id": "manual:b", "agent-status": {"status": "pending"}},
+                "0": {"agent-status": {"status": "started"}},
+                "1": {"agent-status": {"status": "pending"}},
             },
             "applications": {"postgresql": {"units": {"postgresql/0": {"machine": "0"}}}},
         });
@@ -244,6 +267,25 @@ mod tests {
         assert!(machines[0].is_started);
         assert!(!machines[1].is_started);
         assert_eq!(unit_tag("postgresql/0"), "unit-postgresql-0");
+    }
+
+    #[test]
+    fn applications_list_their_units_in_number_order_and_whether_they_are_exposed() {
+        let status = json!({"applications": {
+            "web": {"exposed": true, "units": {"web/10": {}, "web/2": {}}},
+            "db": {"units": {}},
+        }});
+        assert_eq!(
+            applications(&status),
+            [
+                JujuApplication { name: String::from("db"), units: Vec::new(), is_exposed: false },
+                JujuApplication {
+                    name: String::from("web"),
+                    units: vec![String::from("web/2"), String::from("web/10")],
+                    is_exposed: true
+                },
+            ]
+        );
     }
 
     #[test]

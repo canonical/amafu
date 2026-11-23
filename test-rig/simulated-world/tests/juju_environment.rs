@@ -1,13 +1,11 @@
 #[cfg(test)]
 mod juju_environment {
-    use amafu_domain::kinds::environment_secret::EnvironmentSecret;
-    use amafu_interfaces::Consistency;
-    use amafu_interfaces::objects::list;
     use std::collections::BTreeMap;
 
-    use amafu_controllers::environments::juju::{BOOTSTRAP_KEY_COMMENT, JujuSteps};
     use amafu_domain::Object;
     use amafu_domain::kinds::environment::EnvironmentPhase;
+    use amafu_domain::kinds::environment_secret::EnvironmentSecret;
+    use amafu_domain::kinds::floating_ip::FloatingIp;
     use amafu_domain::kinds::juju_controller::{
         Deployment, JujuController, JujuControllerChange, JujuControllerChangeSpecification,
         JujuControllerSpecification, JujuRequest, JujuVersion, SignInMode, Substrate,
@@ -19,13 +17,19 @@ mod juju_environment {
     use amafu_domain::kinds::machine_shape::MachineShape;
     use amafu_domain::kinds::operation::OperationOutcome;
     use amafu_domain::kinds::vm::{BootSource, Vm};
-    use amafu_domain::labels::JUJU_MODEL;
-    use amafu_simulated_world::environments::{EnvironmentWorld, SERVICE_ADDRESS, name};
+    use amafu_interfaces::objects::list;
+    use amafu_interfaces::{Consistency, JujuEndpoint, JujuPlatform, LxdEndpoint, LxdPlatform};
+    use amafu_simulated_world::environments::{
+        EnvironmentWorld, LXD_FLOATING_ADDRESS, SERVICE_ADDRESS, name,
+    };
 
-    fn on_vms(controllers: u8) -> JujuControllerSpecification {
+    use amafu_controllers::environments::juju::JujuSteps;
+
+    fn on_pods(pods: u8, controllers: u8) -> JujuControllerSpecification {
         JujuControllerSpecification {
             version: JujuVersion::new(4, 2, 1),
-            substrate: Substrate::Vms {
+            substrate: Substrate::Pods {
+                pods,
                 controllers,
                 shape: MachineShape::Medium,
                 network: name("platform"),
@@ -51,20 +55,39 @@ mod juju_environment {
         world.get::<JujuController>("observability").await
     }
 
-    async fn model_vms(world: &EnvironmentWorld) -> Vec<Object<Vm>> {
-        world
-            .owned::<Vm>()
-            .await
+    async fn pod_names(world: &EnvironmentWorld) -> Vec<String> {
+        world.owned::<Vm>().await.iter().map(|vm| vm.metadata.name.to_string()).collect()
+    }
+
+    async fn members(world: &EnvironmentWorld) -> Vec<String> {
+        let founder = LxdEndpoint {
+            address: LXD_FLOATING_ADDRESS,
+            certificate_pem: String::new(),
+            private_key_pem: String::new(),
+        };
+        world.lxd.members(&founder).await.unwrap()
+    }
+
+    async fn units(world: &EnvironmentWorld, application: &str) -> Vec<String> {
+        let endpoint = JujuEndpoint {
+            address: SERVICE_ADDRESS,
+            certificate_authority: String::new(),
+            credentials: amafu_interfaces::JujuCredentials::Token(String::new()),
+        };
+        let applications = world.juju.applications(&endpoint, "model-default").await.unwrap();
+        applications
             .into_iter()
-            .filter(|vm| vm.metadata.labels.get(JUJU_MODEL).map(String::as_str) == Some("default"))
-            .collect()
+            .find(|found| found.name == application)
+            .map(|found| found.units)
+            .unwrap_or_default()
     }
 
     #[tokio::test]
-    async fn a_controller_on_vms_bootstraps_scales_out_and_runs_applications_on_amafu_machines() {
+    async fn a_controller_on_pods_forms_an_lxd_cluster_and_lets_juju_run_the_units() {
         let world = EnvironmentWorld::new().await;
         let steps = world.juju_steps();
-        let created = change(&world, &steps, "create", JujuRequest::Create { controller: on_vms(3) }).await;
+        let created =
+            change(&world, &steps, "create", JujuRequest::Create { controller: on_pods(3, 3) }).await;
         assert_eq!(created, OperationOutcome::Succeeded);
         let found = controller(&world).await.unwrap();
         assert_eq!(found.status.phase, EnvironmentPhase::Ready);
@@ -73,9 +96,17 @@ mod juju_environment {
             found.status.models.iter().map(|model| model.name.as_str()).collect::<Vec<_>>(),
             ["default"]
         );
-        let controllers = world.juju.machines("model-controller");
-        assert_eq!(controllers.iter().filter(|machine| !machine.units.is_empty()).count(), 3);
-        assert_eq!(world.juju.removed_keys(), [BOOTSTRAP_KEY_COMMENT]);
+        assert_eq!(world.juju.machines("model-controller").len(), 3);
+        let pods = ["observability-pod-0", "observability-pod-1", "observability-pod-2"];
+        assert_eq!(pod_names(&world).await, pods);
+        assert_eq!(members(&world).await, pods);
+        let vms = world.owned::<Vm>().await;
+        assert!(vms.iter().all(|vm| vm.specification.network_interfaces[0].guests > 0));
+        assert!(!vms.iter().any(|vm| matches!(vm.specification.boot, BootSource::Container { .. })));
+        let api = world.get::<FloatingIp>("observability-api").await.unwrap();
+        let target = api.specification.target.unwrap();
+        assert_eq!(target.vm, name("observability-pod-0"));
+        assert!(target.guest_address.is_some());
         let secrets =
             list::<EnvironmentSecret>(&*world.store, None, Consistency::Linearizable).await.unwrap();
         assert!(
@@ -85,9 +116,6 @@ mod juju_environment {
                 .keys()
                 .any(|key| key.starts_with("ssh-")))
         );
-        let vms = world.owned::<Vm>().await;
-        assert!(!vms.iter().any(|vm| matches!(vm.specification.boot, BootSource::Container { .. })));
-        assert_eq!(vms.len(), 3);
 
         let deployment = Deployment {
             model: name("default"),
@@ -95,36 +123,42 @@ mod juju_environment {
             charm: String::from("postgresql"),
             channel: Some(String::from("16/stable")),
             units: 2,
-            shape: MachineShape::Large,
             expose: true,
         };
         assert_eq!(
             change(&world, &steps, "deploy", JujuRequest::Deploy { deployment }).await,
             OperationOutcome::Succeeded
         );
-        let machines = model_vms(&world).await;
-        assert_eq!(machines.len(), 2);
-        assert!(world.juju.machines("model-default").iter().all(|machine| machine.units.len() == 1));
-        assert_eq!(world.juju.exposed(), ["postgresql"]);
+        assert_eq!(units(&world, "postgresql").await, ["postgresql/0", "postgresql/1"]);
+        assert_eq!(pod_names(&world).await.len(), 3);
 
+        let scale = JujuRequest::ScaleApplication {
+            model: name("default"),
+            application: name("postgresql"),
+            units: 3,
+        };
+        assert_eq!(change(&world, &steps, "grow", scale).await, OperationOutcome::Succeeded);
+        assert_eq!(units(&world, "postgresql").await.len(), 3);
         let remove = JujuRequest::RemoveUnits {
             model: name("default"),
             application: name("postgresql"),
             units: vec![String::from("postgresql/0")],
         };
         assert_eq!(change(&world, &steps, "shrink", remove).await, OperationOutcome::Succeeded);
-        assert_eq!(model_vms(&world).await.len(), 1);
-        assert_eq!(world.juju.machines("model-default").len(), 1);
+        assert_eq!(units(&world, "postgresql").await, ["postgresql/1", "postgresql/2"]);
 
-        let survivor = model_vms(&world).await.remove(0);
-        let lost_machine = survivor.metadata.labels["amafu.io/juju-machine"].clone();
-        world.forget::<Vm>(survivor.metadata.name.as_str()).await;
-        let replace = JujuRequest::ReplaceMachine { model: name("default"), machine: lost_machine.clone() };
-        assert_eq!(change(&world, &steps, "replace", replace).await, OperationOutcome::Succeeded);
-        let remaining = world.juju.machines("model-default");
-        assert_eq!(remaining.len(), 1);
-        assert_ne!(remaining[0].id, lost_machine);
-        assert!(remaining[0].units.iter().any(|unit| unit.starts_with("postgresql/")));
+        assert_eq!(
+            change(&world, &steps, "add-pod", JujuRequest::ScalePods { pods: 4 }).await,
+            OperationOutcome::Succeeded
+        );
+        assert_eq!(members(&world).await.len(), 4);
+        assert_eq!(pod_names(&world).await.len(), 4);
+        assert_eq!(
+            change(&world, &steps, "retire-pod", JujuRequest::ScalePods { pods: 3 }).await,
+            OperationOutcome::Succeeded
+        );
+        assert_eq!(members(&world).await, pods);
+        assert_eq!(pod_names(&world).await, pods);
 
         let upgrade = JujuRequest::Upgrade { version: JujuVersion::new(4, 2, 2) };
         assert_eq!(change(&world, &steps, "upgrade", upgrade).await, OperationOutcome::Succeeded);
@@ -133,6 +167,30 @@ mod juju_environment {
         assert_eq!(change(&world, &steps, "delete", JujuRequest::Delete).await, OperationOutcome::Succeeded);
         assert!(controller(&world).await.is_none());
         assert_eq!(world.owned::<Vm>().await.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_highly_available_controller_needs_three_pods() {
+        let world = EnvironmentWorld::new().await;
+        let steps = world.juju_steps();
+        let created =
+            change(&world, &steps, "create", JujuRequest::Create { controller: on_pods(1, 1) }).await;
+        assert_eq!(created, OperationOutcome::Succeeded);
+        assert!(matches!(
+            change(&world, &steps, "ha", JujuRequest::EnableHa).await,
+            OperationOutcome::Failed { .. }
+        ));
+        assert_eq!(
+            change(&world, &steps, "grow", JujuRequest::ScalePods { pods: 3 }).await,
+            OperationOutcome::Succeeded
+        );
+        assert_eq!(
+            change(&world, &steps, "ha-again", JujuRequest::EnableHa).await,
+            OperationOutcome::Succeeded
+        );
+        assert_eq!(world.juju.machines("model-controller").len(), 3);
+        let substrate = controller(&world).await.unwrap().specification.substrate;
+        assert_eq!(substrate.controller_count(), 3);
     }
 
     #[tokio::test]
@@ -159,7 +217,7 @@ mod juju_environment {
         );
 
         let steps = world.juju_steps();
-        let mut on_cluster = on_vms(1);
+        let mut on_cluster = on_pods(1, 1);
         on_cluster.substrate = Substrate::Kubernetes { cluster: name("platform") };
         assert_eq!(
             change(&world, &steps, "create", JujuRequest::Create { controller: on_cluster }).await,

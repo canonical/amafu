@@ -19,6 +19,7 @@ pub struct MachinePlan {
     pub security_groups: Vec<ObjectName>,
     pub user_data: String,
     pub labels: BTreeMap<String, String>,
+    pub guests: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,7 +87,7 @@ impl<'a> Machine<'a> {
             boot: BootSource::Disk,
             volumes: vec![self.name.clone()],
             network_interfaces: vec![NetworkInterfaceSpecification {
-                guests: 0,
+                guests: plan.guests,
                 network: plan.network,
                 security_groups: plan.security_groups,
                 address: None,

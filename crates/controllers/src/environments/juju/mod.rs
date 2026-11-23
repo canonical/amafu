@@ -2,17 +2,15 @@ mod applications;
 mod bootstrap;
 mod controller;
 mod models;
-mod provisioning;
+mod pods;
 mod scope;
 
 use std::sync::Arc;
 
 use amafu_domain::kinds::juju_controller::{JujuControllerChange, JujuStep};
-use amafu_interfaces::{ActionError, Identifiers, JujuPlatform, KubernetesPlatform};
+use amafu_interfaces::{ActionError, Identifiers, JujuPlatform, KubernetesPlatform, LxdPlatform};
 use amafu_reconciler::{Step, StepRegistry};
 use amafu_token_issuer::Keyring;
-
-pub use bootstrap::BOOTSTRAP_KEY_COMMENT;
 
 pub struct JujuSettings {
     pub token_refresh_url: String,
@@ -22,6 +20,7 @@ pub struct JujuSettings {
 pub struct JujuEnvironment {
     pub platform: Arc<dyn JujuPlatform>,
     pub kubernetes: Arc<dyn KubernetesPlatform>,
+    pub lxd: Arc<dyn LxdPlatform>,
     pub keyring: Keyring,
     pub identifiers: Arc<dyn Identifiers>,
     pub settings: JujuSettings,
@@ -43,17 +42,18 @@ impl JujuSteps {
             JujuStep::RecordSpecification => Box::new(controller::RecordSpecification { environment }),
             JujuStep::PrepareNetworkAccess => Box::new(controller::PrepareNetworkAccess { environment }),
             JujuStep::ImportImage => Box::new(controller::ImportImages { environment }),
-            JujuStep::CreateControllerMachines => {
-                Box::new(controller::CreateControllerMachines { environment })
-            }
+            JujuStep::CreateFounderPod => Box::new(pods::CreateFounderPod { environment }),
+            JujuStep::FormCluster => Box::new(pods::FormCluster { environment }),
+            JujuStep::RecordPodCount { pods } => Box::new(pods::RecordPodCount { environment, pods: *pods }),
+            JujuStep::RetirePods => Box::new(pods::RetirePods { environment }),
             JujuStep::CheckHostCluster => Box::new(controller::CheckHostCluster { environment }),
             JujuStep::CreateClusterServiceAccount => {
                 Box::new(controller::CreateClusterServiceAccount { environment })
             }
             JujuStep::Bootstrap => Box::new(controller::Bootstrap { environment }),
             JujuStep::AwaitControllerService => Box::new(controller::AwaitControllerService { environment }),
+            JujuStep::ExposeController => Box::new(controller::ExposeController { environment }),
             JujuStep::RecordController => Box::new(controller::RecordController { environment }),
-            JujuStep::AddControllerMachines => Box::new(controller::AddControllerMachines { environment }),
             JujuStep::EnableHa => Box::new(controller::EnableHa { environment }),
             JujuStep::CleanUpBootstrap => Box::new(controller::CleanUpBootstrap { environment }),
             JujuStep::MarkReady => Box::new(controller::MarkReady { environment }),
@@ -84,39 +84,32 @@ impl JujuSteps {
     fn application_step(&self, step: &JujuStep) -> Option<Box<dyn Step<JujuControllerChange>>> {
         let environment = Arc::clone(&self.environment);
         Some(match step {
-            JujuStep::CreateMachines { model, application, shape, .. } => {
-                Box::new(applications::CreateMachines {
-                    environment,
-                    model: model.clone(),
-                    application: application.clone(),
-                    shape: *shape,
-                })
-            }
             JujuStep::Deploy { deployment } => {
                 Box::new(applications::Deploy { environment, deployment: deployment.clone() })
             }
-            JujuStep::AddUnits { model, application } => Box::new(applications::AddUnits {
+            JujuStep::Expose { model, application } => Box::new(applications::Expose {
                 environment,
                 model: model.clone(),
                 application: application.clone(),
             }),
-            JujuStep::RemoveUnits { model, units, .. } => Box::new(applications::RemoveUnits {
+            JujuStep::ScaleApplication { model, application, units } => {
+                Box::new(applications::ScaleApplication {
+                    environment,
+                    model: model.clone(),
+                    application: application.clone(),
+                    units: *units,
+                })
+            }
+            JujuStep::RemoveUnits { model, application, units } => Box::new(applications::RemoveUnits {
                 environment,
                 model: model.clone(),
+                application: application.clone(),
                 units: units.clone(),
             }),
             JujuStep::RemoveApplication { model, application } => Box::new(applications::RemoveApplication {
                 environment,
                 model: model.clone(),
                 application: application.clone(),
-            }),
-            JujuStep::DeleteReleasedMachines { model } => {
-                Box::new(applications::DeleteReleasedMachines { environment, model: model.clone() })
-            }
-            JujuStep::ReplaceMachine { model, machine } => Box::new(applications::ReplaceMachine {
-                environment,
-                model: model.clone(),
-                machine: machine.clone(),
             }),
             _ => return None,
         })

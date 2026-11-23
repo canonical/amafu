@@ -12,7 +12,14 @@ use crate::step_plan::{PlannedStep, StepPlan};
 use crate::validation::{Validate, ValidationError};
 
 pub const CONTROLLER_COUNTS: [u8; 2] = [1, 3];
+pub const HIGHLY_AVAILABLE_CONTROLLERS: u8 = 3;
+pub const MAXIMUM_PODS: u8 = 16;
 pub const MAXIMUM_UNITS: u16 = 100;
+
+#[must_use]
+pub fn is_valid_pod_count(pods: u8) -> bool {
+    pods == 1 || (3..=MAXIMUM_PODS).contains(&pods)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JujuController;
@@ -76,7 +83,8 @@ impl From<JujuVersion> for String {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "on", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum Substrate {
-    Vms {
+    Pods {
+        pods: u8,
         controllers: u8,
         shape: MachineShape,
         network: ObjectName,
@@ -93,14 +101,14 @@ impl Substrate {
     pub fn hosting_cluster(&self) -> Option<&ObjectName> {
         match self {
             Self::Kubernetes { cluster } => Some(cluster),
-            Self::Vms { .. } => None,
+            Self::Pods { .. } => None,
         }
     }
 
     #[must_use]
     pub fn controller_count(&self) -> u8 {
         match self {
-            Self::Vms { controllers, .. } => *controllers,
+            Self::Pods { controllers, .. } => *controllers,
             Self::Kubernetes { .. } => 1,
         }
     }
@@ -126,11 +134,17 @@ pub struct JujuControllerSpecification {
 
 impl JujuControllerSpecification {
     fn check(&self, field: &str, error: &mut ValidationError) {
-        if let Substrate::Vms { controllers, .. } = &self.substrate {
+        if let Substrate::Pods { pods, controllers, .. } = &self.substrate {
+            error.check(is_valid_pod_count(*pods), &format!("{field}.substrate.pods"), POD_COUNT_RULE);
             error.check(
                 CONTROLLER_COUNTS.contains(controllers),
                 &format!("{field}.substrate.controllers"),
                 "must be 1 or 3",
+            );
+            error.check(
+                controllers <= pods,
+                &format!("{field}.substrate.controllers"),
+                "cannot outnumber the pods",
             );
         }
     }
@@ -143,6 +157,8 @@ impl Validate for JujuControllerSpecification {
         error.into_result()
     }
 }
+
+const POD_COUNT_RULE: &str = "must be 1, or between 3 and 16 so that the LXD cluster keeps a quorum";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JujuModelStatus {
@@ -201,7 +217,6 @@ pub struct Deployment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub channel: Option<String>,
     pub units: u16,
-    pub shape: MachineShape,
     #[serde(default)]
     pub expose: bool,
 }
@@ -215,11 +230,11 @@ pub enum JujuRequest {
     AddModel { model: ObjectName },
     DestroyModel { model: ObjectName },
     EnableHa,
+    ScalePods { pods: u8 },
     Deploy { deployment: Deployment },
-    AddUnits { model: ObjectName, application: ObjectName, units: u16, shape: MachineShape },
+    ScaleApplication { model: ObjectName, application: ObjectName, units: u16 },
     RemoveUnits { model: ObjectName, application: ObjectName, units: Vec<String> },
     RemoveApplication { model: ObjectName, application: ObjectName },
-    ReplaceMachine { model: ObjectName, machine: String },
     RotateCredential,
 }
 
@@ -233,26 +248,18 @@ impl JujuRequest {
             Self::AddModel { .. } => "add-model",
             Self::DestroyModel { .. } => "destroy-model",
             Self::EnableHa => "enable-ha",
+            Self::ScalePods { .. } => "scale-pods",
             Self::Deploy { .. } => "deploy",
-            Self::AddUnits { .. } => "add-units",
+            Self::ScaleApplication { .. } => "scale-application",
             Self::RemoveUnits { .. } => "remove-units",
             Self::RemoveApplication { .. } => "remove-application",
-            Self::ReplaceMachine { .. } => "replace-machine",
             Self::RotateCredential => "rotate-credential",
         }
     }
 
     #[must_use]
-    pub fn needs_machines(&self) -> bool {
-        matches!(
-            self,
-            Self::EnableHa
-                | Self::Deploy { .. }
-                | Self::AddUnits { .. }
-                | Self::RemoveUnits { .. }
-                | Self::RemoveApplication { .. }
-                | Self::ReplaceMachine { .. }
-        )
+    pub fn needs_pods(&self) -> bool {
+        matches!(self, Self::EnableHa | Self::ScalePods { .. })
     }
 
     #[must_use]
@@ -266,39 +273,30 @@ impl JujuRequest {
             ],
             Self::AddModel { model } => vec![JujuStep::AddModel { model: model.clone() }],
             Self::DestroyModel { model } => vec![JujuStep::DestroyModel { model: model.clone() }],
-            Self::EnableHa => vec![JujuStep::AddControllerMachines, JujuStep::EnableHa],
-            Self::Deploy { deployment } => vec![
-                JujuStep::CreateMachines {
+            Self::EnableHa => vec![JujuStep::EnableHa],
+            Self::ScalePods { pods } => {
+                vec![JujuStep::RecordPodCount { pods: *pods }, JujuStep::FormCluster, JujuStep::RetirePods]
+            }
+            Self::Deploy { deployment } => {
+                let deploy = JujuStep::Deploy { deployment: deployment.clone() };
+                let expose = deployment.expose.then(|| JujuStep::Expose {
                     model: deployment.model.clone(),
                     application: deployment.application.clone(),
-                    count: deployment.units,
-                    shape: deployment.shape,
-                },
-                JujuStep::Deploy { deployment: deployment.clone() },
-            ],
-            Self::AddUnits { model, application, units, shape } => vec![
-                JujuStep::CreateMachines {
-                    model: model.clone(),
-                    application: application.clone(),
-                    count: *units,
-                    shape: *shape,
-                },
-                JujuStep::AddUnits { model: model.clone(), application: application.clone() },
-            ],
-            Self::RemoveUnits { model, application, units } => vec![
-                JujuStep::RemoveUnits {
-                    model: model.clone(),
-                    application: application.clone(),
-                    units: units.clone(),
-                },
-                JujuStep::DeleteReleasedMachines { model: model.clone() },
-            ],
-            Self::RemoveApplication { model, application } => vec![
-                JujuStep::RemoveApplication { model: model.clone(), application: application.clone() },
-                JujuStep::DeleteReleasedMachines { model: model.clone() },
-            ],
-            Self::ReplaceMachine { model, machine } => {
-                vec![JujuStep::ReplaceMachine { model: model.clone(), machine: machine.clone() }]
+                });
+                std::iter::once(deploy).chain(expose).collect()
+            }
+            Self::ScaleApplication { model, application, units } => vec![JujuStep::ScaleApplication {
+                model: model.clone(),
+                application: application.clone(),
+                units: *units,
+            }],
+            Self::RemoveUnits { model, application, units } => vec![JujuStep::RemoveUnits {
+                model: model.clone(),
+                application: application.clone(),
+                units: units.clone(),
+            }],
+            Self::RemoveApplication { model, application } => {
+                vec![JujuStep::RemoveApplication { model: model.clone(), application: application.clone() }]
             }
             Self::RotateCredential => vec![JujuStep::RotateCredential],
         }
@@ -307,11 +305,13 @@ impl JujuRequest {
 
 fn creation_steps(controller: &JujuControllerSpecification) -> Vec<JujuStep> {
     let substrate_steps = match &controller.substrate {
-        Substrate::Vms { .. } => vec![
+        Substrate::Pods { .. } => vec![
             JujuStep::PrepareNetworkAccess,
             JujuStep::ImportImage,
-            JujuStep::CreateControllerMachines,
+            JujuStep::CreateFounderPod,
+            JujuStep::FormCluster,
             JujuStep::Bootstrap,
+            JujuStep::ExposeController,
             JujuStep::RecordController,
         ],
         Substrate::Kubernetes { .. } => vec![
@@ -321,20 +321,14 @@ fn creation_steps(controller: &JujuControllerSpecification) -> Vec<JujuStep> {
             JujuStep::Bootstrap,
             JujuStep::AwaitControllerService,
             JujuStep::RecordController,
+            JujuStep::CleanUpBootstrap,
         ],
     };
-    let high_availability = (controller.substrate.controller_count() > 1)
-        .then_some([JujuStep::AddControllerMachines, JujuStep::EnableHa])
-        .into_iter()
-        .flatten();
+    let high_availability = (controller.substrate.controller_count() > 1).then_some(JujuStep::EnableHa);
     std::iter::once(JujuStep::RecordSpecification)
         .chain(substrate_steps)
         .chain(high_availability)
-        .chain([
-            JujuStep::CleanUpBootstrap,
-            JujuStep::AddModel { model: controller.first_model.clone() },
-            JujuStep::MarkReady,
-        ])
+        .chain([JujuStep::AddModel { model: controller.first_model.clone() }, JujuStep::MarkReady])
         .collect()
 }
 
@@ -344,13 +338,14 @@ pub enum JujuStep {
     RecordSpecification,
     PrepareNetworkAccess,
     ImportImage,
-    CreateControllerMachines,
+    CreateFounderPod,
+    FormCluster,
     CheckHostCluster,
     CreateClusterServiceAccount,
     Bootstrap,
     AwaitControllerService,
+    ExposeController,
     RecordController,
-    AddControllerMachines,
     EnableHa,
     CleanUpBootstrap,
     AddModel { model: ObjectName },
@@ -360,13 +355,13 @@ pub enum JujuStep {
     UpgradeController { version: JujuVersion },
     UpgradeModels { version: JujuVersion },
     DestroyModel { model: ObjectName },
-    CreateMachines { model: ObjectName, application: ObjectName, count: u16, shape: MachineShape },
+    RecordPodCount { pods: u8 },
+    RetirePods,
     Deploy { deployment: Deployment },
-    AddUnits { model: ObjectName, application: ObjectName },
+    Expose { model: ObjectName, application: ObjectName },
+    ScaleApplication { model: ObjectName, application: ObjectName, units: u16 },
     RemoveUnits { model: ObjectName, application: ObjectName, units: Vec<String> },
     RemoveApplication { model: ObjectName, application: ObjectName },
-    DeleteReleasedMachines { model: ObjectName },
-    ReplaceMachine { model: ObjectName, machine: String },
     RotateCredential,
 }
 
@@ -376,13 +371,14 @@ impl PlannedStep for JujuStep {
             Self::RecordSpecification => "record-specification",
             Self::PrepareNetworkAccess => "prepare-network-access",
             Self::ImportImage => "import-image",
-            Self::CreateControllerMachines => "create-controller-machines",
+            Self::CreateFounderPod => "create-founder-pod",
+            Self::FormCluster => "form-cluster",
             Self::CheckHostCluster => "check-host-cluster",
             Self::CreateClusterServiceAccount => "create-cluster-service-account",
             Self::Bootstrap => "bootstrap",
             Self::AwaitControllerService => "await-controller-service",
+            Self::ExposeController => "expose-controller",
             Self::RecordController => "record-controller",
-            Self::AddControllerMachines => "add-controller-machines",
             Self::EnableHa => "enable-ha",
             Self::CleanUpBootstrap => "clean-up-bootstrap",
             Self::AddModel { .. } => "add-model",
@@ -392,23 +388,26 @@ impl PlannedStep for JujuStep {
             Self::UpgradeController { .. } => "upgrade-controller",
             Self::UpgradeModels { .. } => "upgrade-models",
             Self::DestroyModel { .. } => "destroy-model",
-            Self::CreateMachines { .. } => "create-machines",
+            Self::RecordPodCount { .. } => "record-pod-count",
+            Self::RetirePods => "retire-pods",
             Self::Deploy { .. } => "deploy",
-            Self::AddUnits { .. } => "add-units",
+            Self::Expose { .. } => "expose",
+            Self::ScaleApplication { .. } => "scale-application",
             Self::RemoveUnits { .. } => "remove-units",
             Self::RemoveApplication { .. } => "remove-application",
-            Self::DeleteReleasedMachines { .. } => "delete-released-machines",
-            Self::ReplaceMachine { .. } => "replace-machine",
             Self::RotateCredential => "rotate-credential",
         }
     }
 
     fn can_be_undone(&self) -> bool {
-        matches!(self, Self::CheckHostCluster | Self::ImportImage | Self::CreateMachines { .. })
+        matches!(self, Self::CheckHostCluster | Self::ImportImage)
     }
 
     fn can_be_abandoned(&self) -> bool {
-        !matches!(self, Self::DestroyModels | Self::DeleteResources | Self::DestroyModel { .. })
+        !matches!(
+            self,
+            Self::DestroyModels | Self::DeleteResources | Self::DestroyModel { .. } | Self::RetirePods
+        )
     }
 }
 
@@ -503,12 +502,15 @@ impl Validate for JujuControllerChangeSpecification {
                 "specification.deployment.units",
                 "must be between 1 and 100",
             ),
-            JujuRequest::AddUnits { units, .. } => {
+            JujuRequest::ScaleApplication { units, .. } => {
                 error.check(
                     (1..=MAXIMUM_UNITS).contains(units),
                     "specification.units",
                     "must be between 1 and 100",
                 );
+            }
+            JujuRequest::ScalePods { pods } => {
+                error.check(is_valid_pod_count(*pods), "specification.pods", POD_COUNT_RULE);
             }
             _ => {}
         }
@@ -537,10 +539,11 @@ mod tests {
         ObjectName::new(value).unwrap()
     }
 
-    fn on_vms(controllers: u8) -> JujuControllerSpecification {
+    fn on_pods(pods: u8, controllers: u8) -> JujuControllerSpecification {
         JujuControllerSpecification {
             version: JujuVersion::new(4, 2, 1),
-            substrate: Substrate::Vms {
+            substrate: Substrate::Pods {
+                pods,
                 controllers,
                 shape: MachineShape::Medium,
                 network: name("app"),
@@ -556,21 +559,25 @@ mod tests {
         steps.iter().map(PlannedStep::name).collect()
     }
 
+    fn refuses(request: JujuRequest) -> bool {
+        JujuControllerChangeSpecification::new(name("ctl"), request).validate().is_err()
+    }
+
     #[test]
-    fn a_highly_available_controller_on_vms_adds_two_machines_after_bootstrap() {
-        let steps = JujuRequest::Create { controller: on_vms(3) }.steps();
+    fn a_highly_available_controller_on_pods_forms_the_cluster_then_enables_ha() {
+        let steps = JujuRequest::Create { controller: on_pods(3, 3) }.steps();
         assert_eq!(
             names(&steps),
             [
                 "record-specification",
                 "prepare-network-access",
                 "import-image",
-                "create-controller-machines",
+                "create-founder-pod",
+                "form-cluster",
                 "bootstrap",
+                "expose-controller",
                 "record-controller",
-                "add-controller-machines",
                 "enable-ha",
-                "clean-up-bootstrap",
                 "add-model",
                 "mark-ready"
             ]
@@ -578,59 +585,59 @@ mod tests {
     }
 
     #[test]
-    fn a_controller_on_kubernetes_is_bootstrapped_through_the_cluster_without_ha() {
-        let mut controller = on_vms(1);
+    fn a_controller_on_kubernetes_is_bootstrapped_through_the_cluster_without_pods() {
+        let mut controller = on_pods(1, 1);
         controller.substrate = Substrate::Kubernetes { cluster: name("platform") };
         let steps = JujuRequest::Create { controller }.steps();
         assert!(names(&steps).contains(&"create-cluster-service-account"));
-        assert!(!names(&steps).contains(&"enable-ha"));
-        assert!(!names(&steps).contains(&"create-controller-machines"));
+        assert!(names(&steps).contains(&"clean-up-bootstrap"));
+        assert!(!names(&steps).contains(&"create-founder-pod"));
     }
 
     #[test]
-    fn a_deployment_creates_its_machines_before_deploying_onto_them() {
-        let deployment = Deployment {
+    fn a_deployment_is_exposed_only_when_asked() {
+        let mut deployment = Deployment {
             model: name("default"),
             application: name("postgresql"),
             charm: String::from("postgresql"),
             channel: Some(String::from("16/stable")),
             units: 3,
-            shape: MachineShape::Medium,
             expose: false,
         };
-        assert_eq!(names(&JujuRequest::Deploy { deployment }.steps()), ["create-machines", "deploy"]);
+        assert_eq!(names(&JujuRequest::Deploy { deployment: deployment.clone() }.steps()), ["deploy"]);
+        deployment.expose = true;
+        assert_eq!(names(&JujuRequest::Deploy { deployment }.steps()), ["deploy", "expose"]);
     }
 
     #[test]
-    fn two_controllers_or_a_hundred_and_one_units_are_refused() {
-        assert!(
-            JujuControllerChangeSpecification::new(
-                name("ctl"),
-                JujuRequest::Create { controller: on_vms(2) }
-            )
-            .validate()
-            .is_err()
-        );
-        let change = JujuControllerChangeSpecification::new(
-            name("ctl"),
-            JujuRequest::AddUnits {
-                model: name("default"),
-                application: name("web"),
-                units: 101,
-                shape: MachineShape::Small,
-            },
-        );
-        assert!(change.validate().is_err());
+    fn pod_clusters_keep_a_quorum_and_never_hold_fewer_pods_than_controllers() {
+        for pods in [0, 2, 17] {
+            assert!(refuses(JujuRequest::Create { controller: on_pods(pods, 1) }));
+            assert!(refuses(JujuRequest::ScalePods { pods }));
+        }
+        assert!(refuses(JujuRequest::Create { controller: on_pods(1, 3) }));
+        assert!(refuses(JujuRequest::Create { controller: on_pods(3, 2) }));
+        assert!(!refuses(JujuRequest::Create { controller: on_pods(3, 3) }));
+        assert!(!refuses(JujuRequest::ScalePods { pods: 4 }));
+    }
+
+    #[test]
+    fn an_application_scales_to_between_one_and_a_hundred_units() {
+        let scale =
+            |units| JujuRequest::ScaleApplication { model: name("default"), application: name("web"), units };
+        assert!(refuses(scale(0)));
+        assert!(refuses(scale(101)));
+        assert!(!refuses(scale(5)));
     }
 
     #[test]
     fn a_change_survives_a_trip_through_json() {
         let change = JujuControllerChangeSpecification::new(
             name("ctl"),
-            JujuRequest::Create { controller: on_vms(3) },
+            JujuRequest::Create { controller: on_pods(3, 1) },
         );
         let json = serde_json::to_value(&change).unwrap();
-        assert_eq!(json["request"]["controller"]["substrate"]["on"], "vms");
+        assert_eq!(json["request"]["controller"]["substrate"]["on"], "pods");
         assert_eq!(serde_json::from_value::<JujuControllerChangeSpecification>(json).unwrap(), change);
     }
 

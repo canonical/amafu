@@ -1,11 +1,8 @@
 use std::net::Ipv4Addr;
 
-use amafu_domain::kinds::machine_shape::MachineShape;
-
 use crate::error::ActionError;
 
 pub const JUJU_API_PORT: u16 = 17070;
-const MEBIBYTES_PER_GIBIBYTE: u32 = 1024;
 
 #[must_use]
 pub fn cloud_name(controller: &str) -> String {
@@ -41,33 +38,15 @@ pub struct JujuModel {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JujuMachine {
     pub id: String,
-    pub instance_id: String,
     pub is_started: bool,
     pub units: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MachineHardware {
-    pub cpu_cores: u16,
-    pub memory_mebibytes: u32,
-    pub root_disk_mebibytes: u32,
-}
-
-impl From<MachineShape> for MachineHardware {
-    fn from(shape: MachineShape) -> Self {
-        Self {
-            cpu_cores: shape.cpu_count(),
-            memory_mebibytes: shape.memory_mebibytes(),
-            root_disk_mebibytes: shape.disk_gibibytes() * MEBIBYTES_PER_GIBIBYTE,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ManualMachine {
-    pub instance_id: String,
-    pub nonce: String,
-    pub hardware: MachineHardware,
+pub struct JujuApplication {
+    pub name: String,
+    pub units: Vec<String>,
+    pub is_exposed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,36 +75,20 @@ pub trait JujuPlatform: Send + Sync {
 
     async fn machines(&self, endpoint: &JujuEndpoint, model: &str) -> Result<Vec<JujuMachine>, ActionError>;
 
-    async fn add_machine(
+    async fn applications(
         &self,
         endpoint: &JujuEndpoint,
         model: &str,
-        machine: &ManualMachine,
-    ) -> Result<String, ActionError>;
+    ) -> Result<Vec<JujuApplication>, ActionError>;
 
-    async fn provisioning_script(
-        &self,
-        endpoint: &JujuEndpoint,
-        model: &str,
-        machine: &str,
-        nonce: &str,
-    ) -> Result<String, ActionError>;
-
-    async fn remove_machine(
-        &self,
-        endpoint: &JujuEndpoint,
-        model: &str,
-        machine: &str,
-    ) -> Result<(), ActionError>;
-
-    async fn enable_ha(&self, endpoint: &JujuEndpoint, machines: &[String]) -> Result<(), ActionError>;
+    async fn enable_ha(&self, endpoint: &JujuEndpoint, controllers: u8) -> Result<(), ActionError>;
 
     async fn deploy(
         &self,
         endpoint: &JujuEndpoint,
         model: &str,
         charm: &Charm,
-        machines: &[String],
+        units: u16,
     ) -> Result<(), ActionError>;
 
     async fn add_units(
@@ -133,7 +96,7 @@ pub trait JujuPlatform: Send + Sync {
         endpoint: &JujuEndpoint,
         model: &str,
         application: &str,
-        machines: &[String],
+        units: u16,
     ) -> Result<(), ActionError>;
 
     async fn remove_units(
@@ -155,13 +118,6 @@ pub trait JujuPlatform: Send + Sync {
         endpoint: &JujuEndpoint,
         model: &str,
         application: &str,
-    ) -> Result<(), ActionError>;
-
-    async fn remove_authorized_key(
-        &self,
-        endpoint: &JujuEndpoint,
-        model: &str,
-        comment: &str,
     ) -> Result<(), ActionError>;
 
     async fn update_kubernetes_credential(

@@ -455,6 +455,7 @@ fn environment_roles(
     let juju_steps = JujuSteps::new(JujuEnvironment {
         platform: Arc::new(WebSocketJuju::default()),
         kubernetes,
+        lxd: Arc::new(HttpsLxd::default()),
         keyring,
         identifiers: Arc::new(RandomIdentifiers),
         settings: configuration.environments.juju(&configuration.api, underlay, &certificate_authority),

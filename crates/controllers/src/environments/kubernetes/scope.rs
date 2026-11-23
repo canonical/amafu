@@ -77,6 +77,7 @@ impl<'a> ClusterScope<'a> {
             security_groups: vec![self.security_group()?],
             user_data,
             labels: std::collections::BTreeMap::new(),
+            guests: 0,
         })
     }
 

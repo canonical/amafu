@@ -6,11 +6,11 @@ use amafu_domain::kinds::juju_controller::{JujuVersion, SignInMode};
 use amafu_interfaces::kubernetes::KUBERNETES_API_PORT;
 use serde_json::{Value, json};
 
-pub const BOOTSTRAP_KEY_COMMENT: &str = "amafu-bootstrap";
+pub const LXD_CHANNEL: &str = "6/stable";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
-    Itself { ssh_private_key: String, admin_password: String },
+    Pods { pods: u8, admin_password: String },
     Cluster { kubeconfig: String },
 }
 
@@ -43,9 +43,9 @@ impl BootstrapPlan {
             ),
         ]);
         match &self.target {
-            Target::Itself { ssh_private_key, admin_password } => {
-                environment.insert(String::from("JUJU_SUBSTRATE"), String::from("machine"));
-                environment.insert(String::from("JUJU_SSH_PRIVATE_KEY"), ssh_private_key.clone());
+            Target::Pods { pods, admin_password } => {
+                environment.insert(String::from("JUJU_SUBSTRATE"), String::from("lxd"));
+                environment.insert(String::from("JUJU_PODS"), pods.to_string());
                 environment.insert(String::from("JUJU_ADMIN_PASSWORD"), admin_password.clone());
             }
             Target::Cluster { kubeconfig } => {
@@ -58,48 +58,97 @@ impl BootstrapPlan {
 }
 
 const BOOTSTRAP_SCRIPT: &str = include_str!("../../../../../image/juju-runner/bootstrap");
+const POD_SETUP_SCRIPT: &str = include_str!("../../../../../image/juju-pod/setup");
 const BOOTSTRAP_DIRECTORY: &str = "/root/amafu-juju";
+const POD_DIRECTORY: &str = "/root/amafu-pod";
 pub const BOOTSTRAP_LOG: &str = "/root/amafu-juju/bootstrap.log";
 
 fn shell_quoted(value: &str) -> String {
     format!("'{}'", value.replace('\'', r"'\''"))
 }
 
-impl BootstrapPlan {
+fn exports<'v>(variables: impl IntoIterator<Item = (&'v str, &'v str)>) -> String {
+    variables.into_iter().fold(String::new(), |mut lines, (name, value)| {
+        let _ = writeln!(lines, "export {name}={}", shell_quoted(value));
+        lines
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PodRole<'a> {
+    Founder { bootstrap: Option<&'a BootstrapPlan> },
+    Member { join_token: &'a str },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PodSetup<'a> {
+    pub name: &'a str,
+    pub role: PodRole<'a>,
+    pub trusted_certificate: &'a str,
+    pub amafu_certificate_authority: &'a str,
+}
+
+impl PodSetup<'_> {
     #[must_use]
-    pub fn controller_user_data(&self, ssh_public_key: &str, amafu_certificate_authority: &str) -> String {
-        let environment = self.environment().iter().fold(String::new(), |mut lines, (name, value)| {
-            let _ = writeln!(lines, "export {name}={}", shell_quoted(value));
-            lines
-        });
+    pub fn user_data(&self) -> String {
+        let certificate = format!("{POD_DIRECTORY}/amafu.crt");
+        let (role, join_token, bootstrap) = match &self.role {
+            PodRole::Founder { bootstrap } => ("founder", None, *bootstrap),
+            PodRole::Member { join_token } => ("member", Some(*join_token), None),
+        };
+        let mut variables = vec![
+            ("AMAFU_POD_ROLE", role),
+            ("AMAFU_POD_NAME", self.name),
+            ("AMAFU_LXD_CHANNEL", LXD_CHANNEL),
+            ("AMAFU_TRUSTED_CERTIFICATE", certificate.as_str()),
+        ];
+        variables.extend(join_token.map(|token| ("AMAFU_JOIN_TOKEN", token)));
+        let environment = exports(variables);
+        let mut files = vec![
+            json!({"path": format!("{POD_DIRECTORY}/setup"), "permissions": "0700", "content": POD_SETUP_SCRIPT}),
+            json!({"path": format!("{POD_DIRECTORY}/environment"), "permissions": "0600", "content": environment}),
+            json!({"path": certificate, "permissions": "0644", "content": self.trusted_certificate}),
+        ];
+        let mut commands = vec![json!([
+            "sh",
+            "-c",
+            format!("cd {POD_DIRECTORY} && . ./environment && ./setup > {POD_DIRECTORY}/setup.log 2>&1")
+        ])];
+        let mut document = json!({});
+        if !self.amafu_certificate_authority.is_empty() {
+            document["ca_certs"] = json!({ "trusted": [self.amafu_certificate_authority] });
+        }
+        if let Some(plan) = bootstrap {
+            document["packages"] = json!(["squashfs-tools"]);
+            files.extend(plan.files());
+            commands.extend(plan.commands());
+        }
+        document["write_files"] = Value::Array(files);
+        document["runcmd"] = Value::Array(commands);
+        format!("#cloud-config\n{}", serde_yaml_ng::to_string(&document).unwrap_or_default())
+    }
+}
+
+impl BootstrapPlan {
+    fn files(&self) -> [Value; 2] {
+        let environment = self.environment();
+        let environment = exports(environment.iter().map(|(name, value)| (name.as_str(), value.as_str())));
+        [
+            json!({"path": format!("{BOOTSTRAP_DIRECTORY}/bootstrap"), "permissions": "0700", "content": BOOTSTRAP_SCRIPT}),
+            json!({"path": format!("{BOOTSTRAP_DIRECTORY}/environment"), "permissions": "0600", "content": environment}),
+        ]
+    }
+
+    fn commands(&self) -> [Value; 2] {
         let install = format!(
             "cd {BOOTSTRAP_DIRECTORY} && snap download juju --channel={} --basename=juju && unsquashfs -f -d client juju.snap bin/juju && install -m 0755 client/bin/juju /usr/local/bin/juju",
             self.version.snap_channel()
         );
         let bootstrap = format!(
-            "cd {BOOTSTRAP_DIRECTORY} && mkdir -p work && . ./environment && JUJU_MACHINE_ADDRESS=$(hostname -I | cut -d ' ' -f 1) HOME=/root TMPDIR={BOOTSTRAP_DIRECTORY}/work ./bootstrap 2>&1 | tee {BOOTSTRAP_LOG}"
+            "cd {BOOTSTRAP_DIRECTORY} && mkdir -p work && . ./environment && HOME=/root TMPDIR={BOOTSTRAP_DIRECTORY}/work ./bootstrap > {BOOTSTRAP_LOG} 2>&1"
         );
-        let mut document = machine_document(ssh_public_key, amafu_certificate_authority);
-        document["packages"] = json!(["squashfs-tools"]);
-        document["write_files"] = json!([
-            {"path": format!("{BOOTSTRAP_DIRECTORY}/bootstrap"), "permissions": "0700", "content": BOOTSTRAP_SCRIPT},
-            {"path": format!("{BOOTSTRAP_DIRECTORY}/environment"), "permissions": "0600", "content": environment},
-        ]);
-        document["runcmd"] = json!([["sh", "-c", install], ["sh", "-c", bootstrap]]);
-        cloud_config(&document)
+        [json!(["sh", "-c", install]), json!(["sh", "-c", bootstrap])]
     }
-}
-
-fn machine_document(ssh_public_key: &str, amafu_certificate_authority: &str) -> Value {
-    let mut document = json!({ "ssh_authorized_keys": [ssh_public_key] });
-    if !amafu_certificate_authority.is_empty() {
-        document["ca_certs"] = json!({ "trusted": [amafu_certificate_authority] });
-    }
-    document
-}
-
-fn cloud_config(document: &Value) -> String {
-    format!("#cloud-config\n{}", serde_yaml_ng::to_string(document).unwrap_or_default())
 }
 
 #[must_use]
@@ -136,42 +185,64 @@ mod tests {
         }
     }
 
-    fn itself() -> Target {
-        Target::Itself { ssh_private_key: String::from("ssh"), admin_password: String::from("password") }
+    fn pods() -> Target {
+        Target::Pods { pods: 3, admin_password: String::from("password") }
+    }
+
+    fn document(user_data: &str) -> Value {
+        serde_yaml_ng::from_str(user_data.strip_prefix("#cloud-config\n").unwrap()).unwrap()
     }
 
     #[test]
     fn the_bootstrap_learns_its_target_from_its_environment() {
-        let machine = plan(itself()).environment();
-        assert_eq!(machine["JUJU_SUBSTRATE"], "machine");
-        assert_eq!(machine["JUJU_ADMIN_PASSWORD"], "password");
-        assert!(!machine.contains_key("JUJU_MACHINE_ADDRESS"));
-        assert_eq!(machine["JUJU_LOGIN_TOKEN_REFRESH_URL"], "https://amafu.example/.well-known/jwks.json");
+        let on_pods = plan(pods()).environment();
+        assert_eq!(on_pods["JUJU_SUBSTRATE"], "lxd");
+        assert_eq!(on_pods["JUJU_PODS"], "3");
+        assert_eq!(on_pods["JUJU_ADMIN_PASSWORD"], "password");
+        assert_eq!(on_pods["JUJU_LOGIN_TOKEN_REFRESH_URL"], "https://amafu.example/.well-known/jwks.json");
         let cluster = plan(Target::Cluster { kubeconfig: String::from("config") }).environment();
         assert_eq!(cluster["JUJU_SUBSTRATE"], "kubernetes");
-        assert!(!cluster.contains_key("JUJU_SSH_PRIVATE_KEY"));
+        assert!(!cluster.contains_key("JUJU_ADMIN_PASSWORD"));
     }
 
     #[test]
-    fn the_first_controller_installs_the_client_and_bootstraps_itself_from_roots_home() {
-        let mut machine = plan(itself());
-        machine.private_key = String::from("it's secret");
-        let user_data = machine.controller_user_data("ssh-ed25519 AAAA amafu-bootstrap", "amafu-ca");
-        let document: Value =
-            serde_yaml_ng::from_str(user_data.strip_prefix("#cloud-config\n").unwrap()).unwrap();
-        assert_eq!(document["ssh_authorized_keys"][0], "ssh-ed25519 AAAA amafu-bootstrap");
-        assert_eq!(document["ca_certs"]["trusted"][0], "amafu-ca");
-        let install = document["runcmd"][0][2].as_str().unwrap();
-        assert!(install.contains("snap download juju --channel=4.2/stable"));
-        assert!(install.ends_with("install -m 0755 client/bin/juju /usr/local/bin/juju"));
-        let bootstrap = document["runcmd"][1][2].as_str().unwrap();
-        assert!(bootstrap.starts_with("cd /root/amafu-juju && "));
-        assert!(bootstrap.contains("JUJU_MACHINE_ADDRESS=$(hostname -I | cut -d ' ' -f 1) HOME=/root"));
-        assert!(bootstrap.ends_with("| tee /root/amafu-juju/bootstrap.log"));
-        assert_eq!(document["write_files"][0]["content"], BOOTSTRAP_SCRIPT);
-        let environment = document["write_files"][1]["content"].as_str().unwrap();
+    fn every_pod_sets_up_lxd_trusting_amafu_and_only_the_founder_bootstraps() {
+        let member = PodSetup {
+            name: "ctl-pod-1",
+            role: PodRole::Member { join_token: "token" },
+            trusted_certificate: "amafu-lxd-certificate",
+            amafu_certificate_authority: "amafu-ca",
+        };
+        let joined = document(&member.user_data());
+        assert_eq!(joined["ca_certs"]["trusted"][0], "amafu-ca");
+        assert_eq!(joined["write_files"][0]["content"], POD_SETUP_SCRIPT);
+        let environment = joined["write_files"][1]["content"].as_str().unwrap();
+        assert!(environment.contains("export AMAFU_POD_ROLE='member'"));
+        assert!(environment.contains("export AMAFU_POD_NAME='ctl-pod-1'"));
+        assert!(environment.contains("export AMAFU_JOIN_TOKEN='token'"));
+        assert_eq!(joined["write_files"][2]["content"], "amafu-lxd-certificate");
+        assert_eq!(joined["runcmd"].as_array().unwrap().len(), 1);
+        assert!(joined.get("packages").is_none());
+
+        let mut secret = plan(pods());
+        secret.private_key = String::from("it's secret");
+        let first =
+            PodSetup { name: "ctl-pod-0", role: PodRole::Founder { bootstrap: Some(&secret) }, ..member };
+        let founded = document(&first.user_data());
+        assert!(
+            founded["write_files"][1]["content"]
+                .as_str()
+                .unwrap()
+                .contains("export AMAFU_POD_ROLE='founder'")
+        );
+        assert_eq!(founded["write_files"][3]["content"], BOOTSTRAP_SCRIPT);
+        let environment = founded["write_files"][4]["content"].as_str().unwrap();
         assert!(environment.contains(r"export JUJU_CA_PRIVATE_KEY='it'\''s secret'"));
-        assert_eq!(document["write_files"][1]["permissions"], "0600");
+        assert_eq!(founded["write_files"][4]["permissions"], "0600");
+        let install = founded["runcmd"][1][2].as_str().unwrap();
+        assert!(install.contains("snap download juju --channel=4.2/stable"));
+        let bootstrap = founded["runcmd"][2][2].as_str().unwrap();
+        assert!(bootstrap.ends_with("./bootstrap > /root/amafu-juju/bootstrap.log 2>&1"));
     }
 
     #[test]

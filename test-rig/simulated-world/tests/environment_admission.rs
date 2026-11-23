@@ -72,7 +72,8 @@ mod environment_admission {
     fn controller() -> JujuControllerSpecification {
         JujuControllerSpecification {
             version: JujuVersion::new(3, 6, 29),
-            substrate: Substrate::Vms {
+            substrate: Substrate::Pods {
+                pods: 1,
                 controllers: 1,
                 shape: MachineShape::Small,
                 network: name("apps"),

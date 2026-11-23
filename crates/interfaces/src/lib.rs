@@ -36,12 +36,12 @@ pub use identifiers::{Identifiers, RandomIdentifiers};
 pub use image_catalog::{CatalogEntry, CatalogKind, FixedImageCatalog, ImageCatalog};
 pub use images::{CachedImage, ContainerConfiguration, ImageRequest, ImageStore};
 pub use juju::{
-    Charm, JujuControllerInfo, JujuCredentials, JujuEndpoint, JujuMachine, JujuModel, JujuPlatform,
-    MachineHardware, ManualMachine,
+    Charm, JujuApplication, JujuControllerInfo, JujuCredentials, JujuEndpoint, JujuMachine, JujuModel,
+    JujuPlatform,
 };
 pub use kubernetes::{DrainState, KubernetesEndpoint, KubernetesPlatform, NodeRole};
 pub use lease::{HeldLease, Leases};
-pub use lxd::{ClusterInvitation, ClusterJoin, LXD_PORT, LxdEndpoint, LxdPlatform};
+pub use lxd::{LXD_PORT, LxdEndpoint, LxdPlatform};
 pub use network::{
     Datapath, FloatingAddress, GuestSighting, LeasedGuest, LocalServices, NodeNetworkState, Port, PortKey,
     RealizedNetwork, RemoteEndpoint, Segment, SegmentKey,

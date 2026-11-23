@@ -4,7 +4,8 @@ mod facades;
 use std::time::Duration;
 
 use amafu_interfaces::{
-    ActionError, Charm, JujuControllerInfo, JujuEndpoint, JujuMachine, JujuModel, JujuPlatform, ManualMachine,
+    ActionError, Charm, JujuApplication, JujuControllerInfo, JujuEndpoint, JujuMachine, JujuModel,
+    JujuPlatform,
 };
 use serde_json::{Value, json};
 
@@ -13,8 +14,6 @@ use crate::connection::{Connection, Scope};
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const SERVICE_USER: &str = "user-amafu@amafu";
 const BOOTSTRAP_USER: &str = "admin";
-const MACHINE_BASE: (&str, &str) = ("ubuntu", "24.04");
-const MACHINE_ARCHITECTURE: &str = "amd64";
 
 #[derive(Debug, Clone, Copy)]
 pub struct WebSocketJuju {
@@ -45,33 +44,16 @@ impl WebSocketJuju {
     }
 }
 
-fn deploy_request(charm: &Charm, machines: &[String]) -> Value {
+fn deploy_request(charm: &Charm, units: u16) -> Value {
     let mut argument = json!({
         "CharmName": charm.charm,
         "ApplicationName": charm.application,
-        "num-units": machines.len(),
-        "Placement": facades::placements(machines),
+        "num-units": units,
     });
     if let Some(channel) = &charm.channel {
         argument["channel"] = json!(channel);
     }
     json!({"Args": [argument]})
-}
-
-fn add_machine_request(machine: &ManualMachine) -> Value {
-    let (name, channel) = MACHINE_BASE;
-    json!({"params": [{
-        "jobs": ["JobHostUnits"],
-        "instance-id": machine.instance_id,
-        "nonce": machine.nonce,
-        "base": {"name": name, "channel": channel},
-        "hardware-characteristics": {
-            "arch": MACHINE_ARCHITECTURE,
-            "cpu-cores": machine.hardware.cpu_cores,
-            "mem": machine.hardware.memory_mebibytes,
-            "root-disk": machine.hardware.root_disk_mebibytes,
-        },
-    }]})
 }
 
 #[async_trait::async_trait]
@@ -133,52 +115,19 @@ impl JujuPlatform for WebSocketJuju {
         Ok(facades::machines(&status))
     }
 
-    async fn add_machine(
+    async fn applications(
         &self,
         endpoint: &JujuEndpoint,
         model: &str,
-        machine: &ManualMachine,
-    ) -> Result<String, ActionError> {
+    ) -> Result<Vec<JujuApplication>, ActionError> {
         let mut connection = self.model_connection(endpoint, model).await?;
-        let request = add_machine_request(machine);
-        let added = connection.call("MachineManager", "AddMachines", request).await?;
-        added["machines"][0]["machine"]
-            .as_str()
-            .map(str::to_owned)
-            .ok_or_else(|| ActionError::retryable("the controller returned no machine"))
+        let status = connection.call("Client", "FullStatus", json!({"patterns": []})).await?;
+        Ok(facades::applications(&status))
     }
 
-    async fn provisioning_script(
-        &self,
-        endpoint: &JujuEndpoint,
-        model: &str,
-        machine: &str,
-        nonce: &str,
-    ) -> Result<String, ActionError> {
-        let mut connection = self.model_connection(endpoint, model).await?;
-        let request = json!({"machine-id": machine, "nonce": nonce, "disable-package-commands": false});
-        let script = connection.call("MachineManager", "ProvisioningScript", request).await?;
-        let body =
-            script["script"].as_str().ok_or_else(|| ActionError::retryable("no provisioning script"))?;
-        Ok(format!("#!/bin/bash\n{body}"))
-    }
-
-    async fn remove_machine(
-        &self,
-        endpoint: &JujuEndpoint,
-        model: &str,
-        machine: &str,
-    ) -> Result<(), ActionError> {
-        let mut connection = self.model_connection(endpoint, model).await?;
-        let request = json!({"machine-tags": [format!("machine-{machine}")], "force": true, "keep": false});
-        connection.call("MachineManager", "DestroyMachineWithParams", request).await?;
-        Ok(())
-    }
-
-    async fn enable_ha(&self, endpoint: &JujuEndpoint, machines: &[String]) -> Result<(), ActionError> {
+    async fn enable_ha(&self, endpoint: &JujuEndpoint, controllers: u8) -> Result<(), ActionError> {
         let mut connection = self.controller_connection(endpoint).await?;
-        let count = machines.len() + 1;
-        let request = json!({"specs": [{"num-controller-machines": count, "placement": machines}]});
+        let request = json!({"specs": [{"num-controller-machines": controllers}]});
         connection.call("HighAvailability", "EnableHA", request).await?;
         Ok(())
     }
@@ -188,10 +137,10 @@ impl JujuPlatform for WebSocketJuju {
         endpoint: &JujuEndpoint,
         model: &str,
         charm: &Charm,
-        machines: &[String],
+        units: u16,
     ) -> Result<(), ActionError> {
         let mut connection = self.model_connection(endpoint, model).await?;
-        connection.call("Application", "DeployFromRepository", deploy_request(charm, machines)).await?;
+        connection.call("Application", "DeployFromRepository", deploy_request(charm, units)).await?;
         Ok(())
     }
 
@@ -200,14 +149,10 @@ impl JujuPlatform for WebSocketJuju {
         endpoint: &JujuEndpoint,
         model: &str,
         application: &str,
-        machines: &[String],
+        units: u16,
     ) -> Result<(), ActionError> {
         let mut connection = self.model_connection(endpoint, model).await?;
-        let request = json!({
-            "application": application,
-            "num-units": machines.len(),
-            "placement": facades::placements(machines),
-        });
+        let request = json!({"application": application, "num-units": units});
         connection.call("Application", "AddUnits", request).await?;
         Ok(())
     }
@@ -247,19 +192,6 @@ impl JujuPlatform for WebSocketJuju {
         Ok(())
     }
 
-    async fn remove_authorized_key(
-        &self,
-        endpoint: &JujuEndpoint,
-        model: &str,
-        comment: &str,
-    ) -> Result<(), ActionError> {
-        let mut connection = self.model_connection(endpoint, model).await?;
-        connection
-            .call("KeyManager", "DeleteKeys", json!({"user": BOOTSTRAP_USER, "keys": [comment]}))
-            .await?;
-        Ok(())
-    }
-
     async fn update_kubernetes_credential(
         &self,
         endpoint: &JujuEndpoint,
@@ -287,26 +219,11 @@ mod tests {
             charm: String::from("postgresql"),
             channel: Some(String::from("14/stable")),
         };
-        let argument = &deploy_request(&charm, &[String::from("1")])["Args"][0];
+        let argument = &deploy_request(&charm, 3)["Args"][0];
         assert_eq!(argument["CharmName"], "postgresql");
         assert_eq!(argument["ApplicationName"], "db");
-        assert_eq!(argument["num-units"], 1);
+        assert_eq!(argument["num-units"], 3);
         assert_eq!(argument["channel"], "14/stable");
-        assert_eq!(argument["Placement"], json!([{"scope": "#", "directive": "1"}]));
-    }
-
-    #[test]
-    fn a_manual_machine_is_added_with_its_hardware() {
-        let machine = ManualMachine {
-            instance_id: String::from("manual:apps-db-0"),
-            nonce: String::from("amafu:apps-db-0"),
-            hardware: amafu_interfaces::MachineHardware {
-                cpu_cores: 2,
-                memory_mebibytes: 4096,
-                root_disk_mebibytes: 20480,
-            },
-        };
-        let hardware = &add_machine_request(&machine)["params"][0]["hardware-characteristics"];
-        assert_eq!(hardware, &json!({"arch": "amd64", "cpu-cores": 2, "mem": 4096, "root-disk": 20480}));
+        assert!(argument.get("Placement").is_none());
     }
 }

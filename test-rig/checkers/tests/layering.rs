@@ -15,14 +15,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ("amafu-ssh-key-pair", &[]),
     (
         "amafu-controllers",
-        &[
-            "amafu-domain",
-            "amafu-interfaces",
-            "amafu-reconciler",
-            "amafu-scheduler",
-            "amafu-ssh-key-pair",
-            "amafu-token-issuer",
-        ],
+        &["amafu-domain", "amafu-interfaces", "amafu-reconciler", "amafu-scheduler", "amafu-token-issuer"],
     ),
     ("amafu-state", &["amafu-domain", "amafu-interfaces", "amafu-system"]),
     ("amafu-hypervisor", &["amafu-domain", "amafu-guest-agent", "amafu-interfaces"]),

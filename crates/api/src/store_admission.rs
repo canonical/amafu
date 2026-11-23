@@ -197,14 +197,14 @@ impl StoreAdmission<'_> {
         project: Option<&ProjectName>,
         change: &JujuControllerChangeSpecification,
     ) -> Result<(), Refusal> {
-        if change.request.needs_machines() {
-            return self.require_controller_on_vms(project, &change.controller).await;
+        if change.request.needs_pods() {
+            return self.require_controller_on_pods(project, &change.controller).await;
         }
         let JujuRequest::Create { controller } = &change.request else {
             return Ok(());
         };
         match &controller.substrate {
-            Substrate::Vms { network, .. } => self.require_platform_api(project, network).await,
+            Substrate::Pods { network, .. } => self.require_platform_api(project, network).await,
             Substrate::Kubernetes { cluster } => self.require_ready_cluster(project, cluster).await,
         }
     }
@@ -224,7 +224,7 @@ impl StoreAdmission<'_> {
         }
     }
 
-    async fn require_controller_on_vms(
+    async fn require_controller_on_pods(
         &self,
         project: Option<&ProjectName>,
         controller: &ObjectName,
@@ -233,7 +233,7 @@ impl StoreAdmission<'_> {
         let found = get::<JujuController>(self.store, &reference, Consistency::Linearizable).await?;
         match found.map(|controller| controller.specification.substrate) {
             Some(Substrate::Kubernetes { .. }) => Err(Refusal::Unready(format!(
-                "controller {controller} runs on Kubernetes; deploy and scale applications through Juju itself"
+                "controller {controller} runs on Kubernetes, which has no pods to scale or spread controllers over"
             ))),
             _ => Ok(()),
         }
