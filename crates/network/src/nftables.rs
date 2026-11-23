@@ -116,6 +116,14 @@ fn port_at(state: &NodeNetworkState, address: std::net::Ipv4Addr) -> Option<&Por
     state.ports.iter().find(|port| port.address == address)
 }
 
+fn floating_translation(output: &mut String, state: &NodeNetworkState, hook: &str) {
+    let _ = writeln!(output, "\tchain {hook} {{\n\t\ttype nat hook {hook} priority -100; policy accept;");
+    for floating in &state.floating_addresses {
+        let _ = writeln!(output, "\t\tip daddr {} dnat ip to {}", floating.address, floating.private_address);
+    }
+    output.push_str("\t}\n");
+}
+
 fn inet_table(output: &mut String, state: &NodeNetworkState, infrastructure: &[Ipv4Network]) {
     let platform_api = PlatformApiRules::new(state);
     let _ = writeln!(output, "table inet {TABLE} {{");
@@ -123,11 +131,8 @@ fn inet_table(output: &mut String, state: &NodeNetworkState, infrastructure: &[I
         port_chains(output, port);
     }
     platform_api.declare(output);
-    output.push_str("\tchain prerouting {\n\t\ttype nat hook prerouting priority -100; policy accept;\n");
-    for floating in &state.floating_addresses {
-        let _ = writeln!(output, "\t\tip daddr {} dnat ip to {}", floating.address, floating.private_address);
-    }
-    output.push_str("\t}\n");
+    floating_translation(output, state, "prerouting");
+    floating_translation(output, state, "output");
     output.push_str("\tchain input {\n\t\ttype filter hook input priority 0; policy accept;\n");
     let _ = writeln!(output, "\t\tiifname \"{BRIDGE_PREFIX}\" ct state established,related accept");
     let _ = writeln!(output, "\t\tiifname \"{BRIDGE_PREFIX}\" udp dport 67 accept");
@@ -296,7 +301,8 @@ mod tests {
             segment: floating.segments[0].key.clone(),
         });
         let ruleset = compile_ruleset(&floating, &[]);
-        assert!(ruleset.contains("ip daddr 198.51.100.7 dnat ip to 10.1.0.2"));
+        assert_eq!(ruleset.matches("ip daddr 198.51.100.7 dnat ip to 10.1.0.2").count(), 2);
+        assert!(ruleset.contains("type nat hook output priority -100"));
         let tap = PortKey { vm_id: ObjectId::from_uuid(uuid::Uuid::nil()), index: 0 }.tap_name();
         assert!(ruleset.contains(&format!("ip daddr 10.1.0.2 ct status dnat jump to_{tap}")));
         let translated = ruleset.find("snat ip to 198.51.100.7").unwrap();
