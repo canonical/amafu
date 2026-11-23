@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::access::ProjectPolicy;
+use crate::name::NodeName;
 use crate::object_id::ObjectId;
 use crate::resource::{Resource, Scope};
 use crate::validation::{Validate, ValidationError};
@@ -55,9 +56,10 @@ pub enum LxdAccess {
 #[serde(deny_unknown_fields)]
 pub struct GuestInventorySpecification {
     pub vm_id: ObjectId,
+    pub node: NodeName,
     pub lxd: LxdAccess,
     #[serde(with = "time::serde::rfc3339")]
-    pub observed_at: OffsetDateTime,
+    pub changed_at: OffsetDateTime,
 }
 
 impl Validate for GuestInventorySpecification {
