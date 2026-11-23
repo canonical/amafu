@@ -20,7 +20,7 @@ Status: accepted for milestone 7
   create, change or delete them directly; deletion of an environment removes everything with its label.
 - **Steps never run commands inside existing VMs.** Kubernetes nodes bootstrap and join from cloud-init and are
   driven through k8sd's CAPI endpoints and the Kubernetes API (`amafu-kubernetes-client`). Juju controllers are
-  bootstrapped by a short-lived runner (an Ubuntu VM on VMs, the `image/juju-runner` container on Kubernetes; decision 0032) and driven over the Juju API
+  bootstrapped from their own first machine on VMs and by a short-lived `image/juju-runner` container on Kubernetes (decision 0032) and driven over the Juju API
   (`amafu-juju-client`). Both clients sit behind ports in `amafu-interfaces` with fakes in the simulated world.
 - **Secrets an environment needs live in `EnvironmentSecret`**, cluster scoped and readable only by admins, until a
   secret store exists (decision 0005): the k8sd token, the Kubernetes and Juju certificate authorities, the one-time

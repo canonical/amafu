@@ -1,4 +1,4 @@
-# 0032: Environment images are cluster settings; Juju on VMs bootstraps from an Ubuntu VM
+# 0032: Environment images are cluster settings; Juju on VMs bootstraps from its own machine
 
 Status: accepted for milestone 7; amends 0028
 
@@ -9,13 +9,14 @@ The Ubuntu image environments boot from and the Juju runner container were set i
 ## Decision
 
 - One cluster-scoped `EnvironmentSettings` object named `cluster`, changed only by admins, holds the Ubuntu disk image and the Juju runner image. `amafu environment-settings set` takes the Ubuntu image as a catalog ID; the Settings page offers the same.
-- A Juju controller on VMs is bootstrapped from a short-lived Ubuntu VM outside the controller's anti-affinity group. Cloud-init installs the `juju` snap for the controller's version and runs the same `bootstrap` script the container uses, from `/root` because the snap is strictly confined.
-- The bootstrap is done when the controller answers. The runner does not power off: Amafu starts again any VM that should be running and whose guest stops. If no controller answers within 45 minutes, the change fails and names the runner, whose `/root/amafu-juju/bootstrap.log` holds the client's output.
+- A Juju controller on VMs bootstraps itself: cloud-init on its first machine extracts the `juju` client from the snap for the controller's version (so it runs unconfined, as root from `/root`), bootstraps the machine over SSH to its own address with the one-time bootstrap key, raises Juju's bootstrap timeout to an hour, skips the package upgrade, and sets the admin password Amafu generated. No runner VM, no SSH between machines.
+- Amafu logs in with that admin password until it knows the controller's UUID, which Juju chooses at bootstrap, and with its own signed tokens afterwards. Cleaning up the bootstrap removes the key from the controller and from Amafu's secret.
+- The bootstrap is done when the controller answers. If none answers within an hour, the change fails and names the first controller machine, whose `/root/amafu-juju/bootstrap.log` holds the client's output.
 - Juju on Kubernetes keeps the runner container, so only it needs the runner image.
 - Platform signing keys are served at `/.well-known/jwks.json`, because Juju derives its discharge URL by removing that suffix from `login-token-refresh-url`.
 
 ## Consequences
 
-- Juju on VMs needs no registry, at the cost of a VM boot and a snap install per bootstrap.
+- Juju on VMs needs no registry and no extra VM; each bootstrap still downloads the client, the agent and the database snap, which a baked image per Juju version would remove.
 - The snap gives the newest patch release of the controller's minor version as the client; `--agent-version` still pins the controller.
-- The runner VM's user data carries the controller's CA key and the bootstrap SSH key, as the container's environment did.
+- The first controller's user data carries the controller's CA key, the bootstrap SSH key and the admin password, as the container's environment did.
