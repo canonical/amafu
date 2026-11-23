@@ -49,8 +49,8 @@ impl LxdPlatform for FakeLxd {
 
     async fn enable_clustering(&self, endpoint: &LxdEndpoint, server_name: &str) -> Result<(), ActionError> {
         let mut state = lock(&self.state);
-        if !state.cluster_of.contains_key(&endpoint.address) {
-            state.cluster_of.insert(endpoint.address, endpoint.address);
+        if let std::collections::btree_map::Entry::Vacant(entry) = state.cluster_of.entry(endpoint.address) {
+            entry.insert(endpoint.address);
             state.members.insert(endpoint.address, vec![server_name.to_owned()]);
         }
         Ok(())
