@@ -73,6 +73,21 @@ export interface VmStatus {
 
 export type Vm = ClusterObject<VmSpecification, VmStatus>;
 
+export type GuestInstanceKind = "container" | "virtual-machine";
+
+export interface GuestInstance {
+  name: string;
+  kind: GuestInstanceKind;
+  status: string;
+  location?: string;
+}
+
+export type LxdAccess =
+  | { access: "untrusted" }
+  | { access: "trusted"; server: string; is_clustered?: boolean; instances?: GuestInstance[] };
+
+export type GuestInventory = ClusterObject<{ vm_id: string; node: string; lxd: LxdAccess; changed_at: string }, object>;
+
 export type ImageSource = { type: "disk"; url: string; sha256: string } | { type: "container"; reference: string };
 
 export type EnvironmentSettings = ClusterObject<{ ubuntu_image?: ImageSource; juju_runner_image?: string }, object>;

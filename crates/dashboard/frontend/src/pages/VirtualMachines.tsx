@@ -1,7 +1,7 @@
 import { Button, MainTable, Notification, Select } from "@canonical/react-components";
 import { useState } from "react";
 
-import type { Vm, Volume } from "../cluster/kinds";
+import type { GuestInventory, Vm, Volume } from "../cluster/kinds";
 import { useCollection } from "../cluster/live";
 import { isContainer } from "../cluster/kinds";
 import { projectScope } from "../cluster/scopes";
@@ -9,11 +9,12 @@ import CollectionNotice from "../components/CollectionNotice";
 import DeleteConfirmation from "../components/DeleteConfirmation";
 import PageHeader from "../components/PageHeader";
 import SearchHeader, { matches } from "../components/SearchHeader";
+import GuestPills, { guestCount } from "../components/GuestPills";
 import SubjectLink from "../components/SubjectLink";
 import { usePanel } from "../components/panels";
 import { useSubmission } from "../components/submission";
 import CreateVmWizard, { vmNames } from "./CreateVmWizard";
-import { mebibytes } from "../format";
+import { countOf, mebibytes } from "../format";
 import { useProject } from "../session";
 import {
   InstanceActions,
@@ -46,6 +47,17 @@ function deletionConsequence(vm: Vm, volumes: Volume[]): string {
 export default function VirtualMachines() {
   const project = useProject();
   const volumes = useCollection<Volume>({ plural: "volumes", project });
+  const inventories = useCollection<GuestInventory>({ plural: "guest-inventories", project });
+  const inventoryOf = new Map(inventories.items.map((inventory) => [inventory.metadata.name, inventory]));
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const toggle = (name: string) =>
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (!next.delete(name)) {
+        next.add(name);
+      }
+      return next;
+    });
   const vms = useVms();
   const nodes = useNodes();
   const floatingAddresses = useFloatingAddresses();
@@ -90,6 +102,7 @@ export default function VirtualMachines() {
       <MainTable
         sortable
         responsive
+        expanding
         className="instance-table"
         emptyStateMsg="No virtual machines match."
         headers={[
@@ -102,14 +115,33 @@ export default function VirtualMachines() {
           { content: "Floating IP" },
           { content: "Actions", className: "u-align--right" },
         ]}
-        rows={shown.map((vm) => ({
+        rows={shown.map((vm) => {
+          const inventory = inventoryOf.get(vm.metadata.name);
+          const isExpanded = Boolean(inventory) && expanded.has(vm.metadata.name);
+          return {
           key: vm.metadata.name,
+          expanded: isExpanded,
+          expandedContent: isExpanded && inventory ? <GuestPills inventory={inventory} /> : undefined,
           columns: [
             {
               content: (
                 <>
+                  {inventory && (
+                    <button
+                      type="button"
+                      className="guest-toggle"
+                      aria-expanded={isExpanded}
+                      aria-label={`${isExpanded ? "Hide" : "Show"} what ${vm.metadata.name} hosts`}
+                      onClick={() => toggle(vm.metadata.name)}
+                    >
+                      <i className={isExpanded ? "p-icon--chevron-up" : "p-icon--chevron-down"} />
+                    </button>
+                  )}
                   <SubjectLink name={vm.metadata.name} />
-                  <div className="secondary-line">{bootDescription(vm)}</div>
+                  <div className="secondary-line">
+                    {bootDescription(vm)}
+                    {guestCount(inventory) > 0 && ` · hosts ${countOf(guestCount(inventory), "guest")}`}
+                  </div>
                 </>
               ),
             },
@@ -145,7 +177,8 @@ export default function VirtualMachines() {
             cpus: vm.specification.cpu_count,
             memory: vm.specification.memory_mebibytes,
           },
-        }))}
+          };
+        })}
       />
       {panel.panel === "create" && <CreateVmWizard taken={vmNames(vms.items)} onClose={panel.close} />}
       {panel.panel === "detail" && subject && (

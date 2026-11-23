@@ -4,6 +4,7 @@ use std::fmt::Write;
 use amafu_domain::kinds::cluster_version::ClusterVersion;
 use amafu_domain::kinds::external_network::ExternalNetwork;
 use amafu_domain::kinds::floating_ip::FloatingIp;
+use amafu_domain::kinds::guest_inventory::GuestInventory;
 use amafu_domain::kinds::image::Image;
 use amafu_domain::kinds::juju_controller::{JujuController, JujuControllerChange};
 use amafu_domain::kinds::kubernetes_cluster::{KubernetesCluster, KubernetesClusterChange};
@@ -498,6 +499,32 @@ async fn seed_environments(store: &dyn Store) -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn seed_guests(store: &dyn Store, project: &str) -> anyhow::Result<()> {
+    let host = reference::<Vm>(Some(project), "web-1")?;
+    let vm = amafu_interfaces::objects::get::<Vm>(store, &host, amafu_interfaces::Consistency::Linearizable)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("web-1 is missing"))?;
+    let instance =
+        |name: &str, kind: &str, status: &str| json!({"name": name, "kind": kind, "status": status});
+    put::<GuestInventory>(
+        store,
+        Some(project),
+        "web-1",
+        json!({
+            "vm_id": vm.metadata.id,
+            "node": "node-1",
+            "lxd": {"access": "trusted", "server": "web-1", "instances": [
+                instance("cache", "container", "Running"),
+                instance("proxy", "container", "Running"),
+                instance("sandbox", "virtual-machine", "Stopped"),
+            ]},
+            "changed_at": now(),
+        }),
+    )
+    .await?;
+    Ok(())
+}
+
 pub async fn seed(store: &dyn Store) -> anyhow::Result<()> {
     seed_nodes(store).await?;
     seed_cluster(store).await?;
@@ -505,6 +532,7 @@ pub async fn seed(store: &dyn Store) -> anyhow::Result<()> {
     seed_ssh_keys(store, DEFAULT_PROJECT).await?;
     seed_images_and_volumes(store, DEFAULT_PROJECT).await?;
     seed_workloads(store, DEFAULT_PROJECT).await?;
+    seed_guests(store, DEFAULT_PROJECT).await?;
     seed_research(store).await?;
     seed_history(store).await?;
     seed_environments(store).await

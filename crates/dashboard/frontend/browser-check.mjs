@@ -199,6 +199,15 @@ async function workloads(browser) {
     await shoot(page, "networks-platform-api");
   });
 
+  await attempt("a VM that hosts LXD guests expands into pills", async () => {
+    await page.goto(`${base}/virtual-machines`);
+    await page.getByRole("button", { name: "Show what web-1 hosts" }).click();
+    await page.locator(".guest-pill", { hasText: "sandbox" }).getByText("vm", { exact: true }).waitFor();
+    await page.locator(".guest-pill", { hasText: "cache" }).getByText("Running").waitFor();
+    await shoot(page, "virtual-machines-guests");
+    await page.getByRole("button", { name: "Hide what web-1 hosts" }).click();
+  });
+
   await attempt("the environment images are chosen in settings", async () => {
     await page.goto(`${base}/settings`);
     await page.getByText("Environment images").waitFor();
