@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use amafu_interfaces::juju::JUJU_API_PORT;
-use amafu_interfaces::{ActionError, JujuEndpoint};
+use amafu_interfaces::{ActionError, JujuCredentials, JujuEndpoint};
 use futures::{SinkExt, StreamExt};
 use rustls::pki_types::ServerName;
 use serde_json::{Value, json};
@@ -42,6 +42,17 @@ fn tls(certificate_authority: &str) -> Result<rustls::ClientConfig, ActionError>
         .with_no_client_auth())
 }
 
+fn login_parameters(credentials: &JujuCredentials) -> Value {
+    match credentials {
+        JujuCredentials::Token(token) => json!({"token": token, "client-version": CLIENT_VERSION}),
+        JujuCredentials::Password { user, password } => json!({
+            "auth-tag": format!("user-{user}"),
+            "credentials": password,
+            "client-version": CLIENT_VERSION,
+        }),
+    }
+}
+
 impl Connection {
     pub async fn open(
         endpoint: &JujuEndpoint,
@@ -71,12 +82,7 @@ impl Connection {
             .map_err(|_| ActionError::retryable("the Juju controller did not answer in time"))??;
         let mut connection = Self { socket, next_request: 1, facades: Facades::default(), timeout };
         let login = connection
-            .raw_call(
-                "Admin",
-                ADMIN_VERSION,
-                "Login",
-                json!({"token": endpoint.token, "client-version": CLIENT_VERSION}),
-            )
+            .raw_call("Admin", ADMIN_VERSION, "Login", login_parameters(&endpoint.credentials))
             .await?;
         connection.facades = Facades::from_login(&login);
         Ok(connection)
@@ -124,5 +130,24 @@ impl Connection {
         tokio::time::timeout(self.timeout, exchange)
             .await
             .map_err(|_| ActionError::retryable(format!("{facade}.{request} did not answer in time")))?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_login_carries_either_a_token_or_a_users_password() {
+        let token = login_parameters(&JujuCredentials::Token(String::from("signed")));
+        assert_eq!(token, json!({"token": "signed", "client-version": CLIENT_VERSION}));
+        let password = login_parameters(&JujuCredentials::Password {
+            user: String::from("admin"),
+            password: String::from("secret"),
+        });
+        assert_eq!(
+            password,
+            json!({"auth-tag": "user-admin", "credentials": "secret", "client-version": CLIENT_VERSION})
+        );
     }
 }

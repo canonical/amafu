@@ -10,10 +10,16 @@ pub fn cloud_name(controller: &str) -> String {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JujuCredentials {
+    Token(String),
+    Password { user: String, password: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JujuEndpoint {
     pub address: Ipv4Addr,
     pub certificate_authority: String,
-    pub token: String,
+    pub credentials: JujuCredentials,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

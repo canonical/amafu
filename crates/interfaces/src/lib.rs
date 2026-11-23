@@ -35,7 +35,8 @@ pub use identifiers::{Identifiers, RandomIdentifiers};
 pub use image_catalog::{CatalogEntry, CatalogKind, FixedImageCatalog, ImageCatalog};
 pub use images::{CachedImage, ContainerConfiguration, ImageRequest, ImageStore};
 pub use juju::{
-    Charm, JujuControllerInfo, JujuEndpoint, JujuMachine, JujuModel, JujuPlatform, ManualMachine,
+    Charm, JujuControllerInfo, JujuCredentials, JujuEndpoint, JujuMachine, JujuModel, JujuPlatform,
+    ManualMachine,
 };
 pub use kubernetes::{DrainState, KubernetesEndpoint, KubernetesPlatform, NodeRole};
 pub use lease::{HeldLease, Leases};
