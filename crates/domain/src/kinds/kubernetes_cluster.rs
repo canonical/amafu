@@ -463,6 +463,10 @@ impl StepPlan for KubernetesClusterChangeSpecification {
     fn is_cancelled(&self) -> bool {
         self.is_cancelled
     }
+
+    fn cancel(&mut self) {
+        self.is_cancelled = true;
+    }
 }
 
 impl Validate for KubernetesClusterChangeSpecification {

@@ -495,6 +495,10 @@ impl StepPlan for OperationSpecification {
     fn is_cancelled(&self) -> bool {
         self.is_cancelled
     }
+
+    fn cancel(&mut self) {
+        self.is_cancelled = true;
+    }
 }
 
 #[cfg(test)]

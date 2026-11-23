@@ -18,6 +18,8 @@ pub trait StepPlan {
 
     fn is_cancelled(&self) -> bool;
 
+    fn cancel(&mut self);
+
     fn can_undo_first(&self, steps: usize) -> bool {
         self.steps().iter().take(steps).all(PlannedStep::can_be_undone)
     }
