@@ -6,6 +6,7 @@ pub mod cluster_image;
 pub mod compute;
 pub mod environments;
 pub mod floating_ip;
+pub mod guest_leases;
 pub mod image;
 pub mod local_volume;
 pub mod network;
