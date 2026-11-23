@@ -1,3 +1,4 @@
+use std::fmt::Write;
 use std::net::Ipv4Addr;
 
 use serde::{Deserialize, Serialize};
@@ -33,7 +34,10 @@ impl NetworkEndpoint {
 
     #[must_use]
     pub fn guest_name_for(vm_id: ObjectId, index: u8, mac: MacAddress) -> ObjectName {
-        let mac: String = mac.octets().iter().map(|octet| format!("{octet:02x}")).collect();
+        let mac = mac.octets().iter().fold(String::new(), |mut text, octet| {
+            let _ = write!(text, "{octet:02x}");
+            text
+        });
         ObjectName::new(format!("guest-{}-{index}-{mac}", vm_id.as_uuid().simple()))
             .unwrap_or_else(|_| unreachable!())
     }

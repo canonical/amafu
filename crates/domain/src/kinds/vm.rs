@@ -74,6 +74,7 @@ pub struct NetworkInterfaceSpecification {
     pub guests: u16,
 }
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
 fn hosts_no_guests(guests: &u16) -> bool {
     *guests == 0
 }
