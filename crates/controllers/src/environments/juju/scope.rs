@@ -11,7 +11,7 @@ use amafu_domain::kinds::kubernetes_cluster::KubernetesCluster;
 use amafu_domain::labels::{JUJU_APPLICATION, JUJU_CONTROLLER, JUJU_MACHINE, JUJU_MODEL};
 use amafu_domain::platform_access::{ISSUER, SERVICE_SUBJECT, juju_user};
 use amafu_domain::{Object, ObjectName, ObjectReference};
-use amafu_interfaces::{ActionError, JujuEndpoint, KubernetesEndpoint};
+use amafu_interfaces::{ActionError, JujuCredentials, JujuEndpoint, KubernetesEndpoint};
 use amafu_reconciler::OperationContext;
 use amafu_token_issuer::Claims;
 use serde_json::json;
@@ -29,6 +29,8 @@ pub const CA_KEY: &str = "ca-key";
 pub const SSH_PRIVATE_KEY: &str = "ssh-private-key";
 pub const SSH_PUBLIC_KEY: &str = "ssh-public-key";
 pub const CREDENTIAL_SECRET: &str = "credential-secret";
+pub const ADMIN_PASSWORD: &str = "admin-password";
+pub const ADMIN_USER: &str = "admin";
 
 const SERVICE_TOKEN_LIFETIME: Duration = Duration::minutes(5);
 const UNKNOWN_AUDIENCE: &str = "juju";
@@ -146,8 +148,20 @@ impl<'a> ControllerScope<'a> {
     pub async fn endpoint(&self) -> Result<JujuEndpoint, ActionError> {
         let controller = self.controller().await?;
         let address = self.address(&controller).await?;
-        let certificate_authority = self.secret_value(CA_CERTIFICATE).await?;
-        let uuid = controller.status.uuid.as_deref();
+        let secret = self.secret().await?;
+        let certificate_authority = secret.value(CA_CERTIFICATE).map(str::to_owned).ok_or_else(|| {
+            ActionError::fatal(format!("the controller's secret holds no {CA_CERTIFICATE}"))
+        })?;
+        let credentials = match (controller.status.uuid.as_deref(), secret.value(ADMIN_PASSWORD)) {
+            (None, Some(password)) => {
+                JujuCredentials::Password { user: String::from(ADMIN_USER), password: password.to_owned() }
+            }
+            (uuid, _) => JujuCredentials::Token(self.service_token(uuid).await?),
+        };
+        Ok(JujuEndpoint { address, certificate_authority, credentials })
+    }
+
+    async fn service_token(&self, uuid: Option<&str>) -> Result<String, ActionError> {
         let now = self.context.clock.now();
         let mut access = serde_json::Map::new();
         if let Some(uuid) = uuid {
@@ -161,8 +175,7 @@ impl<'a> ControllerScope<'a> {
             SERVICE_TOKEN_LIFETIME,
         )
         .with("access", serde_json::Value::Object(access));
-        let token = self.environment.keyring.sign(&claims, now).await.map_err(ActionError::retryable)?.token;
-        Ok(JujuEndpoint { address, certificate_authority, token })
+        Ok(self.environment.keyring.sign(&claims, now).await.map_err(ActionError::retryable)?.token)
     }
 
     pub async fn model_uuid(&self, model: &ObjectName) -> Result<String, ActionError> {
