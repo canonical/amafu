@@ -3,7 +3,7 @@ use std::net::Ipv4Addr;
 
 use amafu_domain::kinds::network::Network;
 use amafu_domain::kinds::vm::{InterfaceStatus, Vm};
-use amafu_domain::{MacAddress, Object};
+use amafu_domain::{Ipv4Network, MacAddress, Object};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AllocationProblem {
@@ -24,8 +24,17 @@ fn addresses_in_use(network: &Object<Network>, peers: &[Object<Vm>], vm: &Object
         .filter(|peer| peer.metadata.id != vm.metadata.id)
         .flat_map(|peer| peer.status.interfaces.iter())
         .filter(|interface| interface.network == network.metadata.name)
-        .map(|interface| interface.address)
+        .flat_map(|interface| {
+            std::iter::once(interface.address).chain(interface.guest_addresses.iter().copied())
+        })
         .collect()
+}
+
+fn free_addresses<'a>(
+    subnet: Ipv4Network,
+    in_use: &'a BTreeSet<Ipv4Addr>,
+) -> impl Iterator<Item = Ipv4Addr> + 'a {
+    subnet.assignable_addresses().filter(move |candidate| !in_use.contains(candidate))
 }
 
 pub fn allocate_interfaces(
@@ -47,7 +56,10 @@ pub fn allocate_interfaces(
         let subnet = network.specification.subnet;
         let mut in_use = addresses_in_use(network, peers, vm);
         in_use.extend(
-            allocated.iter().filter(|done| done.network == interface.network).map(|done| done.address),
+            allocated
+                .iter()
+                .filter(|done| done.network == interface.network)
+                .flat_map(|done| std::iter::once(done.address).chain(done.guest_addresses.iter().copied())),
         );
         let address = match interface.address {
             Some(requested) if !subnet.is_assignable(requested) => {
@@ -59,11 +71,21 @@ pub fn allocate_interfaces(
                 return Err(AllocationProblem::Impossible(format!("{requested} is already in use")));
             }
             Some(requested) => requested,
-            None => subnet.assignable_addresses().find(|candidate| !in_use.contains(candidate)).ok_or_else(
-                || AllocationProblem::NotYet(format!("network {} has no free address", interface.network)),
-            )?,
+            None => free_addresses(subnet, &in_use).next().ok_or_else(|| {
+                AllocationProblem::NotYet(format!("network {} has no free address", interface.network))
+            })?,
         };
+        in_use.insert(address);
+        let guest_addresses: Vec<Ipv4Addr> =
+            free_addresses(subnet, &in_use).take(usize::from(interface.guests)).collect();
+        if guest_addresses.len() < usize::from(interface.guests) {
+            return Err(AllocationProblem::NotYet(format!(
+                "network {} has no room for {} guests",
+                interface.network, interface.guests
+            )));
+        }
         allocated.push(InterfaceStatus {
+            guest_addresses,
             network: interface.network.clone(),
             mac: interface_mac(vm, index),
             address,
@@ -109,6 +131,7 @@ mod tests {
 
     fn vm(name: &str, address: Option<Ipv4Addr>) -> Object<Vm> {
         let interface = NetworkInterfaceSpecification {
+            guests: 0,
             network: ObjectName::new("default").unwrap(),
             security_groups: Vec::new(),
             address,
@@ -137,6 +160,26 @@ mod tests {
         let mut placed = first.clone();
         placed.status.interfaces = allocate_interfaces(&first, &[network(NetworkPhase::Ready)], &[]).unwrap();
         assert_eq!(allocated(&vm("second", None), &[placed]), Ok(vec![Ipv4Addr::new(10, 1, 0, 3)]));
+    }
+
+    #[test]
+    fn a_guest_pool_is_reserved_after_the_interface_address_and_skipped_by_peers() {
+        let mut pod = vm("pod", None);
+        pod.specification.network_interfaces[0].guests = 2;
+        let pool = allocate_interfaces(&pod, &[network(NetworkPhase::Ready)], &[]).unwrap();
+        assert_eq!(pool[0].address, Ipv4Addr::new(10, 1, 0, 2));
+        assert_eq!(pool[0].guest_addresses, [Ipv4Addr::new(10, 1, 0, 3), Ipv4Addr::new(10, 1, 0, 4)]);
+        pod.status.interfaces = pool;
+        assert_eq!(
+            allocated(&vm("peer", None), std::slice::from_ref(&pod)),
+            Ok(vec![Ipv4Addr::new(10, 1, 0, 5)])
+        );
+        let mut crowded = vm("crowded", None);
+        crowded.specification.network_interfaces[0].guests = 5;
+        assert!(matches!(
+            allocate_interfaces(&crowded, &[network(NetworkPhase::Ready)], &[pod]),
+            Err(AllocationProblem::NotYet(_))
+        ));
     }
 
     #[test]

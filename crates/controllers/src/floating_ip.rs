@@ -221,6 +221,7 @@ mod tests {
             status: VmStatus {
                 node: Some(NodeName::new(on).unwrap()),
                 interfaces: vec![InterfaceStatus {
+                    guest_addresses: Vec::new(),
                     network: name("default"),
                     mac: MacAddress::locally_administered(b"web"),
                     address: Ipv4Addr::new(10, 1, 0, 2),

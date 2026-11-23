@@ -127,6 +127,8 @@ impl<'de> Deserialize<'de> for Ipv4Network {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MacAddress([u8; 6]);
 
+pub const LXD_MAC_PREFIX: [u8; 3] = [0x00, 0x16, 0x3e];
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct SegmentId(u32);
@@ -185,6 +187,11 @@ impl MacAddress {
     #[must_use]
     pub const fn octets(&self) -> [u8; 6] {
         self.0
+    }
+
+    #[must_use]
+    pub fn is_lxd_generated(&self) -> bool {
+        self.0[..3] == LXD_MAC_PREFIX
     }
 }
 

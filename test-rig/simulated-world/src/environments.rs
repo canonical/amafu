@@ -246,6 +246,7 @@ impl EnvironmentWorld {
             .network_interfaces
             .iter()
             .map(|interface| InterfaceStatus {
+                guest_addresses: Vec::new(),
                 network: interface.network.clone(),
                 mac: MacAddress::new([2, 0, 0, 0, 0, host]),
                 address: Ipv4Addr::new(10, 1, 0, host),

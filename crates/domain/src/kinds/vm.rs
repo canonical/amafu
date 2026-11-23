@@ -18,6 +18,7 @@ pub const MAXIMUM_MEMORY_MEBIBYTES: u64 = 4 * 1024 * 1024;
 pub const MAXIMUM_VOLUMES: usize = 8;
 pub const MAXIMUM_NETWORK_INTERFACES: usize = 4;
 pub const MAXIMUM_SECURITY_GROUPS_PER_INTERFACE: usize = 8;
+pub const MAXIMUM_GUESTS_PER_INTERFACE: u16 = 64;
 pub const MAXIMUM_USER_DATA_BYTES: usize = 64 * 1024;
 pub const MAXIMUM_COMMAND_ARGUMENTS: usize = 256;
 pub const MAXIMUM_ENVIRONMENT_VARIABLES: usize = 256;
@@ -69,6 +70,12 @@ pub struct NetworkInterfaceSpecification {
     pub security_groups: Vec<ObjectName>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub address: Option<Ipv4Addr>,
+    #[serde(default, skip_serializing_if = "hosts_no_guests")]
+    pub guests: u16,
+}
+
+fn hosts_no_guests(guests: &u16) -> bool {
+    *guests == 0
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -207,6 +214,11 @@ impl VmSpecification {
                 &format!("specification.network_interfaces[{index}].security_groups"),
                 "must hold at most 8 security groups",
             );
+            error.check(
+                interface.guests <= MAXIMUM_GUESTS_PER_INTERFACE,
+                &format!("specification.network_interfaces[{index}].guests"),
+                "must be at most 64",
+            );
         }
     }
 }
@@ -292,6 +304,8 @@ pub struct InterfaceStatus {
     pub network: ObjectName,
     pub mac: MacAddress,
     pub address: Ipv4Addr,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guest_addresses: Vec<Ipv4Addr>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -434,6 +448,7 @@ mod tests {
         assert_eq!(resized.validate_update(&previous), Ok(()));
         let mut rewired = previous.clone();
         rewired.network_interfaces.push(NetworkInterfaceSpecification {
+            guests: 0,
             network: name("default"),
             security_groups: Vec::new(),
             address: None,

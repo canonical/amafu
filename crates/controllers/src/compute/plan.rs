@@ -616,11 +616,13 @@ mod tests {
     fn a_vm_waits_until_its_ports_are_connected() {
         let mut vm = vm_on(Some("node-a"), VmPhase::Scheduled);
         vm.specification.network_interfaces = vec![NetworkInterfaceSpecification {
+            guests: 0,
             network: name("default"),
             security_groups: Vec::new(),
             address: None,
         }];
         vm.status.interfaces = vec![InterfaceStatus {
+            guest_addresses: Vec::new(),
             network: name("default"),
             mac: MacAddress::locally_administered(b"web-1"),
             address: Ipv4Addr::new(10, 1, 0, 2),

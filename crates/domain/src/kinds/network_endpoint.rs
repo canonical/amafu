@@ -1,6 +1,7 @@
 use std::net::Ipv4Addr;
 
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 use crate::access::ProjectPolicy;
 use crate::addressing::MacAddress;
@@ -29,6 +30,20 @@ impl NetworkEndpoint {
         ObjectName::new(format!("endpoint-{}-{index}", vm_id.as_uuid().simple()))
             .unwrap_or_else(|_| unreachable!())
     }
+
+    #[must_use]
+    pub fn guest_name_for(vm_id: ObjectId, index: u8, mac: MacAddress) -> ObjectName {
+        let mac: String = mac.octets().iter().map(|octet| format!("{octet:02x}")).collect();
+        ObjectName::new(format!("guest-{}-{index}-{mac}", vm_id.as_uuid().simple()))
+            .unwrap_or_else(|_| unreachable!())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GuestLease {
+    #[serde(with = "time::serde::rfc3339")]
+    pub renewed_at: OffsetDateTime,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,6 +59,8 @@ pub struct NetworkEndpointSpecification {
     pub node_address: Ipv4Addr,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub security_groups: Vec<ObjectName>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest: Option<GuestLease>,
 }
 
 impl Validate for NetworkEndpointSpecification {
@@ -76,5 +93,7 @@ mod tests {
         let first = NetworkEndpoint::name_for(vm_id, 0);
         assert_ne!(first, NetworkEndpoint::name_for(vm_id, 1));
         assert!(first.as_str().starts_with("endpoint-"));
+        let guest = NetworkEndpoint::guest_name_for(vm_id, 0, MacAddress::new([0x00, 0x16, 0x3e, 1, 2, 3]));
+        assert!(guest.as_str().ends_with("-0-00163e010203"));
     }
 }

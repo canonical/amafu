@@ -269,6 +269,7 @@ pub fn wanted_endpoints(view: &NetworkView) -> BTreeMap<ObjectReference, Network
             wanted.insert(
                 reference,
                 NetworkEndpointSpecification {
+                    guest: None,
                     network: interface.network.clone(),
                     vm: vm.metadata.name.clone(),
                     vm_id: vm.metadata.id,
@@ -472,6 +473,7 @@ mod tests {
 
     fn vm(vm_name: &str, on: &str, address: [u8; 4], groups: &[&str]) -> Object<Vm> {
         let interface = NetworkInterfaceSpecification {
+            guests: 0,
             network: name("default"),
             security_groups: groups.iter().map(|group| name(group)).collect(),
             address: None,
@@ -485,6 +487,7 @@ mod tests {
             status: VmStatus {
                 node: Some(node(on)),
                 interfaces: vec![InterfaceStatus {
+                    guest_addresses: Vec::new(),
                     network: name("default"),
                     mac: MacAddress::locally_administered(vm_name.as_bytes()),
                     address: Ipv4Addr::from(address),

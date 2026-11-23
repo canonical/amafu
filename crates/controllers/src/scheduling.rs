@@ -506,6 +506,7 @@ mod tests {
         let with_interface = |value: &str| {
             let mut vm = vm(value);
             vm.specification.network_interfaces = vec![NetworkInterfaceSpecification {
+                guests: 0,
                 network: name("default"),
                 security_groups: Vec::new(),
                 address: None,

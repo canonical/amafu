@@ -34,6 +34,7 @@ impl Attachments {
         self.networks
             .iter()
             .map(|network| NetworkInterfaceSpecification {
+                guests: 0,
                 network: network.clone(),
                 security_groups: self.security_groups.clone(),
                 address: None,

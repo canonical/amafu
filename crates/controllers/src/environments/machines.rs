@@ -86,6 +86,7 @@ impl<'a> Machine<'a> {
             boot: BootSource::Disk,
             volumes: vec![self.name.clone()],
             network_interfaces: vec![NetworkInterfaceSpecification {
+                guests: 0,
                 network: plan.network,
                 security_groups: plan.security_groups,
                 address: None,
@@ -113,6 +114,7 @@ impl<'a> Machine<'a> {
             },
             volumes: Vec::new(),
             network_interfaces: vec![NetworkInterfaceSpecification {
+                guests: 0,
                 network: plan.network,
                 security_groups: plan.security_groups,
                 address: None,

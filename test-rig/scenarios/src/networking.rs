@@ -61,6 +61,7 @@ pub async fn ready_network(
 
 pub fn interface(network: &str, groups: &[&str]) -> Result<NetworkInterfaceSpecification, ScenarioError> {
     Ok(NetworkInterfaceSpecification {
+        guests: 0,
         network: name(network)?,
         security_groups: groups.iter().map(|group| name(group)).collect::<Result<_, _>>()?,
         address: None,
