@@ -5,7 +5,7 @@ use amafu_interfaces::{ActionError, KubernetesEndpoint};
 use reqwest::{Method, StatusCode};
 use serde_json::{Value, json};
 
-use crate::{resources, tls};
+use crate::resources;
 
 const FIELD_MANAGER: &str = "amafu";
 const APPLY_PATCH: &str = "application/apply-patch+yaml";
@@ -31,7 +31,7 @@ pub struct KubernetesApi {
 impl KubernetesApi {
     pub fn connect(endpoint: &KubernetesEndpoint, timeout: Duration) -> Result<Self, ActionError> {
         let client = reqwest::Client::builder()
-            .use_preconfigured_tls(tls::trusting(&endpoint.certificate_authority)?)
+            .use_preconfigured_tls(amafu_client_tls::trusting(&endpoint.certificate_authority)?)
             .timeout(timeout)
             .build()
             .map_err(ActionError::fatal)?;

@@ -1,7 +1,6 @@
 mod api;
 mod k8sd;
 mod resources;
-mod tls;
 
 use std::time::Duration;
 

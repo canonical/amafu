@@ -5,8 +5,6 @@ use amafu_interfaces::{ActionError, KubernetesEndpoint, NodeRole};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::tls;
-
 const AUTH_HEADER: &str = "capi-auth-token";
 
 #[derive(Debug, Deserialize)]
@@ -28,7 +26,7 @@ pub struct K8sd {
 impl K8sd {
     pub fn connect(endpoint: &KubernetesEndpoint, timeout: Duration) -> Result<Self, ActionError> {
         let client = reqwest::Client::builder()
-            .use_preconfigured_tls(tls::self_signed()?)
+            .use_preconfigured_tls(amafu_client_tls::self_signed()?)
             .timeout(timeout)
             .build()
             .map_err(ActionError::fatal)?;

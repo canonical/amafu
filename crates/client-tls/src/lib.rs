@@ -22,14 +22,31 @@ pub fn trusting(certificate_authority_pem: &str) -> Result<rustls::ClientConfig,
         .with_no_client_auth())
 }
 
-pub fn self_signed() -> Result<rustls::ClientConfig, ActionError> {
+fn any_server()
+-> Result<rustls::ConfigBuilder<rustls::ClientConfig, rustls::client::WantsClientCert>, ActionError> {
     let provider = provider();
     Ok(rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
         .with_safe_default_protocol_versions()
         .map_err(ActionError::fatal)?
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(AnyServer { provider }))
-        .with_no_client_auth())
+        .with_custom_certificate_verifier(Arc::new(AnyServer { provider })))
+}
+
+pub fn self_signed() -> Result<rustls::ClientConfig, ActionError> {
+    Ok(any_server()?.with_no_client_auth())
+}
+
+pub fn self_signed_as(
+    certificate_pem: &str,
+    private_key_pem: &str,
+) -> Result<rustls::ClientConfig, ActionError> {
+    let certificates: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut certificate_pem.as_bytes())
+        .collect::<Result<_, _>>()
+        .map_err(ActionError::fatal)?;
+    let key = rustls_pemfile::private_key(&mut private_key_pem.as_bytes())
+        .map_err(ActionError::fatal)?
+        .ok_or_else(|| ActionError::fatal("the client identity holds no private key"))?;
+    any_server()?.with_client_auth_cert(certificates, key).map_err(ActionError::fatal)
 }
 
 #[derive(Debug)]

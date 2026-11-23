@@ -23,6 +23,7 @@ amafu-hypervisor = { path = "crates/hypervisor" }
 amafu-installer = { path = "crates/installer" }
 amafu-token-issuer = { path = "crates/token-issuer" }
 amafu-ssh-key-pair = { path = "crates/ssh-key-pair" }
+amafu-client-tls = { path = "crates/client-tls" }
 amafu-kubernetes-client = { path = "crates/kubernetes-client" }
 amafu-juju-client = { path = "crates/juju-client" }
 amafu-image-catalog = { path = "crates/image-catalog" }

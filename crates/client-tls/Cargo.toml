@@ -1,0 +1,15 @@
+[package]
+name = "amafu-client-tls"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+amafu-interfaces.workspace = true
+rustls.workspace = true
+rustls-pemfile.workspace = true
+
+[lints]
+workspace = true

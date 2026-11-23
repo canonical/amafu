@@ -148,6 +148,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "amafu-client-tls"
+version = "0.1.0"
+dependencies = [
+ "amafu-interfaces",
+ "rustls",
+ "rustls-pemfile",
+]
+
+[[package]]
 name = "amafu-command-line"
 version = "0.1.0"
 dependencies = [
@@ -369,12 +378,12 @@ dependencies = [
 name = "amafu-juju-client"
 version = "0.1.0"
 dependencies = [
+ "amafu-client-tls",
  "amafu-interfaces",
  "async-trait",
  "base64",
  "futures",
  "rustls",
- "rustls-pemfile",
  "serde",
  "serde_json",
  "tokio",
@@ -386,11 +395,11 @@ dependencies = [
 name = "amafu-kubernetes-client"
 version = "0.1.0"
 dependencies = [
+ "amafu-client-tls",
  "amafu-interfaces",
  "async-trait",
  "reqwest",
  "rustls",
- "rustls-pemfile",
  "serde",
  "serde_json",
  "tokio",

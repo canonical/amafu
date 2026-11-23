@@ -32,18 +32,6 @@ pub struct Connection {
     timeout: Duration,
 }
 
-fn tls(certificate_authority: &str) -> Result<rustls::ClientConfig, ActionError> {
-    let mut roots = rustls::RootCertStore::empty();
-    for certificate in rustls_pemfile::certs(&mut certificate_authority.as_bytes()) {
-        roots.add(certificate.map_err(ActionError::fatal)?).map_err(ActionError::fatal)?;
-    }
-    Ok(rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-        .with_safe_default_protocol_versions()
-        .map_err(ActionError::fatal)?
-        .with_root_certificates(roots)
-        .with_no_client_auth())
-}
-
 fn login_parameters(credentials: &JujuCredentials) -> Value {
     match credentials {
         JujuCredentials::Token(token) => {
@@ -72,10 +60,11 @@ impl Connection {
                 .await
                 .map_err(ActionError::retryable)?;
             let server = ServerName::try_from(SERVER_NAME).map_err(ActionError::fatal)?;
-            let stream = TlsConnector::from(Arc::new(tls(&endpoint.certificate_authority)?))
-                .connect(server, tcp)
-                .await
-                .map_err(ActionError::retryable)?;
+            let stream =
+                TlsConnector::from(Arc::new(amafu_client_tls::trusting(&endpoint.certificate_authority)?))
+                    .connect(server, tcp)
+                    .await
+                    .map_err(ActionError::retryable)?;
             let url = format!("wss://{}:{JUJU_API_PORT}{path}", endpoint.address);
             let (socket, _) =
                 tokio_tungstenite::client_async(url, stream).await.map_err(ActionError::retryable)?;
