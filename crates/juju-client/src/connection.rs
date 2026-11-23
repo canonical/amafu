@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use amafu_interfaces::juju::JUJU_API_PORT;
 use amafu_interfaces::{ActionError, JujuCredentials, JujuEndpoint};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use futures::{SinkExt, StreamExt};
 use rustls::pki_types::ServerName;
 use serde_json::{Value, json};
@@ -44,7 +46,9 @@ fn tls(certificate_authority: &str) -> Result<rustls::ClientConfig, ActionError>
 
 fn login_parameters(credentials: &JujuCredentials) -> Value {
     match credentials {
-        JujuCredentials::Token(token) => json!({"token": token, "client-version": CLIENT_VERSION}),
+        JujuCredentials::Token(token) => {
+            json!({"token": STANDARD.encode(token), "client-version": CLIENT_VERSION})
+        }
         JujuCredentials::Password { user, password } => json!({
             "auth-tag": format!("user-{user}"),
             "credentials": password,
@@ -140,7 +144,7 @@ mod tests {
     #[test]
     fn a_login_carries_either_a_token_or_a_users_password() {
         let token = login_parameters(&JujuCredentials::Token(String::from("signed")));
-        assert_eq!(token, json!({"token": "signed", "client-version": CLIENT_VERSION}));
+        assert_eq!(token, json!({"token": "c2lnbmVk", "client-version": CLIENT_VERSION}));
         let password = login_parameters(&JujuCredentials::Password {
             user: String::from("admin"),
             password: String::from("secret"),
