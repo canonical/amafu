@@ -733,6 +733,7 @@ fn compute_roles(
         Arc::clone(&services.store),
         Arc::clone(&adapters.datapath) as Arc<dyn Datapath>,
         Arc::clone(&adapters.local_services) as Arc<dyn LocalServices>,
+        Arc::clone(&services.clock),
     )
     .with_platform_api(platform_api);
     controller_role(roles, "node-network", Arc::new(node_network), services, settings);

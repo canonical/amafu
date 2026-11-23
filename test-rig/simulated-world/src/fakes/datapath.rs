@@ -1,12 +1,17 @@
+use std::collections::BTreeMap;
 use std::sync::Mutex;
 
-use amafu_interfaces::{ActionError, Datapath, LocalServices, NodeNetworkState, RealizedNetwork};
+use amafu_domain::MacAddress;
+use amafu_interfaces::{
+    ActionError, Datapath, GuestSighting, LocalServices, NodeNetworkState, RealizedNetwork, SegmentKey,
+};
 
 use crate::lock::lock;
 
 #[derive(Default)]
 pub struct FakeDatapath {
     state: Mutex<NodeNetworkState>,
+    learned: Mutex<BTreeMap<(SegmentKey, MacAddress), String>>,
 }
 
 impl FakeDatapath {
@@ -22,6 +27,10 @@ impl FakeDatapath {
 
     pub fn power_off(&self) {
         *lock(&self.state) = NodeNetworkState::default();
+    }
+
+    pub fn learn(&self, segment: &SegmentKey, mac: MacAddress, tap: &str) {
+        lock(&self.learned).insert((segment.clone(), mac), tap.to_owned());
     }
 }
 
@@ -42,11 +51,20 @@ impl Datapath for FakeDatapath {
     async fn current(&self) -> Result<RealizedNetwork, ActionError> {
         Ok(realized(&lock(&self.state)))
     }
+
+    async fn learned_port(
+        &self,
+        segment: &SegmentKey,
+        mac: MacAddress,
+    ) -> Result<Option<String>, ActionError> {
+        Ok(lock(&self.learned).get(&(segment.clone(), mac)).cloned())
+    }
 }
 
 #[derive(Default)]
 pub struct FakeLocalServices {
     state: Mutex<NodeNetworkState>,
+    sightings: Mutex<Vec<GuestSighting>>,
 }
 
 impl FakeLocalServices {
@@ -63,11 +81,19 @@ impl FakeLocalServices {
     pub fn power_off(&self) {
         *lock(&self.state) = NodeNetworkState::default();
     }
+
+    pub fn sight(&self, sighting: GuestSighting) {
+        lock(&self.sightings).push(sighting);
+    }
 }
 
 impl LocalServices for FakeLocalServices {
     fn update(&self, state: &NodeNetworkState) {
         *lock(&self.state) = state.clone();
+    }
+
+    fn take_guest_sightings(&self) -> Vec<GuestSighting> {
+        std::mem::take(&mut *lock(&self.sightings))
     }
 }
 
@@ -92,6 +118,8 @@ mod tests {
                 segment_id: None,
             }],
             ports: vec![Port {
+                guest_pool: Vec::new(),
+                guests: Vec::new(),
                 key: PortKey { vm_id: ObjectId::from_uuid(uuid::Uuid::nil()), index: 0 },
                 segment,
                 mac: MacAddress::locally_administered(b"web"),

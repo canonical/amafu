@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -13,9 +13,12 @@ use amafu_domain::{
 use amafu_interfaces::network::{PortRule, RemoteAddresses};
 use amafu_interfaces::objects::{apply, list, remove};
 use amafu_interfaces::{
-    ActionError, Consistency, Datapath, FloatingAddress, LocalServices, NodeNetworkState, Port, PortKey,
-    RealizedNetwork, RemoteEndpoint, Segment, SegmentKey, Store,
+    ActionError, Clock, Consistency, Datapath, FloatingAddress, LeasedGuest, LocalServices, NodeNetworkState,
+    Port, PortKey, RealizedNetwork, RemoteEndpoint, Segment, SegmentKey, Store,
 };
+use time::OffsetDateTime;
+
+use crate::guest_leases::{HostingInterface, SeenGuest, guest_leases, leased_guests};
 use amafu_reconciler::{Controller, KeyMapping, WatchedKind};
 
 pub struct NodeNetworkController {
@@ -24,6 +27,7 @@ pub struct NodeNetworkController {
     store: Arc<dyn Store>,
     datapath: Arc<dyn Datapath>,
     local_services: Arc<dyn LocalServices>,
+    clock: Arc<dyn Clock>,
     platform_api: Vec<SocketAddrV4>,
     last_applied: Mutex<Option<NodeNetworkState>>,
 }
@@ -36,6 +40,7 @@ impl NodeNetworkController {
         store: Arc<dyn Store>,
         datapath: Arc<dyn Datapath>,
         local_services: Arc<dyn LocalServices>,
+        clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             node,
@@ -43,6 +48,7 @@ impl NodeNetworkController {
             store,
             datapath,
             local_services,
+            clock,
             platform_api: Vec::new(),
             last_applied: Mutex::new(None),
         }
@@ -64,6 +70,7 @@ pub struct NetworkView {
     pub endpoints: Vec<Object<NetworkEndpoint>>,
     pub floating_ips: Vec<Object<FloatingIp>>,
     pub platform_api: Vec<SocketAddrV4>,
+    pub now: OffsetDateTime,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -176,6 +183,55 @@ fn add_segment(state: &mut NodeNetworkState, network: &Object<Network>) -> Segme
     key
 }
 
+fn hosting_interface(
+    view: &NetworkView,
+    vm: &Object<Vm>,
+    index: usize,
+    node_address: Ipv4Addr,
+) -> Option<HostingInterface> {
+    let interface = vm.specification.network_interfaces.get(index)?;
+    let allocated = vm.status.interfaces.get(index)?;
+    (!allocated.guest_addresses.is_empty()).then(|| HostingInterface {
+        project: vm.metadata.project.clone(),
+        vm: vm.metadata.name.clone(),
+        vm_id: vm.metadata.id,
+        index: port_index(index),
+        network: interface.network.clone(),
+        pool: allocated.guest_addresses.clone(),
+        security_groups: interface.security_groups.clone(),
+        node: view.node.clone(),
+        node_address,
+    })
+}
+
+#[must_use]
+pub fn hosting_interfaces(view: &NetworkView) -> Vec<HostingInterface> {
+    let Some(node_address) = view.underlay_address else {
+        return Vec::new();
+    };
+    owned(view)
+        .flat_map(|vm| {
+            (0..vm.status.interfaces.len())
+                .filter_map(move |index| hosting_interface(view, vm, index, node_address))
+        })
+        .collect()
+}
+
+fn guest_endpoints(view: &NetworkView) -> Vec<NetworkEndpointSpecification> {
+    view.endpoints
+        .iter()
+        .filter(|endpoint| endpoint.specification.guest.is_some())
+        .map(|endpoint| endpoint.specification.clone())
+        .collect()
+}
+
+fn guests_of(view: &NetworkView, vm: &Object<Vm>, index: usize) -> Vec<LeasedGuest> {
+    let node_address = view.underlay_address.unwrap_or(Ipv4Addr::UNSPECIFIED);
+    hosting_interface(view, vm, index, node_address)
+        .map(|host| leased_guests(&host, &guest_endpoints(view), view.now))
+        .unwrap_or_default()
+}
+
 #[must_use]
 pub fn desired_network_state(view: &NetworkView) -> NodeNetworkState {
     let mut state = NodeNetworkState {
@@ -195,6 +251,8 @@ pub fn desired_network_state(view: &NetworkView) -> NodeNetworkState {
             };
             let key = add_segment(&mut state, network);
             state.ports.push(Port {
+                guest_pool: allocated.guest_addresses.clone(),
+                guests: guests_of(view, vm, index),
                 key: PortKey { vm_id: vm.metadata.id, index: port_index(index) },
                 segment: key,
                 mac: allocated.mac,
@@ -329,6 +387,11 @@ fn endpoint_id(specification: &NetworkEndpointSpecification) -> ObjectId {
     let mut bytes = *specification.vm_id.as_uuid().as_bytes();
     bytes[15] ^= specification.index.wrapping_add(1);
     bytes[14] ^= 0x5e;
+    if specification.guest.is_some() {
+        for (byte, octet) in bytes[8..14].iter_mut().zip(specification.mac.octets()) {
+            *byte ^= octet;
+        }
+    }
     ObjectId::from_uuid(uuid::Uuid::from_bytes(bytes))
 }
 
@@ -356,7 +419,22 @@ impl NodeNetworkController {
             endpoints: self.list_preferring_fresh::<NetworkEndpoint>().await?,
             floating_ips: self.list_preferring_fresh::<FloatingIp>().await?,
             platform_api: self.platform_api.clone(),
+            now: self.clock.now(),
         })
+    }
+
+    async fn seen_guests(&self, desired: &NodeNetworkState) -> Result<BTreeSet<SeenGuest>, ActionError> {
+        let mut seen = BTreeSet::new();
+        for sighting in self.local_services.take_guest_sightings() {
+            let Some(tap) = self.datapath.learned_port(&sighting.segment, sighting.mac).await? else {
+                continue;
+            };
+            let port = desired.ports.iter().find(|port| port.hosts_guests() && port.key.tap_name() == tap);
+            if let Some(port) = port {
+                seen.insert(SeenGuest { port: port.key, mac: sighting.mac });
+            }
+        }
+        Ok(seen)
     }
 }
 
@@ -382,11 +460,15 @@ impl Controller for NodeNetworkController {
         let view = self.view().await?;
         let realized = self.datapath.current().await?;
         let last_applied = self.last_applied.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        let desired = desired_network_state(&view);
+        let seen = self.seen_guests(&desired).await?;
+        let mut wanted = wanted_endpoints(&view);
+        wanted.extend(guest_leases(&hosting_interfaces(&view), &guest_endpoints(&view), &seen, view.now));
         Ok(NodeNetworkObservation {
-            desired: desired_network_state(&view),
+            desired,
             last_applied,
             realized,
-            wanted_endpoints: wanted_endpoints(&view),
+            wanted_endpoints: wanted,
             published_endpoints: published_endpoints(&view),
         })
     }
@@ -439,7 +521,7 @@ mod tests {
         FloatingIpBinding, FloatingIpPhase, FloatingIpSpecification, FloatingIpStatus,
     };
     use amafu_domain::kinds::network::{NetworkPhase, NetworkSpecification, NetworkStatus};
-    use amafu_domain::kinds::network_endpoint::NetworkEndpointStatus;
+    use amafu_domain::kinds::network_endpoint::{GuestLease, NetworkEndpointStatus};
     use amafu_domain::kinds::security_group::{
         Direction, PortRange, Protocol, SecurityGroupRule, SecurityGroupSpecification,
     };
@@ -521,6 +603,7 @@ mod tests {
             endpoints: Vec::new(),
             floating_ips: Vec::new(),
             platform_api: Vec::new(),
+            now: OffsetDateTime::UNIX_EPOCH,
         }
     }
 
@@ -537,6 +620,37 @@ mod tests {
             },
             status: amafu_domain::kinds::security_group::SecurityGroupStatus {},
         }
+    }
+
+    #[test]
+    fn a_hosting_port_carries_its_pool_and_current_leases_and_publishes_new_ones() {
+        let on = node("node-1");
+        let mut pod = vm("pod", "node-1", [10, 1, 0, 2], &[]);
+        pod.specification.network_interfaces[0].guests = 2;
+        pod.status.interfaces[0].guest_addresses =
+            vec![Ipv4Addr::new(10, 1, 0, 3), Ipv4Addr::new(10, 1, 0, 4)];
+        let mut view = view(&on, vec![pod.clone()]);
+        view.now = OffsetDateTime::UNIX_EPOCH + time::Duration::days(1);
+        let host = hosting_interfaces(&view).pop().unwrap();
+        let guest = MacAddress::new([0x00, 0x16, 0x3e, 0, 0, 1]);
+        let seen = BTreeSet::from([SeenGuest { port: host.port(), mac: guest }]);
+        let (reference, lease) = guest_leases(&[host], &[], &seen, view.now).pop_first().unwrap();
+        let expired = MacAddress::new([0x00, 0x16, 0x3e, 0, 0, 2]);
+        let mut stale = lease.clone();
+        stale.mac = expired;
+        stale.address = Ipv4Addr::new(10, 1, 0, 4);
+        stale.guest = Some(GuestLease { renewed_at: OffsetDateTime::UNIX_EPOCH });
+        view.endpoints = [(reference.name.as_str(), lease), ("guest-stale", stale)]
+            .into_iter()
+            .map(|(endpoint, specification)| Object {
+                metadata: metadata(endpoint, Some("project-a")),
+                specification,
+                status: NetworkEndpointStatus {},
+            })
+            .collect();
+        let port = desired_network_state(&view).ports.pop().unwrap();
+        assert_eq!(port.guest_pool, pod.status.interfaces[0].guest_addresses);
+        assert_eq!(port.guests, [LeasedGuest { mac: guest, address: Ipv4Addr::new(10, 1, 0, 3) }]);
     }
 
     #[test]

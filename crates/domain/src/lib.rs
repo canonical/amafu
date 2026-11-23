@@ -19,7 +19,7 @@ pub mod step_plan;
 pub mod upgrade;
 pub mod validation;
 
-pub use addressing::{InvalidAddress, Ipv4Network, MacAddress, SegmentId};
+pub use addressing::{InvalidAddress, Ipv4Network, LXD_MAC_PREFIX, MacAddress, SegmentId};
 pub use change::{Change, ChangeError, apply_change, confirm_removal};
 pub use digest::{InvalidReference, OciReference, Sha256Digest};
 pub use name::{InvalidName, NodeName, ObjectName, ProjectName, ZoneName, label_fragment};

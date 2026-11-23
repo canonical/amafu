@@ -670,7 +670,7 @@ impl SimulatedWorld {
                 )
             }),
         ]);
-        let node_name = name.clone();
+        let (node_name, network_clock) = (name.clone(), Arc::clone(&clock));
         tasks.push(self.role(format!("{name}/node-network"), &store, fast, move || {
             NodeNetworkController::new(
                 node_name.clone(),
@@ -678,6 +678,7 @@ impl SimulatedWorld {
                 Arc::clone(&network_store),
                 Arc::clone(&datapath) as Arc<dyn Datapath>,
                 Arc::clone(&local_services) as Arc<dyn LocalServices>,
+                Arc::clone(&network_clock),
             )
         }));
         if is_core {
