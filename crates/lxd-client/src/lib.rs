@@ -77,6 +77,13 @@ fn instances(document: &Value) -> Vec<GuestInstance> {
     instances
 }
 
+fn hosted_by(instances: Vec<GuestInstance>, server: &str, is_clustered: bool) -> Vec<GuestInstance> {
+    instances
+        .into_iter()
+        .filter(|instance| !is_clustered || instance.location.as_deref() == Some(server))
+        .collect()
+}
+
 #[async_trait::async_trait]
 impl LxdPlatform for HttpsLxd {
     async fn inspect(&self, endpoint: &LxdEndpoint) -> Result<Option<LxdAccess>, ActionError> {
@@ -95,7 +102,8 @@ impl LxdPlatform for HttpsLxd {
             .get("/1.0/instances?recursion=1&all-projects=true")
             .await
             .map_err(ActionError::retryable)?;
-        Ok(Some(LxdAccess::Trusted { server, is_clustered, instances: instances(&listing) }))
+        let hosted = hosted_by(instances(&listing), &server, is_clustered);
+        Ok(Some(LxdAccess::Trusted { server, is_clustered, instances: hosted }))
     }
 }
 
@@ -111,6 +119,19 @@ mod tests {
         assert_eq!(server(&untrusted), None);
         let trusted = json!({"metadata": {"auth": "trusted", "environment": {"server_name": "pod-0", "server_clustered": true}}});
         assert_eq!(server(&trusted), Some((String::from("pod-0"), true)));
+    }
+
+    #[test]
+    fn a_cluster_member_keeps_only_the_instances_it_runs() {
+        let instance = |name: &str, location: &str| GuestInstance {
+            name: String::from(name),
+            kind: GuestInstanceKind::Container,
+            status: String::from("Running"),
+            location: Some(String::from(location)),
+        };
+        let listed = vec![instance("c0", "pod-0"), instance("c1", "pod-1")];
+        assert_eq!(hosted_by(listed.clone(), "pod-0", true), [instance("c0", "pod-0")]);
+        assert_eq!(hosted_by(listed, "pod-0", false).len(), 2);
     }
 
     #[test]
