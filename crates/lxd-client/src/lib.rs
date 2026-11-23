@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use amafu_domain::kinds::guest_inventory::{GuestInstance, GuestInstanceKind, LxdAccess};
-use amafu_interfaces::{ActionError, ClusterJoin, LXD_PORT, LxdEndpoint, LxdPlatform};
+use amafu_interfaces::{ActionError, ClusterInvitation, ClusterJoin, LXD_PORT, LxdEndpoint, LxdPlatform};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use serde_json::Value;
@@ -177,11 +177,17 @@ impl LxdPlatform for HttpsLxd {
         connection.finish(&started).await
     }
 
-    async fn join_token(&self, endpoint: &LxdEndpoint, member: &str) -> Result<String, ActionError> {
+    async fn invite(&self, endpoint: &LxdEndpoint, member: &str) -> Result<ClusterInvitation, ActionError> {
         let connection = Connection::open(endpoint, self.timeout)?;
         let body = serde_json::json!({"server_name": member});
         let started = connection.send(reqwest::Method::POST, "/1.0/cluster/members", &body).await?;
-        join_token(&started["metadata"]["metadata"])
+        let token = join_token(&started["metadata"]["metadata"])?;
+        let server = connection.get("/1.0").await.map_err(ActionError::retryable)?;
+        let cluster_certificate = server["metadata"]["environment"]["certificate"]
+            .as_str()
+            .ok_or_else(|| ActionError::retryable("LXD did not report its certificate"))?
+            .to_owned();
+        Ok(ClusterInvitation { token, cluster_address: endpoint.address, cluster_certificate })
     }
 
     async fn join(&self, endpoint: &LxdEndpoint, join: &ClusterJoin) -> Result<(), ActionError> {
@@ -189,7 +195,9 @@ impl LxdPlatform for HttpsLxd {
         let body = serde_json::json!({
             "server_name": join.server_name,
             "server_address": format!("{}:{LXD_PORT}", join.server_address),
-            "cluster_token": join.token,
+            "cluster_address": format!("{}:{LXD_PORT}", join.invitation.cluster_address),
+            "cluster_certificate": join.invitation.cluster_certificate,
+            "cluster_token": join.invitation.token,
             "enabled": true,
             "member_config": [{"entity": "storage-pool", "name": STORAGE_POOL, "key": "source", "value": ""}],
         });

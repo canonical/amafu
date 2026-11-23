@@ -3,7 +3,7 @@ use std::net::Ipv4Addr;
 use std::sync::Mutex;
 
 use amafu_domain::kinds::guest_inventory::LxdAccess;
-use amafu_interfaces::{ActionError, ClusterJoin, LxdEndpoint, LxdPlatform};
+use amafu_interfaces::{ActionError, ClusterInvitation, ClusterJoin, LxdEndpoint, LxdPlatform};
 
 use crate::lock::lock;
 
@@ -56,7 +56,7 @@ impl LxdPlatform for FakeLxd {
         Ok(())
     }
 
-    async fn join_token(&self, endpoint: &LxdEndpoint, member: &str) -> Result<String, ActionError> {
+    async fn invite(&self, endpoint: &LxdEndpoint, member: &str) -> Result<ClusterInvitation, ActionError> {
         let mut state = lock(&self.state);
         let founder = *state
             .cluster_of
@@ -64,13 +64,19 @@ impl LxdPlatform for FakeLxd {
             .ok_or_else(|| ActionError::retryable("not clustered"))?;
         let token = format!("token-for-{member}");
         state.tokens.insert(token.clone(), founder);
-        Ok(token)
+        Ok(ClusterInvitation {
+            token,
+            cluster_address: endpoint.address,
+            cluster_certificate: String::from("founder"),
+        })
     }
 
     async fn join(&self, endpoint: &LxdEndpoint, join: &ClusterJoin) -> Result<(), ActionError> {
         let mut state = lock(&self.state);
-        let founder =
-            *state.tokens.get(&join.token).ok_or_else(|| ActionError::retryable("unknown join token"))?;
+        let founder = *state
+            .tokens
+            .get(&join.invitation.token)
+            .ok_or_else(|| ActionError::retryable("unknown join token"))?;
         state.cluster_of.insert(endpoint.address, founder);
         let members = state.members.entry(founder).or_default();
         if !members.contains(&join.server_name) {

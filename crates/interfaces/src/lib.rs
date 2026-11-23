@@ -41,7 +41,7 @@ pub use juju::{
 };
 pub use kubernetes::{DrainState, KubernetesEndpoint, KubernetesPlatform, NodeRole};
 pub use lease::{HeldLease, Leases};
-pub use lxd::{ClusterJoin, LXD_PORT, LxdEndpoint, LxdPlatform};
+pub use lxd::{ClusterInvitation, ClusterJoin, LXD_PORT, LxdEndpoint, LxdPlatform};
 pub use network::{
     Datapath, FloatingAddress, GuestSighting, LeasedGuest, LocalServices, NodeNetworkState, Port, PortKey,
     RealizedNetwork, RemoteEndpoint, Segment, SegmentKey,
