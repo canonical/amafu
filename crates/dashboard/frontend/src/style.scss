@@ -510,8 +510,19 @@ $neutral: #999;
   padding: 0 0.5rem;
 }
 
-.guest-pill__status {
+.guest-pill__status,
+.guest-pill__address {
   color: var(--vf-color-text-muted);
+}
+
+.guest-pill__address {
+  font-family: var(--vf-font-family-monospace, monospace);
+}
+
+.guest-pill__role {
+  border: 1px solid var(--vf-color-border-default);
+  border-radius: 0.75rem;
+  padding: 0 0.5rem;
 }
 
 .guest-pill--running {

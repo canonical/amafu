@@ -80,6 +80,8 @@ export interface GuestInstance {
   kind: GuestInstanceKind;
   status: string;
   location?: string;
+  addresses?: string[];
+  is_juju_controller?: boolean;
 }
 
 export type LxdAccess =

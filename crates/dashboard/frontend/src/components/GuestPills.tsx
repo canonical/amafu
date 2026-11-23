@@ -34,6 +34,12 @@ export default function GuestPills({ inventory }: { inventory: GuestInventory })
         <li key={instance.name} className={`guest-pill ${tone(instance.status)}`} title={instance.location ? `on ${instance.location}` : undefined}>
           <span className="guest-pill__kind">{KIND_LABELS[instance.kind]}</span>
           <span className="guest-pill__name">{instance.name}</span>
+          {instance.is_juju_controller && <span className="guest-pill__role">controller</span>}
+          {(instance.addresses ?? []).map((address) => (
+            <span key={address} className="guest-pill__address">
+              {address}
+            </span>
+          ))}
           <span className="guest-pill__status">{instance.status}</span>
         </li>
       ))}
