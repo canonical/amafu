@@ -17,7 +17,7 @@ Juju controllers on VMs used Juju's manual provider: Amafu created a VM for ever
 - Amafu has one LXD client identity, LxdIdentity, readable by admins and nodes; its certificate is public so users can trust it on their own VMs.
 - Each node probes the running VMs it hosts for LXD on port 8443, lists their instances when trusted, and writes a GuestInventory per VM: none, untrusted, or trusted with the cluster member and, for the instances that member runs, their type, status, IPv4 addresses and whether they are a Juju controller. The dashboard expands such VMs, and the pods of a controller, into lxc and vm pills.
 - Scaling pods down only retires pods that run no instances; Amafu refuses rather than moving units behind Juju's back.
-- Juju controllers on the old VM substrate cannot be converted or read. Delete them before installing this release: its nodes refuse the old shape, and no earlier release knows to stop the upgrade.
+- Juju controllers on the old VM substrate cannot be converted or read. Delete them before installing this release. Their change records stay behind and break listing until deleted; a delete of any stored object the release cannot read erases it outright, since no controller could finalize it.
 
 ## Consequences
 
