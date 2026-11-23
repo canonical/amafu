@@ -1,22 +1,13 @@
 import { Button, MainTable } from "@canonical/react-components";
 
 import type { JujuController, JujuControllerChange, KubernetesCluster, PlanStep } from "../cluster/environments";
-import {
-  JUJU_CHANGES,
-  JUJU_APPLICATION_LABEL,
-  JUJU_CONTROLLERS,
-  JUJU_LABEL,
-  JUJU_MACHINE_LABEL,
-  JUJU_MODEL_LABEL,
-  KUBERNETES_CLUSTERS,
-  describePlanStep,
-  isRunning,
-} from "../cluster/environments";
-import type { Vm } from "../cluster/kinds";
+import { JUJU_CHANGES, JUJU_CONTROLLERS, JUJU_LABEL, KUBERNETES_CLUSTERS, describePlanStep, isRunning } from "../cluster/environments";
+import type { GuestInventory, Vm } from "../cluster/kinds";
 import { useCollection } from "../cluster/live";
 import { projectScope } from "../cluster/scopes";
 import CollectionNotice from "../components/CollectionNotice";
 import Command from "../components/Command";
+import GuestPills from "../components/GuestPills";
 import IconAction from "../components/IconAction";
 import PageHeader from "../components/PageHeader";
 import Panel from "../components/Panel";
@@ -33,6 +24,7 @@ import {
   ControllerChangeConfirmation,
   CreateControllerPanel,
   DeployPanel,
+  ScalePodsPanel,
   UpgradeControllerPanel,
 } from "./jujuPanels";
 
@@ -40,48 +32,51 @@ const describe = (step: PlanStep) => describePlanStep(step);
 
 function substrateOf(controller: JujuController): string {
   const substrate = controller.specification.substrate;
-  return substrate.on === "vms" ? `${countOf(substrate.controllers, "VM")} · ${substrate.network}` : `cluster ${substrate.cluster}`;
+  return substrate.on === "pods" ? `${countOf(substrate.pods, "pod")} · ${substrate.network}` : `cluster ${substrate.cluster}`;
 }
 
 function changesOf(changes: JujuControllerChange[], controller: string): JujuControllerChange[] {
   return sinceCreation(changes.filter((change) => change.specification.controller === controller));
 }
 
-function Machines({ vms }: { vms: Vm[] }) {
+function Pods({ pods, inventories }: { pods: Vm[]; inventories: GuestInventory[] }) {
+  if (pods.length === 0) {
+    return <p className="u-text--muted">No pods yet.</p>;
+  }
   return (
-    <MainTable
-      emptyStateMsg="No machines yet."
-      headers={[{ content: "Amafu VM" }, { content: "Model" }, { content: "Juju machine" }, { content: "Application" }, { content: "Status" }]}
-      rows={vms.map((vm) => ({
-        key: vm.metadata.name,
-        columns: [
-          { content: <SubjectLink name={vm.metadata.name} page="/virtual-machines" /> },
-          { content: vm.metadata.labels?.[JUJU_MODEL_LABEL] ?? "controller" },
-          { content: vm.metadata.labels?.[JUJU_MACHINE_LABEL] ?? "—" },
-          { content: vm.metadata.labels?.[JUJU_APPLICATION_LABEL] ?? "—" },
-          { content: <Status phase={vm.status.phase} /> },
-        ],
-      }))}
-    />
+    <ul className="p-list--divided">
+      {pods.map((pod) => {
+        const inventory = inventories.find((candidate) => candidate.metadata.name === pod.metadata.name);
+        return (
+          <li key={pod.metadata.name} className="p-list__item">
+            <SubjectLink name={pod.metadata.name} page="/virtual-machines" /> <Status phase={pod.status.phase} />
+            {inventory ? <GuestPills inventory={inventory} /> : <p className="guest-pills u-text--muted">Amafu has not reached LXD on this pod yet.</p>}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
 function ControllerDetail({
   controller,
   changes,
-  vms,
+  pods,
+  inventories,
   panel,
 }: {
   controller: JujuController;
   changes: JujuControllerChange[];
-  vms: Vm[];
+  pods: Vm[];
+  inventories: GuestInventory[];
   panel: PanelState;
 }) {
   const name = controller.metadata.name;
   const running = changes.find(isRunning);
   const isBusy = Boolean(running) || controller.status.phase !== "ready";
-  const isOnVms = controller.specification.substrate.on === "vms";
-  const canEnableHa = controller.specification.substrate.on === "vms" && controller.specification.substrate.controllers === 1;
+  const substrate = controller.specification.substrate;
+  const isOnPods = substrate.on === "pods";
+  const canEnableHa = substrate.on === "pods" && substrate.controllers === 1;
   const changeTable = (
     <MainTable
       emptyStateMsg="No changes yet."
@@ -117,7 +112,7 @@ function ControllerDetail({
   return (
     <Panel title={name} isWide onClose={panel.close}>
       <p>
-        Juju {controller.status.version ?? controller.specification.version} · {isOnVms ? "manual cloud, machines managed by Amafu" : "Kubernetes cloud"} · API{" "}
+        Juju {controller.status.version ?? controller.specification.version} · {isOnPods ? "LXD cloud on Amafu pods" : "Kubernetes cloud"} · API{" "}
         {controller.status.addresses?.[0] ?? "not reachable yet"}
       </p>
       <Status phase={controller.status.phase} detail={controller.status.message} />
@@ -125,9 +120,12 @@ function ControllerDetail({
         <Button type="button" disabled={isBusy} onClick={() => panel.open("add-model", name)}>
           Add model
         </Button>
-        {isOnVms && (
-          <Button type="button" disabled={isBusy} onClick={() => panel.open("deploy", name)}>
-            Deploy charm
+        <Button type="button" disabled={isBusy} onClick={() => panel.open("deploy", name)}>
+          Deploy charm
+        </Button>
+        {isOnPods && (
+          <Button type="button" disabled={isBusy} onClick={() => panel.open("scale-pods", name)}>
+            Scale pods
           </Button>
         )}
         {canEnableHa && (
@@ -135,7 +133,7 @@ function ControllerDetail({
             Enable HA
           </Button>
         )}
-        {!isOnVms && (
+        {!isOnPods && (
           <Button type="button" disabled={isBusy} onClick={() => panel.open("rotate-credential", name)}>
             Rotate cluster credential
           </Button>
@@ -163,7 +161,7 @@ function ControllerDetail({
             ),
           },
           { label: `Models (${controller.status.models?.length ?? 0})`, content: modelTable },
-          ...(isOnVms ? [{ label: `Machines (${vms.length})`, content: <Machines vms={vms} /> }] : []),
+          ...(isOnPods ? [{ label: `Pods (${pods.length})`, content: <Pods pods={pods} inventories={inventories} /> }] : []),
           { label: `Changes (${changes.length})`, content: changeTable },
         ]}
       />
@@ -188,16 +186,18 @@ function ChangePanels({ controllers, clusters, panel }: { controllers: JujuContr
       return <DeployPanel controller={controller} onClose={panel.close} />;
     case "add-model":
       return <AddModelPanel controller={controller} onClose={panel.close} />;
+    case "scale-pods":
+      return <ScalePodsPanel controller={controller} onClose={panel.close} />;
     case "upgrade":
       return <UpgradeControllerPanel controller={controller} onClose={panel.close} />;
     case "destroy-model":
-      return confirm(`Destroy model ${part}?`, "Destroy model", "Juju removes every application in it, then Amafu deletes the machines it leaves.", { kind: "destroy-model", model: part ?? "" });
+      return confirm(`Destroy model ${part}?`, "Destroy model", "Juju removes every application in it, along with the containers its units ran in.", { kind: "destroy-model", model: part ?? "" });
     case "enable-ha":
-      return confirm(`Enable high availability for ${controller.metadata.name}?`, "Enable HA", "Amafu starts two more controller VMs, records them in the controller model and runs enable-ha on them.", { kind: "enable-ha" });
+      return confirm(`Enable high availability for ${controller.metadata.name}?`, "Enable HA", "Juju starts two more controllers in containers on other pods; it needs at least 3 pods.", { kind: "enable-ha" });
     case "rotate-credential":
       return confirm(`Rotate the cluster credential of ${controller.metadata.name}?`, "Rotate", "A new service account token replaces the one Juju uses on its cluster; the old token is deleted.", { kind: "rotate-credential" });
     case "delete":
-      return confirm(`Delete ${controller.metadata.name}?`, "Delete controller", "This destroys every model, then deletes the controller and every VM, volume and address it owns.", { kind: "delete" });
+      return confirm(`Delete ${controller.metadata.name}?`, "Delete controller", "This destroys every model, then deletes the controller and every pod, volume and address it owns.", { kind: "delete" });
     default:
       return null;
   }
@@ -209,6 +209,7 @@ export default function Juju() {
   const changes = useCollection<JujuControllerChange>(projectScope(JUJU_CHANGES, project));
   const clusters = useCollection<KubernetesCluster>(projectScope(KUBERNETES_CLUSTERS, project));
   const vms = useCollection<Vm>(projectScope("vms", project));
+  const inventories = useCollection<GuestInventory>(projectScope("guest-inventories", project));
   const panel = usePanel();
   const subject = controllers.items.find((controller) => controller.metadata.name === panel.subject);
   const creating = changes.items.filter(
@@ -222,13 +223,13 @@ export default function Juju() {
         </Button>
       </PageHeader>
       <p className="u-text--muted">
-        Juju controllers on Amafu VMs or on a Kubernetes cluster from the Kubernetes page. Amafu creates every machine as a VM
-        and signs people in with their Amafu accounts.
+        Juju controllers on LXD pods or on a Kubernetes cluster from the Kubernetes page. On pods, Juju runs the controller and
+        every unit in its own container; Amafu signs people in with their Amafu accounts.
       </p>
       <CollectionNotice state={controllers.state} noun="Juju controllers" />
       <MainTable
         responsive
-        emptyStateMsg="No Juju controllers. Create one on VMs or on a Kubernetes cluster."
+        emptyStateMsg="No Juju controllers. Create one on LXD pods or on a Kubernetes cluster."
         headers={[
           { content: "Name" },
           { content: "Version" },
@@ -280,7 +281,8 @@ export default function Juju() {
         <ControllerDetail
           controller={subject}
           changes={changesOf(changes.items, subject.metadata.name)}
-          vms={vms.items.filter((vm) => vm.metadata.labels?.[JUJU_LABEL] === subject.metadata.name)}
+          pods={vms.items.filter((vm) => vm.metadata.labels?.[JUJU_LABEL] === subject.metadata.name)}
+          inventories={inventories.items}
           panel={panel}
         />
       )}

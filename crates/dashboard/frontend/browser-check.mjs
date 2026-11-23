@@ -235,6 +235,16 @@ async function workloads(browser) {
     await shoot(page, "juju-detail");
   });
 
+  await attempt("a Juju controller on pods shows the containers each pod runs", async () => {
+    await page.goto(`${base}/juju?panel=detail&subject=observability`);
+    await page.getByRole("tab", { name: "Pods (3)" }).click();
+    const panel = page.locator(".amafu-panel");
+    await panel.getByText("juju-5e1d-0", { exact: true }).waitFor();
+    await panel.getByText("controller", { exact: true }).waitFor();
+    await panel.getByText("10.0.1.72", { exact: true }).waitFor();
+    await shoot(page, "juju-pods");
+  });
+
   await attempt("creating a controller previews its command", async () => {
     await page.goto(`${base}/juju?panel=create`);
     await page.getByLabel("Name", { exact: true }).fill("apps");

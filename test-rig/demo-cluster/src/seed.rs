@@ -16,6 +16,7 @@ use amafu_domain::kinds::ssh_key::{SshKey, SshKeyGroup};
 use amafu_domain::kinds::storage_backend::StorageBackend;
 use amafu_domain::kinds::vm::Vm;
 use amafu_domain::kinds::volume::Volume;
+use amafu_domain::labels::JUJU_CONTROLLER;
 use amafu_domain::{Change, ObjectId, ObjectName, ObjectReference, ProjectName, Resource};
 use amafu_interfaces::Store;
 use amafu_interfaces::objects::{apply, update_status};
@@ -65,6 +66,16 @@ pub async fn put<R: Resource>(
     name: &str,
     specification: Value,
 ) -> anyhow::Result<ObjectReference> {
+    put_labelled::<R>(store, project, name, BTreeMap::new(), specification).await
+}
+
+pub async fn put_labelled<R: Resource>(
+    store: &dyn Store,
+    project: Option<&str>,
+    name: &str,
+    labels: BTreeMap<String, String>,
+    specification: Value,
+) -> anyhow::Result<ObjectReference> {
     let reference = reference::<R>(project, name)?;
     let specification = serde_json::from_value(specification)
         .with_context(|| format!("the specification of {} {name}", R::KIND))?;
@@ -75,7 +86,7 @@ pub async fn put<R: Resource>(
             id: ObjectId::from_uuid(uuid::Uuid::new_v4()),
             name: reference.name.clone(),
             project: reference.project.clone(),
-            labels: BTreeMap::new(),
+            labels,
             specification,
         },
     )
@@ -313,6 +324,9 @@ async fn seed_images_and_volumes(store: &dyn Store, project: &str) -> anyhow::Re
         ("build-cache", 200, "local", Some("debian-13")),
         ("monitoring-data", 500, "nfs-archive", Some("ubuntu-noble")),
         ("scratch", 20, "ceph-prod", None),
+        ("observability-pod-0", 50, "ceph-prod", Some("ubuntu-noble")),
+        ("observability-pod-1", 50, "ceph-prod", Some("ubuntu-noble")),
+        ("observability-pod-2", 50, "ceph-prod", Some("ubuntu-noble")),
     ];
     for (name, size, backend, image) in volumes {
         put::<Volume>(
@@ -475,7 +489,7 @@ async fn seed_environments(store: &dyn Store) -> anyhow::Result<()> {
     .await?;
     let controller = json!({
         "version": "3.6.29", "first_model": "default",
-        "substrate": {"on": "vms", "controllers": 1, "shape": "medium", "network": "app",
+        "substrate": {"on": "pods", "pods": 3, "controllers": 1, "shape": "medium", "network": "app",
                       "storage_backend": "ceph-prod", "external_network": "public"},
     });
     put_with_status::<JujuController>(
@@ -492,10 +506,45 @@ async fn seed_environments(store: &dyn Store) -> anyhow::Result<()> {
         Some(DEFAULT_PROJECT),
         "deploy-observability-5e6f",
         json!({"controller": "observability", "request": {"kind": "deploy", "deployment": {
-            "model": "monitoring", "application": "prometheus", "charm": "prometheus-k8s", "units": 2, "shape": "medium"}}}),
-        json!({"completed_steps": 1, "current_step": {"attempts": 1, "started_at": now()}}),
+            "model": "monitoring", "application": "grafana", "charm": "grafana", "units": 2}}}),
+        json!({"completed_steps": 0, "current_step": {"attempts": 1, "started_at": now()}}),
     )
     .await?;
+    Ok(())
+}
+
+async fn seed_pods(store: &dyn Store, project: &str) -> anyhow::Result<()> {
+    let labels = BTreeMap::from([(String::from(JUJU_CONTROLLER), String::from("observability"))]);
+    let containers: [&[(&str, &str, bool)]; 3] = [
+        &[("juju-5e1d-0", "10.0.1.40", true), ("juju-a1b2-0", "10.0.1.41", false)],
+        &[("juju-a1b2-1", "10.0.1.72", false)],
+        &[],
+    ];
+    for (index, hosted) in containers.into_iter().enumerate() {
+        let name = format!("observability-pod-{index}");
+        let specification = json!({"cpu_count": 2, "memory_mebibytes": 8192, "boot": {"type": "disk"}, "volumes": [name],
+            "network_interfaces": [{"network": "app", "security_groups": ["default"], "guests": 32}],
+            "power_state": "running", "anti_affinity_group": "observability"});
+        let pod = put_labelled::<Vm>(store, Some(project), &name, labels.clone(), specification).await?;
+        let vm =
+            amafu_interfaces::objects::get::<Vm>(store, &pod, amafu_interfaces::Consistency::Linearizable)
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("{name} is missing"))?;
+        let instances: Vec<Value> = hosted
+            .iter()
+            .map(|(instance, address, is_controller)| {
+                json!({"name": instance, "kind": "container", "status": "Running", "location": name,
+                       "addresses": [address], "is_juju_controller": is_controller})
+            })
+            .collect();
+        let inventory = json!({
+            "vm_id": vm.metadata.id,
+            "node": format!("node-{}", index + 1),
+            "lxd": {"access": "trusted", "server": name, "is_clustered": true, "instances": instances},
+            "changed_at": now(),
+        });
+        put::<GuestInventory>(store, Some(project), &name, inventory).await?;
+    }
     Ok(())
 }
 
@@ -532,6 +581,7 @@ pub async fn seed(store: &dyn Store) -> anyhow::Result<()> {
     seed_images_and_volumes(store, DEFAULT_PROJECT).await?;
     seed_workloads(store, DEFAULT_PROJECT).await?;
     seed_guests(store, DEFAULT_PROJECT).await?;
+    seed_pods(store, DEFAULT_PROJECT).await?;
     seed_research(store).await?;
     seed_history(store).await?;
     seed_environments(store).await

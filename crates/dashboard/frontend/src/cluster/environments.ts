@@ -88,7 +88,8 @@ export type KubernetesClusterChange = ClusterObject<
 
 export type Substrate =
   | {
-      on: "vms";
+      on: "pods";
+      pods: number;
       controllers: number;
       shape: MachineShape;
       network: string;
@@ -122,7 +123,6 @@ export interface Deployment {
   charm: string;
   channel?: string;
   units: number;
-  shape: MachineShape;
   expose?: boolean;
 }
 
@@ -134,10 +134,10 @@ export type JujuRequest =
   | { kind: "destroy-model"; model: string }
   | { kind: "enable-ha" }
   | { kind: "deploy"; deployment: Deployment }
-  | { kind: "add-units"; model: string; application: string; units: number; shape: MachineShape }
+  | { kind: "scale-pods"; pods: number }
+  | { kind: "scale-application"; model: string; application: string; units: number }
   | { kind: "remove-units"; model: string; application: string; units: string[] }
   | { kind: "remove-application"; model: string; application: string }
-  | { kind: "replace-machine"; model: string; machine: string }
   | { kind: "rotate-credential" };
 
 export type JujuControllerChange = ClusterObject<
@@ -151,9 +151,11 @@ export const JUJU_CONTROLLERS = "juju-controllers";
 export const JUJU_CHANGES = "juju-controller-changes";
 export const KUBERNETES_LABEL = "amafu.io/kubernetes-cluster";
 export const JUJU_LABEL = "amafu.io/juju-controller";
-export const JUJU_MODEL_LABEL = "amafu.io/juju-model";
-export const JUJU_MACHINE_LABEL = "amafu.io/juju-machine";
-export const JUJU_APPLICATION_LABEL = "amafu.io/juju-application";
+export const MAXIMUM_PODS = 16;
+
+export function isValidPodCount(pods: number): boolean {
+  return pods === 1 || (pods >= 3 && pods <= MAXIMUM_PODS);
+}
 
 export function requestKubernetesChange(project: string | null, cluster: string, request: KubernetesRequest): Promise<unknown> {
   return create(projectScope(KUBERNETES_CHANGES, project), uniqueName(request.kind, cluster), { cluster, request });
