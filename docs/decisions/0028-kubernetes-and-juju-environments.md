@@ -1,6 +1,6 @@
 # 0028: Kubernetes clusters and Juju controllers as environments run by step plans
 
-Status: accepted for milestone 7
+Status: accepted for milestone 7; its Juju VM substrate is superseded by 0033
 
 ## Decision
 

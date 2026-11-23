@@ -13,7 +13,7 @@ Kubernetes clusters and Juju controllers that Amafu runs on its own VMs validate
 - New connections are limited per guest address: 20 a second with a burst of 40, and 64 at once; beyond that they are dropped or reset.
 - The packet is marked rather than accepted, so the guest's own security group egress rules still apply before it is let through. A guest calling its own node is admitted on the input path the same way.
 - On a network without outbound access, only this marked traffic is translated to the node's address.
-- Admission refuses a Kubernetes cluster or a Juju controller on VMs whose network does not allow it, and says how to allow it.
+- Admission refuses a Kubernetes cluster or a Juju controller on pods whose network does not allow it, and says how to allow it.
 
 ## Consequences
 

@@ -1,6 +1,6 @@
 # 0032: Environment images are cluster settings; Juju on VMs bootstraps from its own machine
 
-Status: accepted for milestone 7; amends 0028
+Status: accepted for milestone 7; amends 0028; its bootstrap on VMs is superseded by 0033, which bootstraps from the founding pod the same way
 
 ## Context
 
