@@ -38,6 +38,10 @@ impl Connection {
     }
 }
 
+fn is_absence(error: &reqwest::Error) -> bool {
+    error.is_connect() || error.is_timeout()
+}
+
 fn server(document: &Value) -> Option<(String, bool)> {
     let metadata = &document["metadata"];
     if metadata["auth"].as_str() != Some(TRUSTED) {
@@ -77,8 +81,12 @@ fn instances(document: &Value) -> Vec<GuestInstance> {
 impl LxdPlatform for HttpsLxd {
     async fn inspect(&self, endpoint: &LxdEndpoint) -> Result<Option<LxdAccess>, ActionError> {
         let connection = Connection::open(endpoint, self.timeout)?;
-        let Ok(root) = connection.get("/1.0").await else {
-            return Ok(None);
+        let root = match connection.get("/1.0").await {
+            Ok(root) => root,
+            Err(error) if is_absence(&error) => return Ok(None),
+            Err(error) => {
+                return Err(ActionError::retryable(format!("LXD on {}: {error}", endpoint.address)));
+            }
         };
         let Some((server, is_clustered)) = server(&root) else {
             return Ok(Some(LxdAccess::Untrusted));
