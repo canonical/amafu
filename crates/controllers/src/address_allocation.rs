@@ -30,10 +30,7 @@ fn addresses_in_use(network: &Object<Network>, peers: &[Object<Vm>], vm: &Object
         .collect()
 }
 
-fn free_addresses<'a>(
-    subnet: Ipv4Network,
-    in_use: &'a BTreeSet<Ipv4Addr>,
-) -> impl Iterator<Item = Ipv4Addr> + 'a {
+fn free_addresses(subnet: Ipv4Network, in_use: &BTreeSet<Ipv4Addr>) -> impl Iterator<Item = Ipv4Addr> + '_ {
     subnet.assignable_addresses().filter(move |candidate| !in_use.contains(candidate))
 }
 
