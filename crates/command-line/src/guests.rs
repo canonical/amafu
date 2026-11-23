@@ -4,7 +4,7 @@ use clap::Subcommand;
 
 use crate::output::{OutputFormat, Table, emit, emit_line, print_structured};
 
-const TRUST_COMMAND: &str = "amafu lxd certificate > amafu.crt && lxc config trust add-certificate amafu.crt";
+const TRUST_COMMAND: &str = "amafu lxd certificate > amafu.crt && lxc config trust add amafu.crt --name amafu";
 
 #[derive(Subcommand)]
 pub enum LxdCommand {

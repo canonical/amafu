@@ -20,7 +20,7 @@ export default function GuestPills({ inventory }: { inventory: GuestInventory })
     return (
       <div className="guest-pills">
         <p className="u-text--muted">LXD runs here but does not trust Amafu yet. On this VM, run:</p>
-        <Command words={["amafu", "lxd", "certificate", ">", "amafu.crt", "&&", "lxc", "config", "trust", "add-certificate", "amafu.crt"]} />
+        <Command words={["amafu", "lxd", "certificate", ">", "amafu.crt", "&&", "lxc", "config", "trust", "add", "amafu.crt", "--name", "amafu"]} />
       </div>
     );
   }
