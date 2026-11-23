@@ -5,7 +5,7 @@ use amafu_domain::access::Verb;
 use amafu_domain::labels::LabelSelector;
 use amafu_domain::registry::{KindDescriptor, UntypedChange};
 use amafu_domain::{ChangeError, ObjectId, ObjectName, ObjectReference, ProjectName, Violation};
-use amafu_interfaces::objects::{ObjectStoreError, apply_untyped};
+use amafu_interfaces::objects::{ObjectStoreError, apply_untyped, erase_unreadable};
 use amafu_interfaces::{Consistency, Store, StoreError, WatchEvent};
 use axum::Json;
 use axum::body::{Body, Bytes};
@@ -366,10 +366,14 @@ pub async fn delete_object(
         .on_delete(&reference)
         .await
         .map_err(|refusal| operation.refusal(refusal))?;
-    let deleting = apply_untyped(state.store.as_ref(), &kind, &reference, UntypedChange::Delete)
-        .await
-        .map_err(|error| operation.store_error(error))?;
-    operation.json_with_generation(StatusCode::ACCEPTED, &deleting)
+    let store = state.store.as_ref();
+    let (status, object) = match apply_untyped(store, &kind, &reference, UntypedChange::Delete).await {
+        Err(ObjectStoreError::Corrupt(_)) => {
+            (StatusCode::OK, erase_unreadable(store, &kind, &reference).await)
+        }
+        deleting => (StatusCode::ACCEPTED, deleting),
+    };
+    operation.json_with_generation(status, &object.map_err(|error| operation.store_error(error))?)
 }
 
 pub async fn watch_object(

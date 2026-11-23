@@ -68,6 +68,7 @@ pub enum UntypedChangeError {
 type ApplyUntyped = fn(Option<&Value>, UntypedChange) -> Result<Value, UntypedChangeError>;
 type ConfirmUntypedRemoval = fn(Option<&Value>) -> Result<(), UntypedChangeError>;
 type CheckUntypedObject = fn(&Value) -> Result<(), UntypedChangeError>;
+type IsReadable = fn(&Value) -> bool;
 
 #[derive(Debug, Clone, Copy)]
 pub struct KindDescriptor {
@@ -80,6 +81,7 @@ pub struct KindDescriptor {
     pub apply_change: ApplyUntyped,
     pub confirm_removal: ConfirmUntypedRemoval,
     pub check_object: CheckUntypedObject,
+    pub is_readable: IsReadable,
 }
 
 impl KindDescriptor {
@@ -94,6 +96,7 @@ impl KindDescriptor {
             project_policy: R::PROJECT_POLICY,
             apply_change: apply_untyped::<R>,
             confirm_removal: confirm_untyped_removal::<R>,
+            is_readable: is_readable::<R>,
             check_object: check_untyped_object::<R>,
         }
     }
@@ -205,6 +208,10 @@ fn apply_untyped<R: Resource>(
     };
     let updated = apply_change(current, change)?;
     serde_json::to_value(updated).map_err(|error| UntypedChangeError::Corrupt(error.to_string()))
+}
+
+fn is_readable<R: Resource>(stored: &Value) -> bool {
+    serde_json::from_value::<Object<R>>(stored.clone()).is_ok()
 }
 
 fn confirm_untyped_removal<R: Resource>(stored: Option<&Value>) -> Result<(), UntypedChangeError> {

@@ -133,6 +133,22 @@ pub async fn remove_untyped(
     remove_with(store, reference, |current| Ok((descriptor.confirm_removal)(current)?)).await
 }
 
+pub async fn erase_unreadable(
+    store: &dyn Store,
+    descriptor: &KindDescriptor,
+    reference: &ObjectReference,
+) -> Result<Value, ObjectStoreError> {
+    let stored = store.read(reference, Consistency::Linearizable).await?.ok_or(ChangeError::NotFound)?;
+    remove_with(store, reference, |current| match current {
+        Some(object) if (descriptor.is_readable)(object) => Err(ObjectStoreError::Malformed(String::from(
+            "only an object this release cannot read is erased without being deleted",
+        ))),
+        _ => Ok(()),
+    })
+    .await?;
+    Ok(stored.object)
+}
+
 pub async fn apply<R: Resource>(
     store: &dyn Store,
     reference: &ObjectReference,
