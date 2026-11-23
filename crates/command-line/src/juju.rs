@@ -210,6 +210,8 @@ pub enum JujuCommand {
     Show { name: String },
     #[command(about = "List the changes made to controllers, or to one controller")]
     Changes { name: Option<String> },
+    #[command(about = "Stop a change, undoing its steps where they can be undone")]
+    Cancel { change: String },
     #[command(about = "Print a short-lived token for the controller's API")]
     Token { name: String },
 }
@@ -311,6 +313,7 @@ fn translate(command: JujuCommand) -> anyhow::Result<(String, JujuRequest, Waiti
         JujuCommand::List
         | JujuCommand::Show { .. }
         | JujuCommand::Changes { .. }
+        | JujuCommand::Cancel { .. }
         | JujuCommand::Token { .. } => {
             bail!("reading a controller requests no change")
         }
@@ -333,6 +336,9 @@ pub async fn run(client: &ApiClient, command: JujuCommand, format: OutputFormat)
                 })
                 .collect();
             print_objects(&changes, format)
+        }
+        JujuCommand::Cancel { change } => {
+            crate::step_plans::cancel::<JujuControllerChange>(client, &change, format).await
         }
         JujuCommand::Token { name } => {
             emit_line(client.platform_token::<JujuController>(&name).await?.token)?;

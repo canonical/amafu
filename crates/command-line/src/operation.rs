@@ -3,7 +3,6 @@ use std::time::Duration;
 use amafu_api::ApiClient;
 use amafu_domain::kinds::operation::{Operation, OperationSpecification, VmReference};
 use amafu_domain::kinds::vm::Vm;
-use amafu_domain::step_plan::StepPlan;
 use amafu_domain::{NodeName, Object, ObjectName};
 use anyhow::Context;
 use clap::Subcommand;
@@ -108,13 +107,7 @@ pub async fn run(client: &ApiClient, command: OperationCommand, format: OutputFo
             format,
         ),
         OperationCommand::Cancel { name } => {
-            let cancelled = change(client, &name, |specification| specification.is_cancelled = true).await?;
-            if !cancelled.status.is_finished() && !cancelled.specification.can_stop_now(&cancelled.status) {
-                eprintln!(
-                    "{name} is past a point of no return; it stops at the first later step it can undo or abandon"
-                );
-            }
-            print_objects(&[cancelled], format)
+            crate::step_plans::cancel::<Operation>(client, &name, format).await
         }
         OperationCommand::Delete { name } => {
             print_objects(&[client.delete::<Operation>(&name).await?], format)

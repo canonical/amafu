@@ -88,6 +88,26 @@ pub async fn wait_until_finished<K: Runnable>(
     }
 }
 
+pub async fn cancel<K: Runnable + Tabulated>(
+    client: &ApiClient,
+    name: &str,
+    format: OutputFormat,
+) -> anyhow::Result<()>
+where
+    Object<K>: Serialize,
+{
+    let found = client.get::<K>(name).await?;
+    let mut specification = found.specification;
+    specification.cancel();
+    let cancelled = client.update::<K>(name, &specification, Some(found.metadata.generation)).await?;
+    if !cancelled.status.is_finished() && !cancelled.specification.can_stop_now(&cancelled.status) {
+        eprintln!(
+            "{name} is past a point of no return; it stops at the first later step it can undo or abandon"
+        );
+    }
+    print_objects(&[cancelled], format)
+}
+
 pub async fn submit<K: Runnable + Tabulated>(
     client: &ApiClient,
     name: &ObjectName,

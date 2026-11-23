@@ -110,6 +110,8 @@ pub enum KubernetesCommand {
     Show { name: String },
     #[command(about = "List the changes made to clusters, or to one cluster")]
     Changes { name: Option<String> },
+    #[command(about = "Stop a change, undoing its steps where they can be undone")]
+    Cancel { change: String },
     #[command(about = "Write a kubeconfig that signs in with your Amafu token; it holds no secret")]
     Kubeconfig {
         name: String,
@@ -346,6 +348,9 @@ pub async fn run(client: &ApiClient, command: KubernetesCommand, format: OutputF
                 })
                 .collect();
             print_objects(&changes, format)
+        }
+        KubernetesCommand::Cancel { change } => {
+            crate::step_plans::cancel::<KubernetesClusterChange>(client, &change, format).await
         }
         KubernetesCommand::Kubeconfig { name, file } => write_kubeconfig(client, &name, file).await,
         KubernetesCommand::Token { name } => exec_credential(client, &name).await,
