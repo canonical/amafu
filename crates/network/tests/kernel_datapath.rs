@@ -15,6 +15,8 @@ fn desired() -> Result<NodeNetworkState, Box<dyn std::error::Error>> {
             segment_id: None,
         }],
         ports: vec![Port {
+            guest_pool: Vec::new(),
+            guests: Vec::new(),
             key: PortKey { vm_id: ObjectId::from_uuid(uuid::Uuid::from_u128(7)), index: 0 },
             segment,
             mac: MacAddress::locally_administered(b"contract"),

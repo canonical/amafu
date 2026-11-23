@@ -61,6 +61,8 @@ mod tests {
 
     fn port(octet: u8, rules: Vec<PortRule>) -> Port {
         Port {
+            guest_pool: Vec::new(),
+            guests: Vec::new(),
             key: PortKey { vm_id: ObjectId::from_uuid(uuid::Uuid::from_u128(u128::from(octet))), index: 0 },
             segment: segment(),
             mac: MacAddress::locally_administered(&[octet]),

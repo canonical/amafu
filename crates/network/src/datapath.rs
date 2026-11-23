@@ -3,7 +3,7 @@ use std::net::IpAddr;
 use std::process::Stdio;
 use std::sync::{Mutex, PoisonError};
 
-use amafu_domain::Ipv4Network;
+use amafu_domain::{Ipv4Network, MacAddress};
 use amafu_interfaces::network::bridge_name;
 use amafu_interfaces::{
     ActionError, Datapath, ExternalTool, NodeNetworkState, PortKey, RealizedNetwork, SegmentKey,
@@ -17,7 +17,9 @@ use crate::announcement::announce;
 use crate::floating::{converge_floating_addresses, served_floating_addresses};
 use crate::metadata::METADATA_ADDRESS;
 use crate::nftables::compile_ruleset;
-use crate::overlay::{TUNNEL_PREFIX, ensure_tunnels, programmed_remotes, wanted_tunnel_names};
+use crate::overlay::{
+    TUNNEL_PREFIX, ensure_tunnels, learned_port_index, programmed_remotes, wanted_tunnel_names,
+};
 
 const BRIDGE_PREFIX: &str = "amb";
 const TAP_PREFIX: &str = "amt";
@@ -296,6 +298,28 @@ impl KernelDatapath {
 
 #[async_trait::async_trait]
 impl Datapath for KernelDatapath {
+    async fn learned_port(
+        &self,
+        segment: &SegmentKey,
+        mac: MacAddress,
+    ) -> Result<Option<String>, ActionError> {
+        let (connection, handle, _) = new_connection().map_err(netlink_failure)?;
+        let connection_task = tokio::spawn(connection);
+        let outcome = async {
+            let names = links(&handle).await?;
+            let Some(bridge_index) = names.get(&bridge_name(segment)).copied() else {
+                return Ok(None);
+            };
+            let Some(port_index) = learned_port_index(&handle, bridge_index, mac).await? else {
+                return Ok(None);
+            };
+            Ok(names.into_iter().find(|(_, index)| *index == port_index).map(|(name, _)| name))
+        }
+        .await;
+        connection_task.abort();
+        outcome
+    }
+
     async fn converge(&self, desired: &NodeNetworkState) -> Result<RealizedNetwork, ActionError> {
         tokio::fs::write(FORWARDING, b"1")
             .await

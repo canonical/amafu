@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
-use amafu_domain::Ipv4Network;
 use amafu_domain::kinds::security_group::{Direction, Protocol};
+use amafu_domain::{Ipv4Network, LXD_MAC_PREFIX, MacAddress};
 use amafu_interfaces::network::{PortRule, RemoteAddresses, bridge_name};
 use amafu_interfaces::{NodeNetworkState, Port};
 
@@ -74,6 +74,30 @@ fn port_chains(output: &mut String, port: &Port) {
     output.push_str("\t\tdrop\n\t}\n");
 }
 
+fn set_of<T: std::fmt::Display>(items: impl Iterator<Item = T>) -> String {
+    let items: Vec<String> = items.map(|item| item.to_string()).collect();
+    format!("{{ {} }}", items.join(", "))
+}
+
+fn spoofing_guards(output: &mut String, port: &Port) {
+    let tap = port.key.tap_name();
+    let (macs, addresses) = (set_of(port.macs()), set_of(port.addresses()));
+    if port.hosts_guests() {
+        let prefix = MacAddress::new([LXD_MAC_PREFIX[0], LXD_MAC_PREFIX[1], LXD_MAC_PREFIX[2], 0, 0, 0]);
+        let _ = writeln!(
+            output,
+            "\t\tiifname \"{tap}\" ether saddr & ff:ff:ff:00:00:00 == {prefix} ip saddr 0.0.0.0 udp dport 67 accept"
+        );
+    }
+    let _ = writeln!(output, "\t\tiifname \"{tap}\" ether saddr != {macs} drop");
+    let _ = writeln!(output, "\t\tiifname \"{tap}\" arp saddr ip != {addresses} drop");
+    let _ = writeln!(
+        output,
+        "\t\tiifname \"{tap}\" ether type ip ip saddr != {addresses} ip saddr != 0.0.0.0 drop"
+    );
+    let _ = writeln!(output, "\t\tiifname \"{tap}\" ip saddr 0.0.0.0 udp dport != 67 drop");
+}
+
 fn bridge_table(output: &mut String, state: &NodeNetworkState) {
     let _ = writeln!(output, "table bridge {TABLE} {{");
     for port in &state.ports {
@@ -81,14 +105,7 @@ fn bridge_table(output: &mut String, state: &NodeNetworkState) {
     }
     output.push_str("\tchain prerouting {\n\t\ttype filter hook prerouting priority -200; policy accept;\n");
     for port in &state.ports {
-        let (tap, mac, address) = (port.key.tap_name(), port.mac, port.address);
-        let _ = writeln!(output, "\t\tiifname \"{tap}\" ether saddr != {mac} drop");
-        let _ = writeln!(output, "\t\tiifname \"{tap}\" arp saddr ip != {address} drop");
-        let _ = writeln!(
-            output,
-            "\t\tiifname \"{tap}\" ether type ip ip saddr != {address} ip saddr != 0.0.0.0 drop"
-        );
-        let _ = writeln!(output, "\t\tiifname \"{tap}\" ip saddr 0.0.0.0 udp dport != 67 drop");
+        spoofing_guards(output, port);
     }
     output.push_str("\t}\n\tchain forward {\n\t\ttype filter hook forward priority 0; policy accept;\n");
     output.push_str("\t\tct state established,related accept\n\t\tct state invalid drop\n");
@@ -113,7 +130,7 @@ fn bridge_table(output: &mut String, state: &NodeNetworkState) {
 }
 
 fn port_at(state: &NodeNetworkState, address: std::net::Ipv4Addr) -> Option<&Port> {
-    state.ports.iter().find(|port| port.address == address)
+    state.ports.iter().find(|port| port.addresses().any(|candidate| candidate == address))
 }
 
 fn floating_translation(output: &mut String, state: &NodeNetworkState, hook: &str) {
@@ -172,8 +189,8 @@ fn inet_table(output: &mut String, state: &NodeNetworkState, infrastructure: &[I
         );
     }
     for port in &state.ports {
-        let _ =
-            writeln!(output, "\t\tip saddr {} jump {}", port.address, chain_name(Direction::Egress, port));
+        let addresses = set_of(port.addresses());
+        let _ = writeln!(output, "\t\tip saddr {addresses} jump {}", chain_name(Direction::Egress, port));
     }
     platform_api.accept_through_node(output, BRIDGE_PREFIX);
     for segment in &state.segments {
@@ -242,8 +259,31 @@ mod tests {
     fn every_port_is_bound_to_its_mac_and_address() {
         let ruleset = compile_ruleset(&state(), &[]);
         let tap = PortKey { vm_id: ObjectId::from_uuid(uuid::Uuid::nil()), index: 0 }.tap_name();
-        assert!(ruleset.contains(&format!("iifname \"{tap}\" ether saddr != 02:00:00:00:00:01 drop")));
-        assert!(ruleset.contains(&format!("iifname \"{tap}\" arp saddr ip != 10.1.0.2 drop")));
+        assert!(ruleset.contains(&format!("iifname \"{tap}\" ether saddr != {{ 02:00:00:00:00:01 }} drop")));
+        assert!(ruleset.contains(&format!("iifname \"{tap}\" arp saddr ip != {{ 10.1.0.2 }} drop")));
+        assert!(!ruleset.contains("00:16:3e"));
+    }
+
+    #[test]
+    fn a_port_hosting_guests_admits_their_requests_and_their_leased_addresses() {
+        let mut hosting = state();
+        hosting.ports[0].guest_pool = vec!["10.1.0.10".parse().unwrap()];
+        hosting.ports[0].guests = vec![amafu_interfaces::LeasedGuest {
+            mac: MacAddress::new([0x00, 0x16, 0x3e, 0, 0, 1]),
+            address: "10.1.0.10".parse().unwrap(),
+        }];
+        let ruleset = compile_ruleset(&hosting, &[]);
+        let tap = PortKey { vm_id: ObjectId::from_uuid(uuid::Uuid::nil()), index: 0 }.tap_name();
+        let admission = format!(
+            "iifname \"{tap}\" ether saddr & ff:ff:ff:00:00:00 == 00:16:3e:00:00:00 ip saddr 0.0.0.0 udp dport 67 accept"
+        );
+        let guard =
+            format!("iifname \"{tap}\" ether saddr != {{ 02:00:00:00:00:01, 00:16:3e:00:00:01 }} drop");
+        assert!(ruleset.find(&admission).unwrap() < ruleset.find(&guard).unwrap());
+        assert!(
+            ruleset.contains(&format!("iifname \"{tap}\" arp saddr ip != {{ 10.1.0.2, 10.1.0.10 }} drop"))
+        );
+        assert!(ruleset.contains("ip saddr { 10.1.0.2, 10.1.0.10 } jump from_"));
     }
 
     #[test]

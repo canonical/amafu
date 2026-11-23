@@ -108,6 +108,32 @@ fn link_layer_address(message: &NeighbourMessage) -> Option<MacAddress> {
     })
 }
 
+fn is_learned_on(message: &NeighbourMessage, bridge_index: u32) -> bool {
+    message
+        .attributes
+        .iter()
+        .any(|attribute| matches!(attribute, NeighbourAttribute::Controller(index) if *index == bridge_index))
+}
+
+pub async fn learned_port_index(
+    handle: &Handle,
+    bridge_index: u32,
+    mac: MacAddress,
+) -> Result<Option<u32>, ActionError> {
+    let messages: Vec<NeighbourMessage> = handle
+        .neighbours()
+        .get()
+        .set_address_family(AddressFamily::Bridge)
+        .execute()
+        .try_collect()
+        .await
+        .map_err(netlink_failure)?;
+    Ok(messages
+        .iter()
+        .find(|message| is_learned_on(message, bridge_index) && link_layer_address(message) == Some(mac))
+        .map(|message| message.header.ifindex))
+}
+
 fn destination(message: &NeighbourMessage) -> Option<Ipv4Addr> {
     message.attributes.iter().find_map(|attribute| match attribute {
         NeighbourAttribute::Destination(NeighbourAddress::Inet(address)) => Some(*address),

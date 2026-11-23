@@ -1,7 +1,7 @@
 use std::net::Ipv4Addr;
 
 use amafu_domain::MacAddress;
-use amafu_interfaces::{NodeNetworkState, SegmentKey};
+use amafu_interfaces::{GuestSighting, NodeNetworkState, SegmentKey};
 
 const FIXED_HEADER_BYTES: usize = 236;
 const MAGIC_COOKIE: [u8; 4] = [99, 130, 83, 99];
@@ -247,13 +247,37 @@ fn reply(
 }
 
 #[must_use]
+struct Client<'a> {
+    address: Ipv4Addr,
+    hostname: Option<&'a str>,
+}
+
+fn client<'a>(state: &'a NodeNetworkState, segment: &SegmentKey, mac: MacAddress) -> Option<Client<'a>> {
+    let mut ports = state.ports.iter().filter(|port| &port.segment == segment);
+    ports.find_map(|port| {
+        if port.mac == mac {
+            return Some(Client { address: port.address, hostname: Some(port.hostname.as_str()) });
+        }
+        port.guests
+            .iter()
+            .find(|guest| guest.mac == mac)
+            .map(|guest| Client { address: guest.address, hostname: None })
+    })
+}
+
+#[must_use]
+pub fn guest_sighting(request: &DhcpMessage, segment: &SegmentKey) -> Option<GuestSighting> {
+    let mac = request.hardware_address;
+    (!request.is_reply && mac.is_lxd_generated()).then(|| GuestSighting { segment: segment.clone(), mac })
+}
+
+#[must_use]
 pub fn answer(request: &DhcpMessage, segment: &SegmentKey, state: &NodeNetworkState) -> Option<DhcpMessage> {
     if request.is_reply {
         return None;
     }
     let network = state.segment(segment)?;
-    let port =
-        state.ports.iter().find(|port| &port.segment == segment && port.mac == request.hardware_address)?;
+    let client = client(state, segment, request.hardware_address)?;
     let gateway = network.gateway();
     if request.server_identifier.is_some_and(|server| server != gateway) {
         return None;
@@ -264,22 +288,26 @@ pub fn answer(request: &DhcpMessage, segment: &SegmentKey, state: &NodeNetworkSt
         (OPTION_ROUTER, gateway.octets().to_vec()),
         (OPTION_DNS_SERVERS, gateway.octets().to_vec()),
         (OPTION_DOMAIN_NAME, network.domain.as_bytes().to_vec()),
-        (OPTION_HOSTNAME, port.hostname.as_bytes().to_vec()),
         (
             OPTION_INTERFACE_MTU,
             if network.segment_id.is_some() { OVERLAY_MTU } else { MTU }.to_be_bytes().to_vec(),
         ),
     ];
+    if let Some(hostname) = client.hostname {
+        options.push((OPTION_HOSTNAME, hostname.as_bytes().to_vec()));
+    }
     let with_lease = |mut options: Vec<(u8, Vec<u8>)>| {
         options.push((OPTION_LEASE_TIME, LEASE_SECONDS.to_be_bytes().to_vec()));
         options
     };
     match request.message_type {
-        MessageType::Discover => Some(reply(request, MessageType::Offer, port.address, with_lease(options))),
+        MessageType::Discover => {
+            Some(reply(request, MessageType::Offer, client.address, with_lease(options)))
+        }
         MessageType::Request => {
             let wanted = request.requested_address.unwrap_or(request.client_address);
-            if wanted == port.address {
-                Some(reply(request, MessageType::Acknowledge, port.address, with_lease(options)))
+            if wanted == client.address {
+                Some(reply(request, MessageType::Acknowledge, client.address, with_lease(options)))
             } else {
                 options.truncate(1);
                 Some(reply(request, MessageType::NegativeAcknowledge, Ipv4Addr::UNSPECIFIED, options))
@@ -318,6 +346,8 @@ pub mod tests {
                 segment_id: None,
             }],
             ports: vec![Port {
+                guest_pool: Vec::new(),
+                guests: Vec::new(),
                 key: PortKey { vm_id: ObjectId::from_uuid(uuid::Uuid::nil()), index: 0 },
                 segment: segment(),
                 mac: "02:00:00:00:00:01".parse().unwrap(),
@@ -363,6 +393,27 @@ pub mod tests {
         bytes.extend_from_slice(&address.octets());
         bytes.push(OPTION_END);
         bytes
+    }
+
+    #[test]
+    fn a_leased_guest_is_offered_its_address_and_only_lxd_guests_are_sighted() {
+        let mut hosting = state();
+        hosting.ports[0].guests = vec![amafu_interfaces::LeasedGuest {
+            mac: "00:16:3e:00:00:01".parse().unwrap(),
+            address: Ipv4Addr::new(10, 1, 0, 10),
+        }];
+        let discover = request(MessageType::Discover, "00:16:3e:00:00:01", None);
+        let offer = answer(&discover, &segment(), &hosting).unwrap();
+        assert_eq!(offer.your_address, Ipv4Addr::new(10, 1, 0, 10));
+        assert!(!offer.options.iter().any(|(code, _)| *code == OPTION_HOSTNAME));
+        assert!(
+            answer(&request(MessageType::Discover, "00:16:3e:00:00:02", None), &segment(), &hosting)
+                .is_none()
+        );
+        assert!(guest_sighting(&discover, &segment()).is_some());
+        assert!(
+            guest_sighting(&request(MessageType::Discover, "02:00:00:00:00:09", None), &segment()).is_none()
+        );
     }
 
     #[test]

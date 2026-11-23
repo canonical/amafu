@@ -1,10 +1,10 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::sync::{Arc, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::Duration;
 
 use amafu_interfaces::network::bridge_name;
-use amafu_interfaces::{LocalServices, NodeNetworkState, SegmentKey};
+use amafu_interfaces::{GuestSighting, LocalServices, NodeNetworkState, SegmentKey};
 use axum::extract::{ConnectInfo, State};
 use axum::http::{StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
@@ -24,9 +24,11 @@ const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(2);
 const RETRY_DELAY: Duration = Duration::from_secs(1);
 
 type SharedState = Arc<RwLock<NodeNetworkState>>;
+type Sightings = Arc<Mutex<BTreeSet<GuestSighting>>>;
 
 pub struct LocalServicesServer {
     state: SharedState,
+    sightings: Sightings,
     upstream_resolvers: Vec<SocketAddr>,
     listeners: std::sync::Mutex<BTreeMap<SegmentKey, Vec<JoinHandle<()>>>>,
     runtime: tokio::runtime::Handle,
@@ -49,7 +51,7 @@ fn udp_socket(address: SocketAddrV4, device: Option<&str>, is_broadcast: bool) -
     UdpSocket::from_std(socket.into())
 }
 
-async fn serve_dhcp(segment: SegmentKey, state: SharedState) {
+async fn serve_dhcp(segment: SegmentKey, state: SharedState, sightings: Sightings) {
     let bridge = bridge_name(&segment);
     let address = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, DHCP_SERVER_PORT);
     let socket = loop {
@@ -70,6 +72,9 @@ async fn serve_dhcp(segment: SegmentKey, state: SharedState) {
         let Ok(request) = dhcp::DhcpMessage::parse(&buffer[..length]) else {
             continue;
         };
+        if let Some(sighting) = dhcp::guest_sighting(&request, &segment) {
+            sightings.lock().unwrap_or_else(PoisonError::into_inner).insert(sighting);
+        }
         if let Some(reply) = dhcp::answer(&request, &segment, &read(&state)) {
             let _ = socket.send_to(&reply.encode(), broadcast).await;
         }
@@ -182,6 +187,7 @@ impl LocalServicesServer {
         runtime.spawn(serve_metadata(Arc::clone(&state)));
         Self {
             state,
+            sightings: Sightings::default(),
             upstream_resolvers: upstream_resolvers
                 .into_iter()
                 .map(|address| SocketAddr::V4(SocketAddrV4::new(address, DNS_PORT)))
@@ -212,7 +218,11 @@ impl LocalServices for LocalServicesServer {
         for segment in &state.segments {
             listeners.entry(segment.key.clone()).or_insert_with(|| {
                 vec![
-                    self.runtime.spawn(serve_dhcp(segment.key.clone(), Arc::clone(&self.state))),
+                    self.runtime.spawn(serve_dhcp(
+                        segment.key.clone(),
+                        Arc::clone(&self.state),
+                        Arc::clone(&self.sightings),
+                    )),
                     self.runtime.spawn(serve_dns(
                         segment.key.clone(),
                         segment.gateway(),
@@ -222,5 +232,11 @@ impl LocalServices for LocalServicesServer {
                 ]
             });
         }
+    }
+
+    fn take_guest_sightings(&self) -> Vec<GuestSighting> {
+        std::mem::take(&mut *self.sightings.lock().unwrap_or_else(PoisonError::into_inner))
+            .into_iter()
+            .collect()
     }
 }
