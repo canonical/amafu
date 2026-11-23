@@ -72,7 +72,7 @@ impl<'s> Pods<'s> {
         Ok(self.machine(index)?.vm().await?.is_some())
     }
 
-    pub fn address_reference(&self) -> Result<ObjectReference, ActionError> {
+    fn address_reference(&self) -> Result<ObjectReference, ActionError> {
         Ok(self.scope.ownership.reference::<FloatingIp>(self.scope.named(LXD_ADDRESS)?))
     }
 
@@ -85,10 +85,9 @@ impl<'s> Pods<'s> {
     }
 
     async fn founder(&self) -> Result<Option<LxdEndpoint>, ActionError> {
-        let address = self.scope.objects().read::<FloatingIp>(&self.address_reference()?).await?;
-        let Some(address) =
-            address.and_then(|address| address.status.binding.map(|_| address.status.address)).flatten()
-        else {
+        let floating = self.scope.objects().read::<FloatingIp>(&self.address_reference()?).await?;
+        let bound = floating.filter(|floating| floating.status.binding.is_some());
+        let Some(address) = bound.and_then(|floating| floating.status.address) else {
             return Ok(None);
         };
         let identity = self.identity().await?;
