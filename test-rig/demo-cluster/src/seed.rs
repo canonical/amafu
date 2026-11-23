@@ -504,8 +504,7 @@ async fn seed_guests(store: &dyn Store, project: &str) -> anyhow::Result<()> {
     let vm = amafu_interfaces::objects::get::<Vm>(store, &host, amafu_interfaces::Consistency::Linearizable)
         .await?
         .ok_or_else(|| anyhow::anyhow!("web-1 is missing"))?;
-    let instance =
-        |name: &str, kind: &str, status: &str| json!({"name": name, "kind": kind, "status": status});
+    let instance = |name: &str, kind: &str, status: &str, address: Option<&str>| json!({"name": name, "kind": kind, "status": status, "addresses": address.into_iter().collect::<Vec<_>>()});
     put::<GuestInventory>(
         store,
         Some(project),
@@ -514,9 +513,9 @@ async fn seed_guests(store: &dyn Store, project: &str) -> anyhow::Result<()> {
             "vm_id": vm.metadata.id,
             "node": "node-1",
             "lxd": {"access": "trusted", "server": "web-1", "instances": [
-                instance("cache", "container", "Running"),
-                instance("proxy", "container", "Running"),
-                instance("sandbox", "virtual-machine", "Stopped"),
+                instance("cache", "container", "Running", Some("10.0.0.21")),
+                instance("proxy", "container", "Running", Some("10.0.0.22")),
+                instance("sandbox", "virtual-machine", "Stopped", None),
             ]},
             "changed_at": now(),
         }),

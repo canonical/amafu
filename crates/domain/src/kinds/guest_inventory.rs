@@ -1,3 +1,5 @@
+use std::net::Ipv4Addr;
+
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -37,6 +39,10 @@ pub struct GuestInstance {
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub location: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub addresses: Vec<Ipv4Addr>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_juju_controller: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

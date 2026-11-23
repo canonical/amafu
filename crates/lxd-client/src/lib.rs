@@ -1,3 +1,4 @@
+use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use amafu_domain::kinds::guest_inventory::{GuestInstance, GuestInstanceKind, LxdAccess};
@@ -8,6 +9,7 @@ use serde_json::Value;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const TRUSTED: &str = "trusted";
+const JUJU_CONTROLLER_KEY: &str = "user.juju-is-controller";
 const OPERATION_WAIT_SECONDS: u32 = 120;
 const STORAGE_POOL: &str = "default";
 
@@ -104,6 +106,19 @@ fn instance_kind(text: &str) -> GuestInstanceKind {
     if text == "virtual-machine" { GuestInstanceKind::VirtualMachine } else { GuestInstanceKind::Container }
 }
 
+fn addresses(state: &Value) -> Vec<Ipv4Addr> {
+    let mut found: Vec<Ipv4Addr> = state["network"]
+        .as_object()
+        .into_iter()
+        .flat_map(|interfaces| interfaces.values())
+        .flat_map(|interface| interface["addresses"].as_array().into_iter().flatten())
+        .filter(|address| address["family"] == "inet" && address["scope"] == "global")
+        .filter_map(|address| address["address"].as_str()?.parse().ok())
+        .collect();
+    found.sort();
+    found
+}
+
 fn instances(document: &Value) -> Vec<GuestInstance> {
     let mut instances: Vec<GuestInstance> = document["metadata"]
         .as_array()
@@ -118,6 +133,8 @@ fn instances(document: &Value) -> Vec<GuestInstance> {
                     .as_str()
                     .filter(|location| !location.is_empty())
                     .map(str::to_owned),
+                addresses: addresses(&instance["state"]),
+                is_juju_controller: instance["config"][JUJU_CONTROLLER_KEY].as_str() == Some("true"),
             })
         })
         .collect();
@@ -147,7 +164,7 @@ impl LxdPlatform for HttpsLxd {
             return Ok(Some(LxdAccess::Untrusted));
         };
         let listing = connection
-            .get("/1.0/instances?recursion=1&all-projects=true")
+            .get("/1.0/instances?recursion=2&all-projects=true")
             .await
             .map_err(ActionError::retryable)?;
         let hosted = hosted_by(instances(&listing), &server, is_clustered);
@@ -239,6 +256,8 @@ mod tests {
     #[test]
     fn a_cluster_member_keeps_only_the_instances_it_runs() {
         let instance = |name: &str, location: &str| GuestInstance {
+            addresses: Vec::new(),
+            is_juju_controller: false,
             name: String::from(name),
             kind: GuestInstanceKind::Container,
             status: String::from("Running"),
@@ -250,10 +269,18 @@ mod tests {
     }
 
     #[test]
-    fn instances_keep_their_kind_status_and_member() {
+    fn instances_keep_their_kind_status_member_and_global_addresses() {
         let listing = json!({"metadata": [
-            {"name": "juju-2a3b-1", "type": "virtual-machine", "status": "Running", "location": "pod-1"},
-            {"name": "juju-2a3b-0", "type": "container", "status": "Stopped", "location": ""},
+            {"name": "juju-2a3b-1", "type": "virtual-machine", "status": "Running", "location": "pod-1",
+             "config": {"user.juju-is-controller": "true"},
+             "state": {"network": {
+                "eth0": {"addresses": [
+                    {"family": "inet", "address": "10.70.0.4", "scope": "global"},
+                    {"family": "inet6", "address": "fe80::1", "scope": "link"},
+                ]},
+                "lo": {"addresses": [{"family": "inet", "address": "127.0.0.1", "scope": "local"}]},
+             }}},
+            {"name": "juju-2a3b-0", "type": "container", "status": "Stopped", "location": "", "state": null},
         ]});
         assert_eq!(
             instances(&listing),
@@ -263,12 +290,16 @@ mod tests {
                     kind: GuestInstanceKind::Container,
                     status: String::from("Stopped"),
                     location: None,
+                    addresses: Vec::new(),
+                    is_juju_controller: false,
                 },
                 GuestInstance {
                     name: String::from("juju-2a3b-1"),
                     kind: GuestInstanceKind::VirtualMachine,
                     status: String::from("Running"),
                     location: Some(String::from("pod-1")),
+                    addresses: vec![Ipv4Addr::new(10, 70, 0, 4)],
+                    is_juju_controller: true,
                 },
             ]
         );

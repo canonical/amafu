@@ -28,12 +28,14 @@ fn kind_label(kind: GuestInstanceKind) -> &'static str {
 }
 
 fn guest_table(instances: &[GuestInstance]) -> String {
-    let mut table = Table::new(vec!["NAME", "TYPE", "STATUS", "MEMBER"]);
+    let mut table = Table::new(vec!["NAME", "TYPE", "STATUS", "ADDRESSES", "MEMBER"]);
     for instance in instances {
+        let addresses: Vec<String> = instance.addresses.iter().map(ToString::to_string).collect();
         table.add(vec![
             instance.name.clone(),
             String::from(kind_label(instance.kind)),
             instance.status.clone(),
+            if addresses.is_empty() { String::from("-") } else { addresses.join(",") },
             instance.location.clone().unwrap_or_else(|| String::from("-")),
         ]);
     }

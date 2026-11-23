@@ -207,6 +207,8 @@ mod tests {
             server: String::from("pod-0"),
             is_clustered: true,
             instances: vec![GuestInstance {
+                addresses: Vec::new(),
+                is_juju_controller: false,
                 name: String::from("juju-1a2b-0"),
                 kind: GuestInstanceKind::Container,
                 status: String::from(status),
