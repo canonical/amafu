@@ -2,7 +2,7 @@ use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use amafu_domain::kinds::guest_inventory::{GuestInstance, GuestInstanceKind, LxdAccess};
-use amafu_interfaces::{ActionError, ClusterInvitation, ClusterJoin, LXD_PORT, LxdEndpoint, LxdPlatform};
+use amafu_interfaces::{ActionError, LXD_PORT, LxdEndpoint, LxdPlatform};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use serde_json::Value;
@@ -11,7 +11,6 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const TRUSTED: &str = "trusted";
 const JUJU_CONTROLLER_KEY: &str = "user.juju-is-controller";
 const OPERATION_WAIT_SECONDS: u32 = 120;
-const STORAGE_POOL: &str = "default";
 
 pub struct HttpsLxd {
     timeout: Duration,
@@ -194,31 +193,17 @@ impl LxdPlatform for HttpsLxd {
         connection.finish(&started).await
     }
 
-    async fn invite(&self, endpoint: &LxdEndpoint, member: &str) -> Result<ClusterInvitation, ActionError> {
+    async fn invite(&self, endpoint: &LxdEndpoint, member: &str) -> Result<String, ActionError> {
         let connection = Connection::open(endpoint, self.timeout)?;
         let body = serde_json::json!({"server_name": member});
         let started = connection.send(reqwest::Method::POST, "/1.0/cluster/members", &body).await?;
-        let token = join_token(&started["metadata"]["metadata"])?;
-        let server = connection.get("/1.0").await.map_err(ActionError::retryable)?;
-        let cluster_certificate = server["metadata"]["environment"]["certificate"]
-            .as_str()
-            .ok_or_else(|| ActionError::retryable("LXD did not report its certificate"))?
-            .to_owned();
-        Ok(ClusterInvitation { token, cluster_address: endpoint.address, cluster_certificate })
+        join_token(&started["metadata"]["metadata"])
     }
 
-    async fn join(&self, endpoint: &LxdEndpoint, join: &ClusterJoin) -> Result<(), ActionError> {
+    async fn remove_member(&self, endpoint: &LxdEndpoint, member: &str) -> Result<(), ActionError> {
         let connection = Connection::open(endpoint, self.timeout)?;
-        let body = serde_json::json!({
-            "server_name": join.server_name,
-            "server_address": format!("{}:{LXD_PORT}", join.server_address),
-            "cluster_address": format!("{}:{LXD_PORT}", join.invitation.cluster_address),
-            "cluster_certificate": join.invitation.cluster_certificate,
-            "cluster_token": join.invitation.token,
-            "enabled": true,
-            "member_config": [{"entity": "storage-pool", "name": STORAGE_POOL, "key": "source", "value": ""}],
-        });
-        let started = connection.send(reqwest::Method::PUT, "/1.0/cluster", &body).await?;
+        let path = format!("/1.0/cluster/members/{member}");
+        let started = connection.send(reqwest::Method::DELETE, &path, &Value::Null).await?;
         connection.finish(&started).await
     }
 }

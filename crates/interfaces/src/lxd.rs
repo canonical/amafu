@@ -13,20 +13,6 @@ pub struct LxdEndpoint {
     pub private_key_pem: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClusterInvitation {
-    pub token: String,
-    pub cluster_address: Ipv4Addr,
-    pub cluster_certificate: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClusterJoin {
-    pub server_name: String,
-    pub server_address: Ipv4Addr,
-    pub invitation: ClusterInvitation,
-}
-
 #[async_trait::async_trait]
 pub trait LxdPlatform: Send + Sync {
     async fn inspect(&self, endpoint: &LxdEndpoint) -> Result<Option<LxdAccess>, ActionError>;
@@ -35,7 +21,7 @@ pub trait LxdPlatform: Send + Sync {
 
     async fn enable_clustering(&self, endpoint: &LxdEndpoint, server_name: &str) -> Result<(), ActionError>;
 
-    async fn invite(&self, endpoint: &LxdEndpoint, member: &str) -> Result<ClusterInvitation, ActionError>;
+    async fn invite(&self, endpoint: &LxdEndpoint, member: &str) -> Result<String, ActionError>;
 
-    async fn join(&self, endpoint: &LxdEndpoint, join: &ClusterJoin) -> Result<(), ActionError>;
+    async fn remove_member(&self, endpoint: &LxdEndpoint, member: &str) -> Result<(), ActionError>;
 }

@@ -3,7 +3,7 @@ use std::net::Ipv4Addr;
 use std::sync::Mutex;
 
 use amafu_domain::kinds::guest_inventory::LxdAccess;
-use amafu_interfaces::{ActionError, ClusterInvitation, ClusterJoin, LxdEndpoint, LxdPlatform};
+use amafu_interfaces::{ActionError, LxdEndpoint, LxdPlatform};
 
 use crate::lock::lock;
 
@@ -33,6 +33,19 @@ impl FakeLxd {
     pub fn stop(&self, address: Ipv4Addr) {
         lock(&self.state).servers.remove(&address);
     }
+
+    pub fn join(&self, address: Ipv4Addr, server_name: &str, token: &str) -> bool {
+        let mut state = lock(&self.state);
+        let Some(founder) = state.tokens.remove(token) else {
+            return false;
+        };
+        state.cluster_of.insert(address, founder);
+        let members = state.members.entry(founder).or_default();
+        if !members.iter().any(|member| member == server_name) {
+            members.push(server_name.to_owned());
+        }
+        true
+    }
 }
 
 #[async_trait::async_trait]
@@ -56,7 +69,7 @@ impl LxdPlatform for FakeLxd {
         Ok(())
     }
 
-    async fn invite(&self, endpoint: &LxdEndpoint, member: &str) -> Result<ClusterInvitation, ActionError> {
+    async fn invite(&self, endpoint: &LxdEndpoint, member: &str) -> Result<String, ActionError> {
         let mut state = lock(&self.state);
         let founder = *state
             .cluster_of
@@ -64,23 +77,13 @@ impl LxdPlatform for FakeLxd {
             .ok_or_else(|| ActionError::retryable("not clustered"))?;
         let token = format!("token-for-{member}");
         state.tokens.insert(token.clone(), founder);
-        Ok(ClusterInvitation {
-            token,
-            cluster_address: endpoint.address,
-            cluster_certificate: String::from("founder"),
-        })
+        Ok(token)
     }
 
-    async fn join(&self, endpoint: &LxdEndpoint, join: &ClusterJoin) -> Result<(), ActionError> {
+    async fn remove_member(&self, endpoint: &LxdEndpoint, member: &str) -> Result<(), ActionError> {
         let mut state = lock(&self.state);
-        let founder = *state
-            .tokens
-            .get(&join.invitation.token)
-            .ok_or_else(|| ActionError::retryable("unknown join token"))?;
-        state.cluster_of.insert(endpoint.address, founder);
-        let members = state.members.entry(founder).or_default();
-        if !members.contains(&join.server_name) {
-            members.push(join.server_name.clone());
+        if let Some(founder) = state.cluster_of.get(&endpoint.address).copied() {
+            state.members.entry(founder).or_default().retain(|known| known != member);
         }
         Ok(())
     }
