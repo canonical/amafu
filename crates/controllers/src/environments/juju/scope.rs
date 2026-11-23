@@ -4,8 +4,8 @@ use std::net::Ipv4Addr;
 use amafu_domain::kinds::environment_secret::{EnvironmentSecret, EnvironmentSecretSpecification};
 use amafu_domain::kinds::floating_ip::FloatingIp;
 use amafu_domain::kinds::juju_controller::{
-    JujuController, JujuControllerChange, JujuControllerSpecification, JujuControllerStatus, JujuRequest,
-    Substrate,
+    JujuController, JujuControllerChange, JujuControllerSpecification, JujuControllerStatus, JujuModelStatus,
+    JujuRequest, Substrate,
 };
 use amafu_domain::kinds::kubernetes_cluster::KubernetesCluster;
 use amafu_domain::labels::{JUJU_APPLICATION, JUJU_CONTROLLER, JUJU_MACHINE, JUJU_MODEL};
@@ -14,7 +14,7 @@ use amafu_domain::{Object, ObjectName, ObjectReference};
 use amafu_interfaces::{ActionError, JujuCredentials, JujuEndpoint, KubernetesEndpoint};
 use amafu_reconciler::OperationContext;
 use amafu_token_issuer::Claims;
-use serde_json::json;
+use serde_json::{Value, json};
 use time::Duration;
 
 use super::JujuEnvironment;
@@ -34,6 +34,17 @@ pub const ADMIN_USER: &str = "admin";
 
 const SERVICE_TOKEN_LIFETIME: Duration = Duration::minutes(5);
 const UNKNOWN_AUDIENCE: &str = "juju";
+
+fn service_access(controller: Option<&str>, models: &[JujuModelStatus]) -> Value {
+    let mut access = serde_json::Map::new();
+    if let Some(controller) = controller {
+        access.insert(format!("controller-{controller}"), json!("superuser"));
+    }
+    for model in models {
+        access.insert(format!("model-{}", model.uuid), json!("admin"));
+    }
+    Value::Object(access)
+}
 
 pub type ChangeContext<'a> = OperationContext<'a, JujuControllerChange>;
 
@@ -156,17 +167,17 @@ impl<'a> ControllerScope<'a> {
             (None, Some(password)) => {
                 JujuCredentials::Password { user: String::from(ADMIN_USER), password: password.to_owned() }
             }
-            (uuid, _) => JujuCredentials::Token(self.service_token(uuid).await?),
+            (uuid, _) => JujuCredentials::Token(self.service_token(uuid, &controller.status.models).await?),
         };
         Ok(JujuEndpoint { address, certificate_authority, credentials })
     }
 
-    async fn service_token(&self, uuid: Option<&str>) -> Result<String, ActionError> {
+    async fn service_token(
+        &self,
+        uuid: Option<&str>,
+        models: &[JujuModelStatus],
+    ) -> Result<String, ActionError> {
         let now = self.context.clock.now();
-        let mut access = serde_json::Map::new();
-        if let Some(uuid) = uuid {
-            access.insert(format!("controller-{uuid}"), json!("superuser"));
-        }
         let claims = Claims::new(
             ISSUER,
             &juju_user(SERVICE_SUBJECT),
@@ -174,7 +185,7 @@ impl<'a> ControllerScope<'a> {
             now,
             SERVICE_TOKEN_LIFETIME,
         )
-        .with("access", serde_json::Value::Object(access));
+        .with("access", service_access(uuid, models));
         Ok(self.environment.keyring.sign(&claims, now).await.map_err(ActionError::retryable)?.token)
     }
 
@@ -248,5 +259,21 @@ pub fn substrate_network(
         Substrate::Kubernetes { .. } => {
             Err(ActionError::fatal("a controller on Kubernetes has no machines of its own"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_service_token_grants_the_controller_and_every_known_model() {
+        let models =
+            [JujuModelStatus { name: ObjectName::new("default").unwrap(), uuid: String::from("m1") }];
+        assert_eq!(
+            service_access(Some("c1"), &models),
+            json!({"controller-c1": "superuser", "model-m1": "admin"})
+        );
+        assert_eq!(service_access(None, &[]), json!({}));
     }
 }
