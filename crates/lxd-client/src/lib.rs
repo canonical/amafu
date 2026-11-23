@@ -1,11 +1,15 @@
 use std::time::Duration;
 
 use amafu_domain::kinds::guest_inventory::{GuestInstance, GuestInstanceKind, LxdAccess};
-use amafu_interfaces::{ActionError, LXD_PORT, LxdEndpoint, LxdPlatform};
+use amafu_interfaces::{ActionError, ClusterJoin, LXD_PORT, LxdEndpoint, LxdPlatform};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
 use serde_json::Value;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const TRUSTED: &str = "trusted";
+const OPERATION_WAIT_SECONDS: u32 = 120;
+const STORAGE_POOL: &str = "default";
 
 pub struct HttpsLxd {
     timeout: Duration,
@@ -36,6 +40,50 @@ impl Connection {
     async fn get(&self, path: &str) -> Result<Value, reqwest::Error> {
         self.client.get(format!("{}{path}", self.base)).send().await?.error_for_status()?.json().await
     }
+
+    async fn send(&self, method: reqwest::Method, path: &str, body: &Value) -> Result<Value, ActionError> {
+        let response = self
+            .client
+            .request(method, format!("{}{path}", self.base))
+            .json(body)
+            .send()
+            .await
+            .map_err(ActionError::retryable)?;
+        let document: Value = response.json().await.map_err(ActionError::retryable)?;
+        refusal(&document).map_or(Ok(document), |error| Err(ActionError::retryable(error)))
+    }
+
+    async fn finish(&self, started: &Value) -> Result<(), ActionError> {
+        let Some(operation) = started["operation"].as_str().filter(|operation| !operation.is_empty()) else {
+            return Ok(());
+        };
+        let finished = self.get(&format!("{operation}/wait?timeout={OPERATION_WAIT_SECONDS}")).await;
+        let finished = finished.map_err(ActionError::retryable)?;
+        match finished["metadata"]["err"].as_str().filter(|error| !error.is_empty()) {
+            Some(error) => Err(ActionError::retryable(format!("LXD: {error}"))),
+            None => Ok(()),
+        }
+    }
+}
+
+fn refusal(document: &Value) -> Option<String> {
+    (document["type"].as_str() == Some("error"))
+        .then(|| format!("LXD: {}", document["error"].as_str().unwrap_or("refused")))
+}
+
+fn join_token(metadata: &Value) -> Result<String, ActionError> {
+    let field = |name: &str| metadata[name].clone();
+    let token = serde_json::json!({
+        "server_name": field("serverName"),
+        "fingerprint": field("fingerprint"),
+        "addresses": field("addresses"),
+        "secret": field("secret"),
+        "expires_at": field("expiresAt"),
+    });
+    if token.as_object().is_some_and(|fields| fields.values().any(Value::is_null)) {
+        return Err(ActionError::retryable("LXD returned an incomplete join token"));
+    }
+    Ok(STANDARD.encode(token.to_string()))
 }
 
 fn is_absence(error: &reqwest::Error) -> bool {
@@ -105,6 +153,49 @@ impl LxdPlatform for HttpsLxd {
         let hosted = hosted_by(instances(&listing), &server, is_clustered);
         Ok(Some(LxdAccess::Trusted { server, is_clustered, instances: hosted }))
     }
+
+    async fn members(&self, endpoint: &LxdEndpoint) -> Result<Vec<String>, ActionError> {
+        let connection = Connection::open(endpoint, self.timeout)?;
+        let cluster = connection.get("/1.0/cluster").await.map_err(ActionError::retryable)?;
+        if cluster["metadata"]["enabled"].as_bool() != Some(true) {
+            return Ok(Vec::new());
+        }
+        let listing =
+            connection.get("/1.0/cluster/members?recursion=1").await.map_err(ActionError::retryable)?;
+        Ok(listing["metadata"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|member| member["server_name"].as_str().map(str::to_owned))
+            .collect())
+    }
+
+    async fn enable_clustering(&self, endpoint: &LxdEndpoint, server_name: &str) -> Result<(), ActionError> {
+        let connection = Connection::open(endpoint, self.timeout)?;
+        let body = serde_json::json!({"server_name": server_name, "enabled": true});
+        let started = connection.send(reqwest::Method::PUT, "/1.0/cluster", &body).await?;
+        connection.finish(&started).await
+    }
+
+    async fn join_token(&self, endpoint: &LxdEndpoint, member: &str) -> Result<String, ActionError> {
+        let connection = Connection::open(endpoint, self.timeout)?;
+        let body = serde_json::json!({"server_name": member});
+        let started = connection.send(reqwest::Method::POST, "/1.0/cluster/members", &body).await?;
+        join_token(&started["metadata"]["metadata"])
+    }
+
+    async fn join(&self, endpoint: &LxdEndpoint, join: &ClusterJoin) -> Result<(), ActionError> {
+        let connection = Connection::open(endpoint, self.timeout)?;
+        let body = serde_json::json!({
+            "server_name": join.server_name,
+            "server_address": format!("{}:{LXD_PORT}", join.server_address),
+            "cluster_token": join.token,
+            "enabled": true,
+            "member_config": [{"entity": "storage-pool", "name": STORAGE_POOL, "key": "source", "value": ""}],
+        });
+        let started = connection.send(reqwest::Method::PUT, "/1.0/cluster", &body).await?;
+        connection.finish(&started).await
+    }
 }
 
 #[cfg(test)]
@@ -119,6 +210,22 @@ mod tests {
         assert_eq!(server(&untrusted), None);
         let trusted = json!({"metadata": {"auth": "trusted", "environment": {"server_name": "pod-0", "server_clustered": true}}});
         assert_eq!(server(&trusted), Some((String::from("pod-0"), true)));
+    }
+
+    #[test]
+    fn a_join_token_is_the_base64_of_what_lxd_reports() {
+        let metadata = json!({
+            "serverName": "pod-1",
+            "fingerprint": "abc",
+            "addresses": ["10.70.0.2:8443"],
+            "secret": "s3cret",
+            "expiresAt": "2026-11-24T00:00:00Z",
+        });
+        let decoded = STANDARD.decode(join_token(&metadata).unwrap()).unwrap();
+        let token: Value = serde_json::from_slice(&decoded).unwrap();
+        assert_eq!(token["server_name"], "pod-1");
+        assert_eq!(token["addresses"], json!(["10.70.0.2:8443"]));
+        assert!(join_token(&json!({"serverName": "pod-1"})).is_err());
     }
 
     #[test]

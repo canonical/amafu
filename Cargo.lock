@@ -413,6 +413,7 @@ dependencies = [
  "amafu-domain",
  "amafu-interfaces",
  "async-trait",
+ "base64",
  "reqwest",
  "serde_json",
 ]
