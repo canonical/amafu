@@ -45,6 +45,19 @@ impl WebSocketJuju {
     }
 }
 
+fn deploy_request(charm: &Charm, machines: &[String]) -> Value {
+    let mut argument = json!({
+        "CharmName": charm.charm,
+        "ApplicationName": charm.application,
+        "num-units": machines.len(),
+        "Placement": facades::placements(machines),
+    });
+    if let Some(channel) = &charm.channel {
+        argument["channel"] = json!(channel);
+    }
+    json!({"Args": [argument]})
+}
+
 fn add_machine_request(machine: &ManualMachine) -> Value {
     let (name, channel) = MACHINE_BASE;
     json!({"params": [{
@@ -178,16 +191,7 @@ impl JujuPlatform for WebSocketJuju {
         machines: &[String],
     ) -> Result<(), ActionError> {
         let mut connection = self.model_connection(endpoint, model).await?;
-        let mut argument = json!({
-            "charm-name": charm.charm,
-            "application-name": charm.application,
-            "num-units": machines.len(),
-            "placement": facades::placements(machines),
-        });
-        if let Some(channel) = &charm.channel {
-            argument["channel"] = json!(channel);
-        }
-        connection.call("Application", "DeployFromRepository", json!({"Args": [argument]})).await?;
+        connection.call("Application", "DeployFromRepository", deploy_request(charm, machines)).await?;
         Ok(())
     }
 
@@ -275,6 +279,21 @@ impl JujuPlatform for WebSocketJuju {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_deployment_names_its_charm_and_application_as_juju_spells_them() {
+        let charm = Charm {
+            application: String::from("db"),
+            charm: String::from("postgresql"),
+            channel: Some(String::from("14/stable")),
+        };
+        let argument = &deploy_request(&charm, &[String::from("1")])["Args"][0];
+        assert_eq!(argument["CharmName"], "postgresql");
+        assert_eq!(argument["ApplicationName"], "db");
+        assert_eq!(argument["num-units"], 1);
+        assert_eq!(argument["channel"], "14/stable");
+        assert_eq!(argument["Placement"], json!([{"scope": "#", "directive": "1"}]));
+    }
 
     #[test]
     fn a_manual_machine_is_added_with_its_hardware() {

@@ -91,6 +91,9 @@ pub fn reply_result(facade: &str, request: &str, reply: &Value) -> Result<Value,
         });
     }
     let response = reply.get("response").cloned().unwrap_or(Value::Null);
+    if let Some(message) = first_refusal(&response) {
+        return Err(ActionError::invalid(format!("{facade}.{request} refused the request: {message}")));
+    }
     if let Some(message) = first_error(&response) {
         return Err(ActionError::retryable(format!("{facade}.{request} failed: {message}")));
     }
@@ -100,6 +103,11 @@ pub fn reply_result(facade: &str, request: &str, reply: &Value) -> Result<Value,
 fn first_error(response: &Value) -> Option<String> {
     let results = response["results"].as_array().or_else(|| response["machines"].as_array())?;
     results.iter().find_map(|result| result["error"]["message"].as_str().map(str::to_owned))
+}
+
+fn first_refusal(response: &Value) -> Option<String> {
+    let results = response["Results"].as_array()?;
+    results.iter().find_map(|result| result["Errors"][0]["message"].as_str().map(str::to_owned))
 }
 
 #[must_use]
@@ -212,6 +220,12 @@ mod tests {
         let bulk =
             json!({"request-id": 2, "response": {"results": [{"error": {"message": "no such unit"}}]}});
         assert!(matches!(reply_result("Application", "DestroyUnit", &bulk), Err(ActionError::Retryable(_))));
+        let deployed =
+            json!({"request-id": 4, "response": {"Results": [{"Errors": [{"message": "charm not found"}]}]}});
+        assert!(matches!(
+            reply_result("Application", "DeployFromRepository", &deployed),
+            Err(ActionError::Invalid(_))
+        ));
         let fine = json!({"request-id": 3, "response": {"results": [{}]}});
         assert!(reply_result("Application", "DestroyUnit", &fine).is_ok());
     }
