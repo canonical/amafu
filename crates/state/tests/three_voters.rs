@@ -1,9 +1,11 @@
 use std::time::Duration;
 
 use amafu_domain::ObjectReference;
+use amafu_domain::kinds::node_lease::LeaseTerms;
 use amafu_interfaces::{ConsensusMembership, Consistency, Store, StoreError};
 use amafu_state::{
-    QuoriumMembership, QuoriumStore, STATE_SERVER_NAME, StateTls, StoreTiming, VoterSettings, start_voter,
+    QuoriumMembership, QuoriumStore, STATE_SERVER_NAME, StateTls, StoreTiming, VoterSettings,
+    ensure_failover_within, start_voter,
 };
 use quorium::{Quorium, TlsMaterial};
 use serde_json::json;
@@ -68,6 +70,9 @@ async fn three_voters_over_mutual_tls_replicate_every_write() {
     let revision = write_until_accepted(&writer, &vm("web-1"), Duration::from_secs(10)).await.unwrap();
     let read = reader.read(&vm("web-1"), Consistency::Linearizable).await.unwrap().unwrap();
     assert_eq!(read.revision, revision);
+    let terms = LeaseTerms::new(Duration::from_secs(8), Duration::from_secs(8));
+    ensure_failover_within(&voters[0], terms.failover_budget()).unwrap();
+    assert!(ensure_failover_within(&voters[0], Duration::from_millis(100)).is_err());
     for voter in voters {
         voter.shutdown().await;
     }
