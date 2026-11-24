@@ -98,7 +98,7 @@ export function InstanceActions({ vm, onPower, onMigrate, onDelete }: InstanceAc
         label={running ? `Stop ${vm.metadata.name}` : `Start ${vm.metadata.name}`}
         onClick={() => onPower(running ? "stopped" : "running")}
       />
-      <IconAction icon="change-version" label={`Migrate ${vm.metadata.name}`} onClick={onMigrate} isDisabled={!vm.status.node} />
+      <IconAction icon="machines" label={`Migrate ${vm.metadata.name}`} onClick={onMigrate} isDisabled={!vm.status.node} />
       <IconAction icon="delete" label={`Delete ${vm.metadata.name}`} onClick={onDelete} />
     </div>
   );
