@@ -1,5 +1,5 @@
 use amafu_api::ApiClient;
-use amafu_domain::kinds::node::{Node, NodeSpecification};
+use amafu_domain::kinds::node::{Node, NodeSpecification, StoreHealth};
 use amafu_domain::{NodeName, Object};
 use clap::Subcommand;
 
@@ -25,12 +25,20 @@ pub enum NodeCommand {
     },
 }
 
+fn store_column(health: Option<&StoreHealth>) -> String {
+    match health {
+        None => String::from("-"),
+        Some(health) if health.is_stable => String::from("stable"),
+        Some(health) => format!("unsettled ({} elections)", health.elections_started),
+    }
+}
+
 fn print_nodes(nodes: &[Object<Node>], format: OutputFormat) -> anyhow::Result<()> {
     if format != OutputFormat::Table {
         return print_structured(&nodes, format);
     }
     let mut table = Table::new(vec![
-        "NAME", "PHASE", "ROLES", "ZONE", "UNDERLAY", "CORDONED", "CPUS", "MEMORY", "VERSION",
+        "NAME", "PHASE", "ROLES", "ZONE", "UNDERLAY", "CORDONED", "CPUS", "MEMORY", "VERSION", "STORE",
     ]);
     for node in nodes {
         let roles: Vec<String> = node
@@ -51,6 +59,7 @@ fn print_nodes(nodes: &[Object<Node>], format: OutputFormat) -> anyhow::Result<(
             node.status.capacity.cpu_count.to_string(),
             format!("{} MiB", node.status.capacity.memory_mebibytes),
             node.status.software_version.clone(),
+            store_column(node.status.store.as_ref()),
         ]);
     }
     crate::output::emit(&table.render())?;
@@ -73,5 +82,19 @@ pub async fn run(client: &ApiClient, command: NodeCommand, format: OutputFormat)
             let wait = wait.then(|| std::time::Duration::from_secs(timeout));
             crate::operation::evacuate(client, &name, wait, format).await
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_store_column_tells_stable_voters_from_unsettled_ones_and_non_voters() {
+        assert_eq!(store_column(None), "-");
+        let stable = StoreHealth { is_stable: true, ..StoreHealth::default() };
+        assert_eq!(store_column(Some(&stable)), "stable");
+        let unsettled = StoreHealth { elections_started: 4, ..StoreHealth::default() };
+        assert_eq!(store_column(Some(&unsettled)), "unsettled (4 elections)");
     }
 }

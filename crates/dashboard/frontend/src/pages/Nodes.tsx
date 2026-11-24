@@ -34,6 +34,15 @@ function versionOf(node: Node): string {
   return node.status.boot?.booted_image?.version ?? node.status.software_version ?? "—";
 }
 
+function storeSummary(node: Node): string | undefined {
+  const store = node.status.store;
+  if (!store) {
+    return undefined;
+  }
+  const state = store.is_stable ? "Stable" : "Unsettled";
+  return `${state} · ${store.elections_started} elections, ${store.leader_changes} leader changes, ${store.leaderless_seconds} s without a leader`;
+}
+
 function setCordoned(node: Node, isCordoned: boolean): Promise<unknown> {
   return update(clusterScope("nodes"), node.metadata.name, { ...node.specification, is_cordoned: isCordoned }, node.metadata.generation);
 }
@@ -65,6 +74,7 @@ function NodeDetail({ node, onClose }: { node: Node; onClose: () => void }) {
           { label: "Digest", value: boot?.booted_image ? shortDigest(boot.booted_image.digest) : undefined },
           { label: "Default slot", value: boot?.default_slot },
           { label: "Other slot", value: boot?.inactive_image?.version },
+          { label: "Store", value: storeSummary(node) },
           { label: "Last heartbeat", value: sinceNow(node.status.last_heartbeat) },
         ]}
       />

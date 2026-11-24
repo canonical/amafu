@@ -156,6 +156,13 @@ export interface BootReport {
   refused?: { image: ImageIdentity; reason: string };
 }
 
+export interface StoreHealth {
+  is_stable: boolean;
+  elections_started: number;
+  leader_changes: number;
+  leaderless_seconds: number;
+}
+
 export type Node = ClusterObject<
   { roles?: NodeRole[]; is_cordoned?: boolean; zone?: string },
   {
@@ -166,6 +173,7 @@ export type Node = ClusterObject<
     software_version?: string;
     last_heartbeat?: string;
     boot?: BootReport;
+    store?: StoreHealth;
   }
 >;
 
