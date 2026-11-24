@@ -7,10 +7,12 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use serde_json::Value;
 
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const TRUSTED: &str = "trusted";
 const JUJU_CONTROLLER_KEY: &str = "user.juju-is-controller";
-const OPERATION_WAIT_SECONDS: u32 = 120;
+const OPERATION_WAIT_SECONDS: u64 = 120;
+const OPERATION_WAIT_MARGIN: Duration = Duration::from_secs(10);
 
 pub struct HttpsLxd {
     timeout: Duration,
@@ -25,6 +27,7 @@ impl Default for HttpsLxd {
 struct Connection {
     client: reqwest::Client,
     base: String,
+    timeout: Duration,
 }
 
 impl Connection {
@@ -32,20 +35,26 @@ impl Connection {
         let tls = amafu_client_tls::self_signed_as(&endpoint.certificate_pem, &endpoint.private_key_pem)?;
         let client = reqwest::Client::builder()
             .use_preconfigured_tls(tls)
-            .timeout(timeout)
+            .connect_timeout(CONNECT_TIMEOUT)
             .build()
             .map_err(ActionError::fatal)?;
-        Ok(Self { client, base: format!("https://{}:{LXD_PORT}", endpoint.address) })
+        Ok(Self { client, base: format!("https://{}:{LXD_PORT}", endpoint.address), timeout })
     }
 
     async fn get(&self, path: &str) -> Result<Value, reqwest::Error> {
-        self.client.get(format!("{}{path}", self.base)).send().await?.error_for_status()?.json().await
+        self.get_within(path, self.timeout).await
+    }
+
+    async fn get_within(&self, path: &str, timeout: Duration) -> Result<Value, reqwest::Error> {
+        let response = self.client.get(format!("{}{path}", self.base)).timeout(timeout).send().await?;
+        response.error_for_status()?.json().await
     }
 
     async fn send(&self, method: reqwest::Method, path: &str, body: &Value) -> Result<Value, ActionError> {
         let response = self
             .client
             .request(method, format!("{}{path}", self.base))
+            .timeout(self.timeout)
             .json(body)
             .send()
             .await
@@ -58,7 +67,9 @@ impl Connection {
         let Some(operation) = started["operation"].as_str().filter(|operation| !operation.is_empty()) else {
             return Ok(());
         };
-        let finished = self.get(&format!("{operation}/wait?timeout={OPERATION_WAIT_SECONDS}")).await;
+        let wait = Duration::from_secs(OPERATION_WAIT_SECONDS) + OPERATION_WAIT_MARGIN;
+        let finished =
+            self.get_within(&format!("{operation}/wait?timeout={OPERATION_WAIT_SECONDS}"), wait).await;
         let finished = finished.map_err(ActionError::retryable)?;
         match finished["metadata"]["err"].as_str().filter(|error| !error.is_empty()) {
             Some(error) => Err(ActionError::retryable(format!("LXD: {error}"))),
@@ -88,7 +99,7 @@ fn join_token(metadata: &Value) -> Result<String, ActionError> {
 }
 
 fn is_absence(error: &reqwest::Error) -> bool {
-    error.is_connect() || error.is_timeout()
+    error.is_connect()
 }
 
 fn server(document: &Value) -> Option<(String, bool)> {
