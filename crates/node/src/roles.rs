@@ -296,7 +296,7 @@ fn api_runtime() -> std::io::Result<&'static tokio::runtime::Runtime> {
 fn compute_adapters(
     configuration: &NodeConfiguration,
     hypervisor: &Arc<CloudHypervisor>,
-    underlay: String,
+    underlay: &str,
 ) -> anyhow::Result<ComputeAdapters> {
     let directories = &configuration.directories;
     let compute = &configuration.compute;
@@ -312,9 +312,10 @@ fn compute_adapters(
             ),
         ),
         images: Arc::new(CachedImages::new(directories.image_cache(), compute.mkfs_erofs_tool())?),
-        datapath: Arc::new(KernelDatapath::new(underlay, compute.nft_tool())),
+        datapath: Arc::new(KernelDatapath::new(underlay.to_owned(), compute.nft_tool())),
         agents: Arc::new(HybridVsockAgents::new(runtime)),
         local_services: Arc::new(LocalServicesServer::start(
+            underlay,
             compute.resolvers.clone(),
             tokio::runtime::Handle::current(),
         )),
@@ -935,7 +936,7 @@ pub async fn run(configuration: NodeConfiguration, boot: Option<BootServices>) -
     } else {
         String::new()
     };
-    let adapters = compute_adapters(&configuration, &hypervisor, underlay)?;
+    let adapters = compute_adapters(&configuration, &hypervisor, &underlay)?;
     let spread = configuration.node.name.spread();
     let responsive = ReconcilerSettings {
         periodic_resynchronization: Duration::from_secs(2),

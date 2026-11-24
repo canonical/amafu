@@ -42,6 +42,7 @@ use amafu_interfaces::{
     NodeLeaseState, NodeNetworkState, Storage, Store, TrustedImageKeys, WorkloadState,
 };
 use amafu_network::dhcp::{self, DhcpMessage, Lease, MessageType};
+use amafu_network::overlay::overlay_mtu;
 use amafu_reconciler::{Controller, ReconcilerSettings, StepRegistry, run_controller, run_singleton};
 use amafu_scenario::{
     CertificateAuthority, Cluster, ClusterObservation, Fault, FaultHandle, Level, NfsExport, NodeImages,
@@ -1151,7 +1152,7 @@ fn address_offered_to(state: &NodeNetworkState, mac: MacAddress) -> Option<Ipv4A
     state
         .segments
         .iter()
-        .find_map(|segment| dhcp::answer(&request, &segment.key, state))
+        .find_map(|segment| dhcp::answer(&request, &segment.key, state, overlay_mtu(None)))
         .map(|offer| offer.your_address)
 }
 

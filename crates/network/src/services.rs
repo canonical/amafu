@@ -13,6 +13,7 @@ use tokio::net::UdpSocket;
 use tokio::task::JoinHandle;
 
 use crate::metadata::METADATA_ADDRESS;
+use crate::overlay::overlay_mtu;
 use crate::{dhcp, dns, metadata};
 
 const DHCP_SERVER_PORT: u16 = 67;
@@ -27,6 +28,7 @@ type SharedState = Arc<RwLock<NodeNetworkState>>;
 type Sightings = Arc<Mutex<BTreeSet<GuestSighting>>>;
 
 pub struct LocalServicesServer {
+    underlay: Arc<str>,
     state: SharedState,
     sightings: Sightings,
     upstream_resolvers: Vec<SocketAddr>,
@@ -51,7 +53,11 @@ fn udp_socket(address: SocketAddrV4, device: Option<&str>, is_broadcast: bool) -
     UdpSocket::from_std(socket.into())
 }
 
-async fn serve_dhcp(segment: SegmentKey, state: SharedState, sightings: Sightings) {
+fn link_mtu(link: &str) -> Option<u32> {
+    std::fs::read_to_string(format!("/sys/class/net/{link}/mtu")).ok()?.trim().parse().ok()
+}
+
+async fn serve_dhcp(segment: SegmentKey, underlay: Arc<str>, state: SharedState, sightings: Sightings) {
     let bridge = bridge_name(&segment);
     let address = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, DHCP_SERVER_PORT);
     let socket = loop {
@@ -75,7 +81,8 @@ async fn serve_dhcp(segment: SegmentKey, state: SharedState, sightings: Sighting
         if let Some(sighting) = dhcp::guest_sighting(&request, &segment) {
             sightings.lock().unwrap_or_else(PoisonError::into_inner).insert(sighting);
         }
-        if let Some(reply) = dhcp::answer(&request, &segment, &read(&state)) {
+        let guest_mtu = overlay_mtu(link_mtu(&underlay));
+        if let Some(reply) = dhcp::answer(&request, &segment, &read(&state), guest_mtu) {
             let _ = socket.send_to(&reply.encode(), broadcast).await;
         }
     }
@@ -182,10 +189,11 @@ async fn serve_metadata(state: SharedState) {
 
 impl LocalServicesServer {
     #[must_use]
-    pub fn start(upstream_resolvers: Vec<Ipv4Addr>, runtime: tokio::runtime::Handle) -> Self {
+    pub fn start(underlay: &str, upstream_resolvers: Vec<Ipv4Addr>, runtime: tokio::runtime::Handle) -> Self {
         let state: SharedState = Arc::new(RwLock::new(NodeNetworkState::default()));
         runtime.spawn(serve_metadata(Arc::clone(&state)));
         Self {
+            underlay: Arc::from(underlay),
             state,
             sightings: Sightings::default(),
             upstream_resolvers: upstream_resolvers
@@ -220,6 +228,7 @@ impl LocalServices for LocalServicesServer {
                 vec![
                     self.runtime.spawn(serve_dhcp(
                         segment.key.clone(),
+                        Arc::clone(&self.underlay),
                         Arc::clone(&self.state),
                         Arc::clone(&self.sightings),
                     )),

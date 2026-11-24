@@ -12,7 +12,6 @@ const ETHERNET: u8 = 1;
 const ETHERNET_ADDRESS_LENGTH: u8 = 6;
 const LEASE_SECONDS: u32 = 3600;
 const MTU: u16 = 1500;
-const OVERLAY_MTU: u16 = 1450;
 
 const OPTION_PAD: u8 = 0;
 const OPTION_SUBNET_MASK: u8 = 1;
@@ -272,7 +271,12 @@ pub fn guest_sighting(request: &DhcpMessage, segment: &SegmentKey) -> Option<Gue
 }
 
 #[must_use]
-pub fn answer(request: &DhcpMessage, segment: &SegmentKey, state: &NodeNetworkState) -> Option<DhcpMessage> {
+pub fn answer(
+    request: &DhcpMessage,
+    segment: &SegmentKey,
+    state: &NodeNetworkState,
+    overlay_mtu: u16,
+) -> Option<DhcpMessage> {
     if request.is_reply {
         return None;
     }
@@ -290,7 +294,7 @@ pub fn answer(request: &DhcpMessage, segment: &SegmentKey, state: &NodeNetworkSt
         (OPTION_DOMAIN_NAME, network.domain.as_bytes().to_vec()),
         (
             OPTION_INTERFACE_MTU,
-            if network.segment_id.is_some() { OVERLAY_MTU } else { MTU }.to_be_bytes().to_vec(),
+            if network.segment_id.is_some() { overlay_mtu } else { MTU }.to_be_bytes().to_vec(),
         ),
     ];
     if let Some(hostname) = client.hostname {
@@ -403,11 +407,11 @@ pub mod tests {
             address: Ipv4Addr::new(10, 1, 0, 10),
         }];
         let discover = request(MessageType::Discover, "00:16:3e:00:00:01", None);
-        let offer = answer(&discover, &segment(), &hosting).unwrap();
+        let offer = answer(&discover, &segment(), &hosting, 1450).unwrap();
         assert_eq!(offer.your_address, Ipv4Addr::new(10, 1, 0, 10));
         assert!(!offer.options.iter().any(|(code, _)| *code == OPTION_HOSTNAME));
         assert!(
-            answer(&request(MessageType::Discover, "00:16:3e:00:00:02", None), &segment(), &hosting)
+            answer(&request(MessageType::Discover, "00:16:3e:00:00:02", None), &segment(), &hosting, 1450)
                 .is_none()
         );
         assert!(guest_sighting(&discover, &segment()).is_some());
@@ -417,11 +421,24 @@ pub mod tests {
     }
 
     #[test]
+    fn an_overlay_network_offers_the_mtu_left_inside_the_underlay() {
+        let mut overlay = state();
+        overlay.segments[0].segment_id = Some(amafu_domain::SegmentId::new(7).unwrap());
+        let discover = request(MessageType::Discover, "02:00:00:00:00:01", None);
+        let mtu_of = |state: &NodeNetworkState| {
+            let offer = answer(&discover, &segment(), state, 1392).unwrap();
+            offer.options.into_iter().find(|(code, _)| *code == OPTION_INTERFACE_MTU).map(|(_, value)| value)
+        };
+        assert_eq!(mtu_of(&overlay), Some(1392_u16.to_be_bytes().to_vec()));
+        assert_eq!(mtu_of(&state()), Some(MTU.to_be_bytes().to_vec()));
+    }
+
+    #[test]
     fn a_discover_from_a_known_port_is_offered_its_address() {
         let discover = request(MessageType::Discover, "02:00:00:00:00:01", None);
         let parsed = DhcpMessage::parse(&discover.encode()).unwrap();
         assert_eq!(parsed.message_type, MessageType::Discover);
-        let offer = answer(&parsed, &segment(), &state()).unwrap();
+        let offer = answer(&parsed, &segment(), &state(), 1450).unwrap();
         assert_eq!(offer.message_type, MessageType::Offer);
         assert_eq!(offer.your_address, Ipv4Addr::new(10, 1, 0, 2));
         let encoded = offer.encode();
@@ -439,10 +456,10 @@ pub mod tests {
         let bytes = request(MessageType::Request, "02:00:00:00:00:01", None).encode();
         let good = DhcpMessage::parse(&with_requested(bytes.clone(), Ipv4Addr::new(10, 1, 0, 2))).unwrap();
         assert_eq!(good.requested_address, Some(Ipv4Addr::new(10, 1, 0, 2)));
-        assert_eq!(answer(&good, &segment(), &state()).unwrap().message_type, MessageType::Acknowledge);
+        assert_eq!(answer(&good, &segment(), &state(), 1450).unwrap().message_type, MessageType::Acknowledge);
         let greedy = DhcpMessage::parse(&with_requested(bytes, Ipv4Addr::new(10, 1, 0, 9))).unwrap();
         assert_eq!(
-            answer(&greedy, &segment(), &state()).unwrap().message_type,
+            answer(&greedy, &segment(), &state(), 1450).unwrap().message_type,
             MessageType::NegativeAcknowledge
         );
     }
@@ -450,9 +467,9 @@ pub mod tests {
     #[test]
     fn unknown_clients_and_other_segments_get_nothing() {
         let stranger = request(MessageType::Discover, "02:00:00:00:00:99", None);
-        assert_eq!(answer(&stranger, &segment(), &state()), None);
+        assert_eq!(answer(&stranger, &segment(), &state(), 1450), None);
         let known = request(MessageType::Discover, "02:00:00:00:00:01", None);
-        assert_eq!(answer(&known, &SegmentKey::of("project-b", "default"), &state()), None);
+        assert_eq!(answer(&known, &SegmentKey::of("project-b", "default"), &state(), 1450), None);
     }
 
     #[test]

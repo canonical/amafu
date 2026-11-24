@@ -13,6 +13,14 @@ use rtnetlink::{Handle, LinkUnspec, LinkVxlan};
 
 pub const TUNNEL_PREFIX: &str = "amx";
 pub const VXLAN_PORT: u16 = 4789;
+const VXLAN_OVERHEAD: u32 = 50;
+const ASSUMED_UNDERLAY_MTU: u32 = 1500;
+
+#[must_use]
+pub fn overlay_mtu(underlay_mtu: Option<u32>) -> u16 {
+    let inner = underlay_mtu.unwrap_or(ASSUMED_UNDERLAY_MTU).saturating_sub(VXLAN_OVERHEAD);
+    u16::try_from(inner).unwrap_or(u16::MAX)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Tunnel {
@@ -289,6 +297,14 @@ mod tests {
             tunnels[0].remotes.get(&MacAddress::new([2, 0, 0, 0, 0, 9])),
             Some(&(Ipv4Addr::new(10, 1, 0, 9), Ipv4Addr::new(192, 0, 2, 11)))
         );
+    }
+
+    #[test]
+    fn guests_on_an_overlay_leave_room_for_vxlan_inside_the_underlay_mtu() {
+        assert_eq!(overlay_mtu(Some(1500)), 1450);
+        assert_eq!(overlay_mtu(Some(1442)), 1392);
+        assert_eq!(overlay_mtu(Some(9000)), 8950);
+        assert_eq!(overlay_mtu(None), 1450);
     }
 
     #[test]
