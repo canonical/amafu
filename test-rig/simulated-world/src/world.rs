@@ -39,7 +39,7 @@ use amafu_interfaces::objects::apply;
 use amafu_interfaces::{
     AuditLog, BootSlots, Clock, CoreConnection, Datapath, Fence, GuestAgents, Hypervisor, Identifiers,
     ImageSigningKey, ImageStore, InstanceMigration, Leases, LocalServices, NodeLeaseAuthority,
-    NodeLeaseState, NodeNetworkState, Storage, Store, TrustedImageKeys, WorkloadState,
+    NodeLeaseState, NodeNetworkState, NotAVoter, Storage, Store, TrustedImageKeys, WorkloadState,
 };
 use amafu_network::dhcp::{self, DhcpMessage, Lease, MessageType};
 use amafu_network::overlay::overlay_mtu;
@@ -555,6 +555,7 @@ impl SimulatedWorld {
                     boot_slots: Arc::clone(&boot_slots) as Arc<dyn BootSlots>,
                     leases: Arc::clone(&leases),
                     lease: lease.clone(),
+                    consensus: Arc::new(NotAVoter),
                 },
                 BOOT_SLOT_SETTINGS,
             )

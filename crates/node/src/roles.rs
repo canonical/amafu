@@ -48,9 +48,9 @@ use amafu_hypervisor::{
 };
 use amafu_image_catalog::{CanonicalCatalog, host_architecture};
 use amafu_interfaces::{
-    AuditEntry, AuditLog, BootSlots, Clock, CoreConnection, Datapath, Fence, GuestAgents, Hypervisor,
-    ImageStore, Leases, LocalServices, NodeLeaseAuthority, NodeLeaseState, RandomIdentifiers,
-    SequencedAuditEntry, Storage, Store, StoreError, Watchdog,
+    AuditEntry, AuditLog, BootSlots, Clock, ConsensusMembership, CoreConnection, Datapath, Fence,
+    GuestAgents, Hypervisor, ImageStore, Leases, LocalServices, NodeLeaseAuthority, NodeLeaseState,
+    NotAVoter, RandomIdentifiers, SequencedAuditEntry, Storage, Store, StoreError, Watchdog,
 };
 use amafu_interfaces::{FixedImageCatalog, ImageCatalog, KubernetesPlatform};
 use amafu_juju_client::WebSocketJuju;
@@ -60,7 +60,8 @@ use amafu_network::{KernelDatapath, LocalServicesServer};
 use amafu_reconciler::{Controller, ReconcilerSettings, StepRegistry, run_controller, run_singleton};
 use amafu_state::{
     BatchedAuditLog, LeaseFencedStore, LocalNodeLeases, LocalStateCache, QuoriumAuditLog, QuoriumLeases,
-    QuoriumStore, ReadReplicaStore, StateTls, SubscribedStore, VoterSettings, start_voter,
+    QuoriumMembership, QuoriumStore, ReadReplicaStore, StateTls, StoreTiming, SubscribedStore, VoterSettings,
+    ensure_failover_within, start_voter,
 };
 use amafu_storage::plugins::{DownloadedModules, PluginHost, PluginLimits};
 use amafu_storage::{BuiltInStorage, CachedImages};
@@ -90,6 +91,7 @@ pub struct Services {
     pub clock: Arc<dyn Clock>,
     pub leases: Option<Arc<dyn Leases>>,
     pub node_leases: Arc<dyn NodeLeaseAuthority>,
+    pub consensus: Arc<dyn ConsensusMembership>,
 }
 
 pub struct BootServices {
@@ -776,9 +778,13 @@ async fn core_member_services(configuration: &NodeConfiguration) -> anyhow::Resu
             certificate_pem: identity.certificate.clone(),
             private_key_pem: identity.private_key.clone(),
         }),
-        heartbeat: configuration.state.heartbeat(),
+        timing: StoreTiming {
+            heartbeat: configuration.state.heartbeat(),
+            leader_lease: configuration.state.leader_lease(),
+        },
     };
     let quorium = start_voter(&configuration.directories.data.join(STATE_DIRECTORY), &settings).await?;
+    ensure_failover_within(&quorium, configuration.fencing.terms().failover_budget())?;
     tracing::info!(voters = settings.voters.len(), "the state store is running");
     let store: Arc<dyn Store> = Arc::new(QuoriumStore::new(quorium.clone()));
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
@@ -792,8 +798,9 @@ async fn core_member_services(configuration: &NodeConfiguration) -> anyhow::Resu
         store,
         audit: Arc::new(BatchedAuditLog::start(QuoriumAuditLog::new(quorium.clone()))),
         clock,
-        leases: Some(Arc::new(QuoriumLeases::new(quorium))),
+        leases: Some(Arc::new(QuoriumLeases::new(quorium.clone()))),
         node_leases,
+        consensus: Arc::new(QuoriumMembership::new(quorium)),
     })
 }
 
@@ -827,6 +834,7 @@ fn subscribed_services(configuration: &NodeConfiguration) -> anyhow::Result<(Ser
         clock: Arc::new(SystemClock),
         leases: None,
         node_leases: client,
+        consensus: Arc::new(NotAVoter),
     };
     Ok((services, store))
 }
@@ -892,6 +900,7 @@ fn boot_slot_role(
             boot_slots,
             leases: Arc::clone(&services.node_leases),
             lease: lease.clone(),
+            consensus: Arc::clone(&services.consensus),
         },
         settings,
     ));
@@ -910,6 +919,7 @@ fn fenced_by_lease(services: &Services, node: &NodeName, lease: &NodeLeaseState)
         clock: Arc::clone(&services.clock),
         leases: services.leases.clone(),
         node_leases: Arc::clone(&services.node_leases),
+        consensus: Arc::clone(&services.consensus),
     }
 }
 
@@ -959,7 +969,8 @@ pub async fn run(configuration: NodeConfiguration, boot: Option<BootServices>) -
         identity.clone(),
         Arc::clone(&node_services.store),
         Arc::clone(&node_services.clock),
-    );
+    )
+    .with_consensus(Arc::clone(&node_services.consensus));
     if let Some(boot_slots) = boot_slots {
         node = node.with_boot_slots(Arc::clone(&boot_slots));
         boot_slot_role(

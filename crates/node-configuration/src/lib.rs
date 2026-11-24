@@ -211,18 +211,30 @@ pub struct StateSection {
     pub core_members: Vec<String>,
     #[serde(default = "default_heartbeat_milliseconds")]
     pub heartbeat_milliseconds: u64,
+    #[serde(default = "default_leader_lease_milliseconds")]
+    pub leader_lease_milliseconds: u64,
 }
 
 const DEFAULT_HEARTBEAT_MILLISECONDS: u64 = 500;
+const DEFAULT_LEADER_LEASE_MILLISECONDS: u64 = 2000;
 
 fn default_heartbeat_milliseconds() -> u64 {
     DEFAULT_HEARTBEAT_MILLISECONDS
+}
+
+fn default_leader_lease_milliseconds() -> u64 {
+    DEFAULT_LEADER_LEASE_MILLISECONDS
 }
 
 impl StateSection {
     #[must_use]
     pub fn heartbeat(&self) -> Duration {
         Duration::from_millis(self.heartbeat_milliseconds)
+    }
+
+    #[must_use]
+    pub fn leader_lease(&self) -> Duration {
+        Duration::from_millis(self.leader_lease_milliseconds)
     }
 }
 
@@ -280,6 +292,7 @@ impl Default for StateSection {
             voters: Vec::new(),
             core_members: Vec::new(),
             heartbeat_milliseconds: DEFAULT_HEARTBEAT_MILLISECONDS,
+            leader_lease_milliseconds: DEFAULT_LEADER_LEASE_MILLISECONDS,
         }
     }
 }

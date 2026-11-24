@@ -29,6 +29,8 @@ pub fn node_fence_name(node: &NodeName) -> String {
     format!("node:{node}")
 }
 
+const RENEWALS_PER_LEASE: u32 = 4;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LeaseTerms {
@@ -48,6 +50,16 @@ impl LeaseTerms {
     #[must_use]
     pub fn duration(&self) -> Duration {
         Duration::from_millis(self.duration_milliseconds)
+    }
+
+    #[must_use]
+    pub fn renewal_interval(&self) -> Duration {
+        self.duration() / RENEWALS_PER_LEASE
+    }
+
+    #[must_use]
+    pub fn failover_budget(&self) -> Duration {
+        self.duration().saturating_sub(self.renewal_interval())
     }
 
     #[must_use]

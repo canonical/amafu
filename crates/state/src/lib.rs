@@ -1,5 +1,6 @@
 pub mod audit;
 pub mod audit_batches;
+pub mod consensus;
 pub mod entities;
 mod errors;
 pub mod leases;
@@ -12,10 +13,11 @@ pub mod subscribed;
 
 pub use audit::QuoriumAuditLog;
 pub use audit_batches::BatchedAuditLog;
+pub use consensus::QuoriumMembership;
 pub use leases::QuoriumLeases;
 pub use node::{
-    DEFAULT_HEARTBEAT, STATE_SERVER_NAME, StateError, StateTls, VoterSettings, start_single_voter,
-    start_voter,
+    STATE_SERVER_NAME, StateError, StateTls, StoreTiming, VoterSettings, ensure_failover_within,
+    start_single_voter, start_voter,
 };
 pub use node_lease::{LeaseFencedStore, LocalNodeLeases};
 pub use read_replica::ReadReplicaStore;

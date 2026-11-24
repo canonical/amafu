@@ -6,10 +6,11 @@ use std::net::Ipv4Addr;
 
 use amafu_domain::kinds::node::{
     BootReport, CpuBaseline, Node, NodeCapacity, NodePhase, NodeRole, NodeSpecification, NodeStatus,
+    StoreHealth,
 };
 use amafu_domain::{Change, NodeName, Object, ObjectId, ObjectName, ObjectReference, ZoneName};
 use amafu_interfaces::objects::{apply, get, remove};
-use amafu_interfaces::{ActionError, BootSlots, Clock, Consistency, Store};
+use amafu_interfaces::{ActionError, BootSlots, Clock, ConsensusMembership, Consistency, Store};
 use amafu_reconciler::{Controller, KeyMapping, WatchedKind};
 use time::OffsetDateTime;
 
@@ -28,8 +29,14 @@ pub struct NodeIdentity {
 
 impl NodeIdentity {
     #[must_use]
-    pub fn status(&self, now: OffsetDateTime, boot: Option<BootReport>) -> NodeStatus {
+    pub fn status(
+        &self,
+        now: OffsetDateTime,
+        boot: Option<BootReport>,
+        store: Option<StoreHealth>,
+    ) -> NodeStatus {
         NodeStatus {
+            store,
             phase: NodePhase::Ready,
             capacity: self.capacity,
             cpu_baseline: self.cpu_baseline,
@@ -46,17 +53,24 @@ pub struct NodeController {
     store: Arc<dyn Store>,
     clock: Arc<dyn Clock>,
     boot_slots: Option<Arc<dyn BootSlots>>,
+    consensus: Option<Arc<dyn ConsensusMembership>>,
 }
 
 impl NodeController {
     #[must_use]
     pub fn new(identity: NodeIdentity, store: Arc<dyn Store>, clock: Arc<dyn Clock>) -> Self {
-        Self { identity, store, clock, boot_slots: None }
+        Self { identity, store, clock, boot_slots: None, consensus: None }
     }
 
     #[must_use]
     pub fn with_boot_slots(mut self, boot_slots: Arc<dyn BootSlots>) -> Self {
         self.boot_slots = Some(boot_slots);
+        self
+    }
+
+    #[must_use]
+    pub fn with_consensus(mut self, consensus: Arc<dyn ConsensusMembership>) -> Self {
+        self.consensus = Some(consensus);
         self
     }
 
@@ -79,6 +93,7 @@ pub struct NodeObservation {
     pub identity: NodeIdentity,
     pub node: Option<Object<Node>>,
     pub boot: Option<BootReport>,
+    pub store: Option<StoreHealth>,
     pub now: OffsetDateTime,
 }
 
@@ -107,7 +122,7 @@ pub fn plan_node(observation: &NodeObservation) -> Vec<NodeAction> {
     if node.metadata.is_deleting {
         return vec![NodeAction::Remove];
     }
-    let current = identity.status(observation.now, observation.boot.clone());
+    let current = identity.status(observation.now, observation.boot.clone(), observation.store);
     let reported = NodeStatus { last_heartbeat: node.status.last_heartbeat, ..current.clone() };
     let is_current = node.is_status_current()
         && node.status == reported
@@ -140,7 +155,8 @@ impl Controller for NodeController {
             None
         };
         let boot = self.boot_slots.as_ref().map(|boot_slots| boot_slots.report());
-        Ok(NodeObservation { identity: self.identity.clone(), node, boot, now: self.clock.now() })
+        let store = self.consensus.as_ref().and_then(|consensus| consensus.health());
+        Ok(NodeObservation { identity: self.identity.clone(), node, boot, store, now: self.clock.now() })
     }
 
     fn plan(&self, observation: &NodeObservation) -> Vec<NodeAction> {
@@ -225,14 +241,19 @@ mod tests {
     }
 
     fn ready(identity: &NodeIdentity, heartbeat: OffsetDateTime) -> NodeStatus {
-        identity.status(heartbeat, None)
+        identity.status(heartbeat, None, None)
     }
 
     #[test]
     fn an_unknown_node_registers_itself() {
         let identity = identity();
-        let actions =
-            plan_node(&NodeObservation { identity: identity.clone(), node: None, boot: None, now: at(0) });
+        let actions = plan_node(&NodeObservation {
+            identity: identity.clone(),
+            node: None,
+            boot: None,
+            store: None,
+            now: at(0),
+        });
         assert_eq!(
             actions,
             vec![NodeAction::Register(NodeSpecification {
@@ -252,6 +273,7 @@ mod tests {
             identity: identity.clone(),
             node: Some(node),
             boot: None,
+            store: None,
             now: at(5),
         });
         assert_eq!(
@@ -265,9 +287,25 @@ mod tests {
         let identity = identity();
         let node = registered(&identity, ready(&identity, at(0)));
         assert_eq!(
-            plan_node(&NodeObservation { identity, node: Some(node), boot: None, now: at(9) }),
+            plan_node(&NodeObservation { identity, node: Some(node), boot: None, store: None, now: at(9) }),
             Vec::new()
         );
+    }
+
+    #[test]
+    fn a_change_in_store_health_is_reported_before_the_next_heartbeat() {
+        let identity = identity();
+        let node = registered(&identity, ready(&identity, at(0)));
+        let unsettled = StoreHealth { is_stable: false, elections_started: 3, ..StoreHealth::default() };
+        let actions = plan_node(&NodeObservation {
+            identity: identity.clone(),
+            node: Some(node),
+            boot: None,
+            store: Some(unsettled),
+            now: at(2),
+        });
+        let reported = NodeStatus { store: Some(unsettled), ..ready(&identity, at(2)) };
+        assert_eq!(actions, vec![NodeAction::ReportReady { observed_generation: 1, status: reported }]);
     }
 
     #[test]
@@ -278,6 +316,7 @@ mod tests {
             identity: identity.clone(),
             node: Some(node),
             boot: None,
+            store: None,
             now: at(10),
         });
         assert_eq!(
@@ -292,7 +331,7 @@ mod tests {
         let mut node = registered(&identity, ready(&identity, at(0)));
         node.metadata.is_deleting = true;
         assert_eq!(
-            plan_node(&NodeObservation { identity, node: Some(node), boot: None, now: at(1) }),
+            plan_node(&NodeObservation { identity, node: Some(node), boot: None, store: None, now: at(1) }),
             vec![NodeAction::Remove]
         );
     }

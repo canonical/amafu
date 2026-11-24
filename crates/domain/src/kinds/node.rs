@@ -232,6 +232,16 @@ pub struct NodeStatus {
     pub last_heartbeat: Option<OffsetDateTime>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boot: Option<BootReport>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store: Option<StoreHealth>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct StoreHealth {
+    pub is_stable: bool,
+    pub elections_started: u64,
+    pub leader_changes: u64,
+    pub leaderless_seconds: u64,
 }
 
 impl NodeStatus {

@@ -14,7 +14,7 @@ pub struct LeaseKeeperSettings {
 impl LeaseKeeperSettings {
     #[must_use]
     pub fn for_terms(terms: LeaseTerms) -> Self {
-        Self { terms, renewal_interval: terms.duration() / 4, retry_delay: Duration::from_millis(500) }
+        Self { terms, renewal_interval: terms.renewal_interval(), retry_delay: Duration::from_millis(500) }
     }
 }
 

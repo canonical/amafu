@@ -7,7 +7,8 @@ use amafu_domain::kinds::vm::{Vm, VmPhase};
 use amafu_domain::node_image::NodeImage;
 use amafu_interfaces::objects::{get, list};
 use amafu_interfaces::{
-    ActionError, BootSlots, Clock, Consistency, NodeLeaseAuthority, NodeLeaseState, Store,
+    ActionError, BootSlots, Clock, ConsensusMembership, Consistency, NodeLeaseAuthority, NodeLeaseState,
+    Store,
 };
 use amafu_reconciler::{Controller, KeyMapping, WatchedKind};
 use time::OffsetDateTime;
@@ -35,6 +36,7 @@ pub struct BootSlotsObservation {
     pub healthy_for: Duration,
     pub running_for: Duration,
     pub hosts_running_vms: bool,
+    pub is_store_stable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,7 +72,7 @@ pub fn plan_boot_slots(
     if !report.holds_in_inactive_slot(image) {
         return vec![BootSlotsAction::WriteInactiveSlot(Box::new(image.clone()))];
     }
-    if request.should_boot && !observation.hosts_running_vms {
+    if request.should_boot && !observation.hosts_running_vms && observation.is_store_stable {
         return vec![BootSlotsAction::BootInactiveSlot];
     }
     Vec::new()
@@ -83,6 +85,7 @@ pub struct BootSlotsController {
     boot_slots: Arc<dyn BootSlots>,
     leases: Arc<dyn NodeLeaseAuthority>,
     lease: NodeLeaseState,
+    consensus: Arc<dyn ConsensusMembership>,
     settings: BootSlotsSettings,
     started_at: OffsetDateTime,
     healthy_since: Mutex<Option<OffsetDateTime>>,
@@ -94,6 +97,7 @@ pub struct BootSlotsServices {
     pub boot_slots: Arc<dyn BootSlots>,
     pub leases: Arc<dyn NodeLeaseAuthority>,
     pub lease: NodeLeaseState,
+    pub consensus: Arc<dyn ConsensusMembership>,
 }
 
 impl BootSlotsController {
@@ -107,6 +111,7 @@ impl BootSlotsController {
             boot_slots: services.boot_slots,
             leases: services.leases,
             lease: services.lease,
+            consensus: services.consensus,
             settings,
             started_at,
             healthy_since: Mutex::new(None),
@@ -130,13 +135,19 @@ impl BootSlotsController {
         }))
     }
 
-    async fn surrender_and_reboot(&self) -> Result<(), ActionError> {
+    async fn leave_and_reboot(&self) -> Result<(), ActionError> {
+        self.consensus.hand_off_leadership().await?;
+        self.surrender_lease().await;
+        self.consensus.close().await;
+        self.boot_slots.reboot().await.map_err(boot_slot_failure)
+    }
+
+    async fn surrender_lease(&self) {
         if let Some(held) = self.lease.surrender()
             && let Err(error) = self.leases.surrender(held.epoch).await
         {
             tracing::warn!(node = %self.node, %error, "the lease could not be surrendered before rebooting");
         }
-        self.boot_slots.reboot().await.map_err(boot_slot_failure)
     }
 }
 
@@ -177,6 +188,7 @@ impl Controller for BootSlotsController {
             healthy_for: self.healthy_for(is_healthy, now),
             running_for: Duration::try_from(now - self.started_at).unwrap_or_default(),
             hosts_running_vms,
+            is_store_stable: self.consensus.is_stable(),
         })
     }
 
@@ -193,7 +205,7 @@ impl Controller for BootSlotsController {
             BootSlotsAction::BootInactiveSlot => {
                 self.boot_slots.boot_inactive_slot_next().await.map_err(boot_slot_failure)?;
                 tracing::info!(node = %self.node, "rebooting into the inactive boot slot");
-                self.surrender_and_reboot().await
+                self.leave_and_reboot().await
             }
             BootSlotsAction::Confirm => {
                 tracing::info!(node = %self.node, "the new boot slot stayed healthy, so it becomes the default");
@@ -201,13 +213,15 @@ impl Controller for BootSlotsController {
             }
             BootSlotsAction::GiveUp => {
                 tracing::error!(node = %self.node, "the new boot slot never became healthy; going back to the default");
-                self.surrender_and_reboot().await
+                self.boot_slots.abandon_trial().await.map_err(boot_slot_failure)?;
+                self.leave_and_reboot().await
             }
         }
     }
 
     fn revisit_after(&self, observation: &BootSlotsObservation) -> Option<Duration> {
-        (!observation.report.is_confirmed() || observation.hosts_running_vms).then_some(UNCONFIRMED_REVISIT)
+        let is_waiting = observation.hosts_running_vms || !observation.is_store_stable;
+        (!observation.report.is_confirmed() || is_waiting).then_some(UNCONFIRMED_REVISIT)
     }
 }
 
@@ -252,6 +266,7 @@ mod tests {
             healthy_for: Duration::ZERO,
             running_for: Duration::from_secs(5),
             hosts_running_vms: false,
+            is_store_stable: true,
         }
     }
 
@@ -277,9 +292,14 @@ mod tests {
         );
         let hosting = BootSlotsObservation {
             hosts_running_vms: true,
-            ..observation(written, Some(request("0.2.0", true)))
+            ..observation(written.clone(), Some(request("0.2.0", true)))
         };
         assert_eq!(plan_boot_slots(&hosting, &settings), Vec::new());
+        let unsettled = BootSlotsObservation {
+            is_store_stable: false,
+            ..observation(written, Some(request("0.2.0", true)))
+        };
+        assert_eq!(plan_boot_slots(&unsettled, &settings), Vec::new());
     }
 
     #[test]
