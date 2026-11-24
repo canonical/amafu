@@ -212,7 +212,15 @@ impl Step<JujuControllerChange> for CreateFounderPod {
         if !pods.exists(0).await? {
             let bootstrap = if scope.controller().await?.status.uuid.is_none() {
                 let admin_password = scope.secret_value(ADMIN_PASSWORD).await?;
-                let target = Target::Pods { pods: pods.wanted().await?, admin_password };
+                let target = Target::Pods {
+                    pods: pods.wanted().await?,
+                    admin_password,
+                    trusted_certificate_authority: self
+                        .environment
+                        .settings
+                        .amafu_certificate_authority
+                        .clone(),
+                };
                 Some(scope.bootstrap_plan(target).await?)
             } else {
                 None

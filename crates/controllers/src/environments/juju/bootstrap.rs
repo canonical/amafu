@@ -10,7 +10,7 @@ pub const LXD_CHANNEL: &str = "6/stable";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
-    Pods { pods: u8, admin_password: String },
+    Pods { pods: u8, admin_password: String, trusted_certificate_authority: String },
     Cluster { kubeconfig: String },
 }
 
@@ -43,10 +43,14 @@ impl BootstrapPlan {
             ),
         ]);
         match &self.target {
-            Target::Pods { pods, admin_password } => {
+            Target::Pods { pods, admin_password, trusted_certificate_authority } => {
                 environment.insert(String::from("JUJU_SUBSTRATE"), String::from("lxd"));
                 environment.insert(String::from("JUJU_PODS"), pods.to_string());
                 environment.insert(String::from("JUJU_ADMIN_PASSWORD"), admin_password.clone());
+                if !trusted_certificate_authority.is_empty() {
+                    environment
+                        .insert(String::from("JUJU_TRUSTED_CA"), trusted_certificate_authority.clone());
+                }
             }
             Target::Cluster { kubeconfig } => {
                 environment.insert(String::from("JUJU_SUBSTRATE"), String::from("kubernetes"));
@@ -186,7 +190,11 @@ mod tests {
     }
 
     fn pods() -> Target {
-        Target::Pods { pods: 3, admin_password: String::from("password") }
+        Target::Pods {
+            pods: 3,
+            admin_password: String::from("password"),
+            trusted_certificate_authority: String::from("amafu-ca"),
+        }
     }
 
     fn document(user_data: &str) -> Value {
@@ -199,6 +207,7 @@ mod tests {
         assert_eq!(on_pods["JUJU_SUBSTRATE"], "lxd");
         assert_eq!(on_pods["JUJU_PODS"], "3");
         assert_eq!(on_pods["JUJU_ADMIN_PASSWORD"], "password");
+        assert_eq!(on_pods["JUJU_TRUSTED_CA"], "amafu-ca");
         assert_eq!(on_pods["JUJU_LOGIN_TOKEN_REFRESH_URL"], "https://amafu.example/.well-known/jwks.json");
         let cluster = plan(Target::Cluster { kubeconfig: String::from("config") }).environment();
         assert_eq!(cluster["JUJU_SUBSTRATE"], "kubernetes");

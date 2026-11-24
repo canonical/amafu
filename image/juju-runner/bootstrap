@@ -30,7 +30,13 @@ lxd)
         sleep 10
     done
     cloud=localhost
-    printf 'bootstrap-timeout: 3600\nenable-os-upgrade: false\n' >> "$workdir/bootstrap.yaml"
+    {
+        printf 'bootstrap-timeout: 3600\nenable-os-upgrade: false\n'
+        if [ -n "${JUJU_TRUSTED_CA:-}" ]; then
+            printf 'cloudinit-userdata: |\n  ca_certs:\n    trusted:\n    - |\n'
+            printf '%s\n' "$JUJU_TRUSTED_CA" | sed 's/^/        /'
+        fi
+    } >> "$workdir/bootstrap.yaml"
     ;;
 kubernetes)
     : "${JUJU_KUBECONFIG:?}"
