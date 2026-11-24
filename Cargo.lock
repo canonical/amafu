@@ -3376,8 +3376,9 @@ checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
 
 [[package]]
 name = "quorium"
-version = "0.1.0-alpha.1"
-source = "git+https://github.com/canonical/quorium?rev=b0a97b08a9bffebf0c977692f5ac5dd64dd9fd7a#b0a97b08a9bffebf0c977692f5ac5dd64dd9fd7a"
+version = "0.1.0-alpha.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fa0ffbd1b216002c60863f28ce076f5f510ffd4af2fbdccdbdaf605dffc1233c"
 dependencies = [
  "crc32fast",
  "futures",
@@ -3399,8 +3400,9 @@ dependencies = [
 
 [[package]]
 name = "quorium-core"
-version = "0.1.0-alpha.1"
-source = "git+https://github.com/canonical/quorium?rev=b0a97b08a9bffebf0c977692f5ac5dd64dd9fd7a#b0a97b08a9bffebf0c977692f5ac5dd64dd9fd7a"
+version = "0.1.0-alpha.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3754be90e22275f99d465f3ce8c5f79ac0532c154148cf9bcd0671584d5e6d0e"
 dependencies = [
  "linkme",
  "openraft",
@@ -3412,8 +3414,9 @@ dependencies = [
 
 [[package]]
 name = "quorium-macros"
-version = "0.1.0-alpha.1"
-source = "git+https://github.com/canonical/quorium?rev=b0a97b08a9bffebf0c977692f5ac5dd64dd9fd7a#b0a97b08a9bffebf0c977692f5ac5dd64dd9fd7a"
+version = "0.1.0-alpha.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ecdd8f99675f030919ceb50d7072a6f2571d05262948b6651f862350b37563a"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3422,8 +3425,9 @@ dependencies = [
 
 [[package]]
 name = "quorium-net"
-version = "0.1.0-alpha.1"
-source = "git+https://github.com/canonical/quorium?rev=b0a97b08a9bffebf0c977692f5ac5dd64dd9fd7a#b0a97b08a9bffebf0c977692f5ac5dd64dd9fd7a"
+version = "0.1.0-alpha.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ed4b511663816a0e97c9b3d9ac3863e5e2d37a8f405c0d5d76598f813b2f3d8"
 dependencies = [
  "futures",
  "openraft",
@@ -3440,8 +3444,9 @@ dependencies = [
 
 [[package]]
 name = "quorium-sim"
-version = "0.1.0-alpha.1"
-source = "git+https://github.com/canonical/quorium?rev=b0a97b08a9bffebf0c977692f5ac5dd64dd9fd7a#b0a97b08a9bffebf0c977692f5ac5dd64dd9fd7a"
+version = "0.1.0-alpha.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f428185a5238a893cd1517b30f94bf9af8cb26b997f83d22d0992f5e8b18eba"
 dependencies = [
  "openraft",
  "openraft-rt",
@@ -3455,8 +3460,9 @@ dependencies = [
 
 [[package]]
 name = "quorium-store"
-version = "0.1.0-alpha.1"
-source = "git+https://github.com/canonical/quorium?rev=b0a97b08a9bffebf0c977692f5ac5dd64dd9fd7a#b0a97b08a9bffebf0c977692f5ac5dd64dd9fd7a"
+version = "0.1.0-alpha.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b29d823f2f0b1d42a305f4ac71ff73f2ac2c5373188beafbf8fdba767da1378f"
 dependencies = [
  "crc32fast",
  "futures",
