@@ -8,7 +8,7 @@ use amafu_interfaces::{BootSlotError, BootSlots, TrustedImageKeys};
 
 use crate::bundle::{download, extract, http_client};
 use crate::environment::GrubEnvironment;
-use crate::history::{BootHistory, Trial};
+use crate::history::BootHistory;
 use crate::layout::EspLayout;
 
 const DOWNLOAD_FILE: &str = "node-image.tar.partial";
@@ -201,10 +201,7 @@ impl BootSlots for EspBootSlots {
             .image(inactive)
             .map(NodeImage::identity)
             .ok_or_else(|| BootSlotError::Write(String::from("the inactive slot holds no image")))?;
-        self.change_history(|history| {
-            history.trial = Some(Trial { slot: inactive, image });
-            history.fallen_back_from = None;
-        })?;
+        self.change_history(|history| history.begin_trial(inactive, image))?;
         self.change_environment(|environment| environment.next_slot = Some(inactive))
     }
 
@@ -214,7 +211,11 @@ impl BootSlots for EspBootSlots {
             environment.default_slot = booted;
             environment.next_slot = None;
         })?;
-        self.change_history(|history| history.trial = None)
+        self.change_history(BootHistory::confirm_trial)
+    }
+
+    async fn abandon_trial(&self) -> Result<(), BootSlotError> {
+        self.change_history(BootHistory::abandon_trial)
     }
 
     async fn reboot(&self) -> Result<(), BootSlotError> {

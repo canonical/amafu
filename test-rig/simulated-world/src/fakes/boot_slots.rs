@@ -177,6 +177,12 @@ impl BootSlots for FakeBootSlots {
         Ok(())
     }
 
+    async fn abandon_trial(&self) -> Result<(), BootSlotError> {
+        let mut state = lock(&self.state);
+        state.fallen_back_from = state.trial.take().map(|(_, image)| image);
+        Ok(())
+    }
+
     async fn reboot(&self) -> Result<(), BootSlotError> {
         lock(&self.state).wants_reboot = true;
         Ok(())

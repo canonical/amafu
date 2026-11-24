@@ -32,5 +32,7 @@ pub trait BootSlots: Send + Sync {
 
     async fn confirm_booted_slot(&self) -> Result<(), BootSlotError>;
 
+    async fn abandon_trial(&self) -> Result<(), BootSlotError>;
+
     async fn reboot(&self) -> Result<(), BootSlotError>;
 }
