@@ -37,6 +37,13 @@ pub struct BootSlotsObservation {
     pub running_for: Duration,
     pub hosts_running_vms: bool,
     pub is_store_stable: bool,
+    pub are_voters_caught_up: bool,
+}
+
+impl BootSlotsObservation {
+    fn may_restart(&self) -> bool {
+        !self.hosts_running_vms && self.is_store_stable && self.are_voters_caught_up
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,7 +79,7 @@ pub fn plan_boot_slots(
     if !report.holds_in_inactive_slot(image) {
         return vec![BootSlotsAction::WriteInactiveSlot(Box::new(image.clone()))];
     }
-    if request.should_boot && !observation.hosts_running_vms && observation.is_store_stable {
+    if request.should_boot && observation.may_restart() {
         return vec![BootSlotsAction::BootInactiveSlot];
     }
     Vec::new()
@@ -135,6 +142,14 @@ impl BootSlotsController {
         }))
     }
 
+    async fn are_voters_caught_up(&self) -> Result<bool, ActionError> {
+        let nodes = list::<Node>(self.store.as_ref(), None, Consistency::Linearizable).await?;
+        Ok(nodes
+            .iter()
+            .filter(|node| node.status.is_ready())
+            .all(|node| node.status.store.is_none_or(|store| store.followers_catching_up == 0)))
+    }
+
     async fn leave_and_reboot(&self) -> Result<(), ActionError> {
         self.consensus.hand_off_leadership().await?;
         self.surrender_lease().await;
@@ -182,6 +197,7 @@ impl Controller for BootSlotsController {
                 && !report.runs(&request.image)
         });
         let hosts_running_vms = is_due_to_boot && self.hosts_running_vms().await?;
+        let are_voters_caught_up = !is_due_to_boot || self.are_voters_caught_up().await?;
         Ok(BootSlotsObservation {
             report,
             request,
@@ -189,6 +205,7 @@ impl Controller for BootSlotsController {
             running_for: Duration::try_from(now - self.started_at).unwrap_or_default(),
             hosts_running_vms,
             is_store_stable: self.consensus.is_stable(),
+            are_voters_caught_up,
         })
     }
 
@@ -220,8 +237,7 @@ impl Controller for BootSlotsController {
     }
 
     fn revisit_after(&self, observation: &BootSlotsObservation) -> Option<Duration> {
-        let is_waiting = observation.hosts_running_vms || !observation.is_store_stable;
-        (!observation.report.is_confirmed() || is_waiting).then_some(UNCONFIRMED_REVISIT)
+        (!observation.report.is_confirmed() || !observation.may_restart()).then_some(UNCONFIRMED_REVISIT)
     }
 }
 
@@ -267,6 +283,7 @@ mod tests {
             running_for: Duration::from_secs(5),
             hosts_running_vms: false,
             is_store_stable: true,
+            are_voters_caught_up: true,
         }
     }
 
@@ -297,9 +314,14 @@ mod tests {
         assert_eq!(plan_boot_slots(&hosting, &settings), Vec::new());
         let unsettled = BootSlotsObservation {
             is_store_stable: false,
-            ..observation(written, Some(request("0.2.0", true)))
+            ..observation(written.clone(), Some(request("0.2.0", true)))
         };
         assert_eq!(plan_boot_slots(&unsettled, &settings), Vec::new());
+        let lagging = BootSlotsObservation {
+            are_voters_caught_up: false,
+            ..observation(written.clone(), Some(request("0.2.0", true)))
+        };
+        assert_eq!(plan_boot_slots(&lagging, &settings), Vec::new());
     }
 
     #[test]
