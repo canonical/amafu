@@ -56,6 +56,11 @@ impl Election {
     }
 
     #[must_use]
+    pub fn is_held_by_a_peer(&self, now: Instant) -> bool {
+        self.peers_heard_within_silence(now).any(|peer| peer.holds)
+    }
+
+    #[must_use]
     pub fn advertisement(&self) -> Advertisement {
         Advertisement { node: self.me.clone(), is_eligible: self.is_eligible, holds: self.holds }
     }
@@ -198,6 +203,7 @@ mod tests {
         cluster.nodes[0].set_eligible(false);
         cluster.ticks(2);
         assert_eq!(cluster.holders(), vec![String::from("node-2")]);
+        assert!(cluster.nodes[0].is_held_by_a_peer(cluster.now));
     }
 
     #[test]
