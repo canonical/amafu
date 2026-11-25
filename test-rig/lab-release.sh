@@ -139,6 +139,9 @@ preflight() {
   local unsettled
   unsettled="$(amafu_on_lab "--output json node list" | jq -r '[.[] | select(.status.store != null and (.status.store.is_stable | not)) | .metadata.name] | join(", ")')"
   [[ -z "$unsettled" ]] || problems+=("the store is still settling on: $unsettled")
+  local lagging
+  lagging="$(amafu_on_lab "--output json node list" | jq -r '[.[] | select((.status.store.followers_catching_up // 0) > 0) | .metadata.name] | join(", ")')"
+  [[ -z "$lagging" ]] || problems+=("a store follower is still catching up from the leader on: $lagging")
   local local_backends
   local_backends="$(amafu_on_lab "--output json storage-backend list" | jq -c '[.[] | select(.specification.provider.type == "local-disk") | .metadata.name]')"
   local project pinned busy
