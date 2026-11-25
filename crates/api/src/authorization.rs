@@ -13,6 +13,9 @@ pub enum Target<'request> {
 
 #[must_use]
 pub fn is_allowed(principal: &Principal, verb: Verb, kind: &KindDescriptor, target: Target<'_>) -> bool {
+    if kind.cluster_policy == ClusterPolicy::NodeSecret {
+        return principal.role == Role::Admin && !verb.is_read();
+    }
     if principal.role == Role::Admin {
         return true;
     }
@@ -41,6 +44,19 @@ mod tests {
 
     fn principal(role: Role) -> Principal {
         Principal { name: String::from("someone"), role, project: ProjectName::new("project-a").unwrap() }
+    }
+
+    #[test]
+    fn a_node_secret_is_written_by_admins_and_read_by_nobody_through_the_api() {
+        let secret = kind_named("DashboardSessionKey").unwrap();
+        assert!(is_allowed(&principal(Role::Admin), Verb::Create, &secret, Target::Cluster));
+        assert!(is_allowed(&principal(Role::Admin), Verb::Update, &secret, Target::Cluster));
+        for verb in [Verb::Get, Verb::List, Verb::Watch] {
+            for role in [Role::Admin, Role::Operator, Role::Member, Role::Viewer] {
+                assert!(!is_allowed(&principal(role), verb, &secret, Target::Cluster), "{role} {verb:?}");
+            }
+        }
+        assert!(!is_allowed(&principal(Role::Operator), Verb::Create, &secret, Target::Cluster));
     }
 
     #[test]

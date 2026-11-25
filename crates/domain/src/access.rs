@@ -65,6 +65,7 @@ pub enum ClusterPolicy {
     ManagedByNodes,
     SharedInfrastructure,
     AdminOnly,
+    NodeSecret,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
