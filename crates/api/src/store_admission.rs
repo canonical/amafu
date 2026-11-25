@@ -1,5 +1,8 @@
 use std::collections::BTreeMap;
 
+use amafu_domain::features::Feature;
+use amafu_domain::kinds::cluster_address::{ClusterAddress, ClusterAddressCertificate, DashboardSessionKey};
+use amafu_domain::kinds::cluster_version::{ClusterVersion, cluster_version_name};
 use amafu_domain::kinds::environment::{EnvironmentChange, EnvironmentPhase};
 use amafu_domain::kinds::juju_controller::{
     JujuController, JujuControllerChange, JujuControllerChangeSpecification, JujuRequest, Substrate,
@@ -8,6 +11,7 @@ use amafu_domain::kinds::kubernetes_cluster::{
     KubernetesCluster, KubernetesClusterChange, KubernetesClusterChangeSpecification, KubernetesRequest,
 };
 use amafu_domain::kinds::network::Network;
+use amafu_domain::kinds::node::{Node, NodeSpecification};
 use amafu_domain::kinds::operation::OperationStatus;
 use amafu_domain::kinds::ssh_key::{SshKey, SshKeyGroup, SshKeyGroupSpecification};
 use amafu_domain::kinds::vm::{Vm, VmSpecification};
@@ -45,6 +49,7 @@ impl StoreAdmission<'_> {
         specification: &Value,
     ) -> Result<(), Refusal> {
         refuse_environment_labels(labels)?;
+        self.refuse_before_its_feature(reference, specification).await?;
         match reference.kind.as_str() {
             kind if kind == KubernetesClusterChange::KIND => {
                 let change = decode::<KubernetesClusterChangeSpecification>(specification)?;
@@ -70,7 +75,38 @@ impl StoreAdmission<'_> {
 
     pub async fn on_update(&self, reference: &ObjectReference, specification: &Value) -> Result<(), Refusal> {
         self.refuse_if_owned(reference).await?;
+        self.refuse_before_its_feature(reference, specification).await?;
         self.refuse_missing_keys(reference, specification).await
+    }
+
+    async fn refuse_before_its_feature(
+        &self,
+        reference: &ObjectReference,
+        specification: &Value,
+    ) -> Result<(), Refusal> {
+        let needs_cluster_address = match reference.kind.as_str() {
+            kind if kind == ClusterAddress::KIND
+                || kind == ClusterAddressCertificate::KIND
+                || kind == DashboardSessionKey::KIND =>
+            {
+                true
+            }
+            kind if kind == Node::KIND => decode::<NodeSpecification>(specification)?.serves_dashboard(),
+            _ => false,
+        };
+        if !needs_cluster_address || self.is_enabled(Feature::ClusterAddress).await? {
+            return Ok(());
+        }
+        Err(Refusal::Unready(format!(
+            "the cluster address and the dashboard role need feature level {}; finalize an upgrade to it first",
+            Feature::ClusterAddress.introduced_in()
+        )))
+    }
+
+    async fn is_enabled(&self, feature: Feature) -> Result<bool, Refusal> {
+        let reference = ObjectReference::of::<ClusterVersion>(None, cluster_version_name());
+        let version = get::<ClusterVersion>(self.store, &reference, Consistency::Linearizable).await?;
+        Ok(version.is_some_and(|version| feature.is_enabled(&version.specification)))
     }
 
     async fn refuse_missing_keys(
