@@ -31,6 +31,7 @@ amafu-image-catalog = { path = "crates/image-catalog" }
 amafu-api = { path = "crates/api" }
 amafu-audit-export = { path = "crates/audit-export" }
 amafu-boot-slots = { path = "crates/boot-slots" }
+amafu-cluster-address = { path = "crates/cluster-address" }
 amafu-dashboard = { path = "crates/dashboard" }
 amafu-system = { path = "crates/system" }
 amafu-network = { path = "crates/network" }

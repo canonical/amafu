@@ -157,6 +157,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "amafu-cluster-address"
+version = "0.1.0"
+dependencies = [
+ "amafu-domain",
+ "hex",
+ "ring",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "amafu-command-line"
 version = "0.1.0"
 dependencies = [
