@@ -124,7 +124,8 @@ impl UpgradePlan {
     #[must_use]
     pub fn steps(&self) -> Vec<StepSpecification> {
         let mut steps = vec![StepSpecification::VerifyImage, StepSpecification::SetClusterImage];
-        for wave in &self.waves {
+        let last_wave = self.waves.len().saturating_sub(1);
+        for (index, wave) in self.waves.iter().enumerate() {
             for node in &wave.nodes {
                 steps.push(StepSpecification::Evacuate { node: node.clone() });
                 steps.push(StepSpecification::WriteInactiveSlot { node: node.clone() });
@@ -132,7 +133,9 @@ impl UpgradePlan {
                 steps.push(StepSpecification::AwaitHealthy { node: node.clone() });
                 steps.push(StepSpecification::Uncordon { node: node.clone() });
             }
-            steps.push(StepSpecification::Soak);
+            if index < last_wave {
+                steps.push(StepSpecification::Soak);
+            }
         }
         steps
     }
@@ -235,9 +238,18 @@ mod tests {
                 "write-inactive-slot",
                 "reboot-into-slot",
                 "await-healthy",
-                "uncordon",
-                "soak"
+                "uncordon"
             ]
         );
+    }
+
+    #[test]
+    fn the_cluster_soaks_between_waves_but_not_after_the_last() {
+        let inventory = [node("node-1", None, true), node("node-2", None, true), node("node-3", None, true)];
+        let plan = UpgradePlan::upgrade(&inventory, image(), &WavePolicy::default());
+        let soaks = plan.steps().iter().filter(|step| **step == StepSpecification::Soak).count();
+        assert_eq!(plan.waves.len(), 3);
+        assert_eq!(soaks, 2);
+        assert_ne!(plan.steps().last(), Some(&StepSpecification::Soak));
     }
 }
