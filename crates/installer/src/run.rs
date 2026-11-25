@@ -11,6 +11,7 @@ use amafu_interfaces::objects::{apply, get};
 use amafu_interfaces::{Clock, Consistency, Fence, MachineProvisioner, Store, TrustedImageKeys};
 use amafu_reconciler::{OperationContext, Progress, advance};
 
+use crate::cluster_address::{configure_cluster_address, issue_certificate};
 use crate::configuration::{ClusterCredentials, api_endpoint};
 use crate::description::InstallDescription;
 use crate::journal::JournalStore;
@@ -21,6 +22,7 @@ const CREDENTIALS_FILE: &str = "cluster-credentials.json";
 const INSTALL_OPERATION: &str = "install";
 const WAITING_POLL: Duration = Duration::from_secs(5);
 const RETRY_DELAY: Duration = Duration::from_secs(10);
+const CLUSTER_ADDRESS_ATTEMPTS: u32 = 30;
 
 #[derive(Debug, thiserror::Error)]
 pub enum InstallError {
@@ -32,6 +34,8 @@ pub enum InstallError {
     Failed(String),
     #[error("the install was cancelled")]
     Cancelled,
+    #[error("the cluster address cannot be configured: {0}")]
+    ClusterAddress(String),
 }
 
 pub struct InstallDirectory {
@@ -188,10 +192,30 @@ impl InstallSession {
     pub async fn run_to_completion(&self) -> Result<(), InstallError> {
         loop {
             match self.advance().await? {
-                InstallProgress::Succeeded => return Ok(()),
+                InstallProgress::Succeeded => return self.configure_the_cluster_address().await,
                 InstallProgress::Advanced => {}
                 InstallProgress::Waiting => self.clock.sleep(WAITING_POLL).await,
                 InstallProgress::Retrying => self.clock.sleep(RETRY_DELAY).await,
+            }
+        }
+    }
+
+    async fn configure_the_cluster_address(&self) -> Result<(), InstallError> {
+        let Some(address) = &self.steps.description.cluster.address else {
+            return Ok(());
+        };
+        let certificate = issue_certificate(&self.credentials.authority, address)
+            .map_err(|error| InstallError::ClusterAddress(error.to_string()))?;
+        let mut attempts = 0;
+        loop {
+            attempts += 1;
+            match configure_cluster_address(&self.steps.cluster, address, &certificate).await {
+                Ok(()) => return Ok(()),
+                Err(error) if attempts < CLUSTER_ADDRESS_ATTEMPTS => {
+                    tracing::warn!(%error, "the cluster address is not configured yet; trying again");
+                    self.clock.sleep(RETRY_DELAY).await;
+                }
+                Err(error) => return Err(InstallError::ClusterAddress(error.to_string())),
             }
         }
     }

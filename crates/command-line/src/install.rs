@@ -37,6 +37,7 @@ pub async fn run(arguments: InstallArguments) -> anyhow::Result<()> {
     let maas = &description.maas;
     let provisioner = MaasClient::new(&maas.url, &maas.api_key, maas.certificate_authority.as_deref())?;
     let directory = InstallDirectory::new(&arguments.state_directory);
+    let cluster_address = description.cluster.address.clone();
     let session = InstallSession::open(
         description,
         &directory,
@@ -50,5 +51,11 @@ pub async fn run(arguments: InstallArguments) -> anyhow::Result<()> {
         "the cluster is installed; its credentials are in {}",
         directory.credentials().display()
     ))?;
+    if let Some(address) = &cluster_address {
+        crate::output::emit_line(format!(
+            "the dashboard answers at https://{} and the API at https://{}:7443",
+            address.address, address.address
+        ))?;
+    }
     Ok(())
 }

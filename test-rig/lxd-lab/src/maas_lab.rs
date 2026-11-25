@@ -1,3 +1,4 @@
+use amafu_domain::kinds::cluster_address::ClusterAddressSpecification;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -28,6 +29,7 @@ const GATEWAY: Ipv4Addr = Ipv4Addr::new(10, 217, 0, 1);
 const MAAS_ADDRESS: Ipv4Addr = Ipv4Addr::new(10, 217, 0, 2);
 const PREFIX_LENGTH: u8 = 24;
 const FIRST_NODE_HOST: u8 = 10;
+const CLUSTER_ADDRESS: Ipv4Addr = Ipv4Addr::new(10, 217, 0, 50);
 const DYNAMIC_RANGE: (&str, &str) = ("10.217.0.100", "10.217.0.199");
 const READY_MARKER: &str = "/var/lib/amafu-maas-ready";
 const FAILED_MARKER: &str = "/var/lib/amafu-maas-failed";
@@ -327,6 +329,11 @@ fn install_description(
             image_keys: vec![image_key.to_owned()],
             resolvers: vec![GATEWAY],
             confirm_after_seconds: 30,
+            address: Some(ClusterAddressSpecification {
+                address: CLUSTER_ADDRESS,
+                prefix_length: PREFIX_LENGTH,
+                interface: None,
+            }),
         },
         maas: MaasSection {
             url: format!("http://{MAAS_ADDRESS}:5240/MAAS"),

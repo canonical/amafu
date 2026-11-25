@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 use std::net::Ipv4Addr;
 use std::path::Path;
 
+use amafu_domain::kinds::cluster_address::ClusterAddressSpecification;
 use amafu_domain::kinds::node::NodeRole;
 use amafu_domain::node_image::NodeImage;
 use amafu_domain::{NodeName, Sha256Digest, ZoneName};
@@ -30,6 +31,33 @@ pub struct ClusterSection {
     pub resolvers: Vec<Ipv4Addr>,
     #[serde(default = "default_confirm_after_seconds")]
     pub confirm_after_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "optional_text")]
+    pub address: Option<ClusterAddressSpecification>,
+}
+
+mod optional_text {
+    use std::fmt::Display;
+    use std::str::FromStr;
+
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    #[allow(clippy::ref_option)]
+    pub fn serialize<S: Serializer, T: Display>(value: &Option<T>, serializer: S) -> Result<S::Ok, S::Error> {
+        match value {
+            Some(value) => serializer.collect_str(value),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: FromStr<Err: Display>,
+    {
+        Option::<String>::deserialize(deserializer)?
+            .map(|text| text.parse().map_err(serde::de::Error::custom))
+            .transpose()
+    }
 }
 
 fn default_confirm_after_seconds() -> u64 {
@@ -182,6 +210,16 @@ machines:
         let description = InstallDescription::parse(DESCRIPTION).unwrap();
         let order: Vec<String> = description.ordered_nodes().iter().map(ToString::to_string).collect();
         assert_eq!(order, vec!["node-0", "node-1"]);
+    }
+
+    #[test]
+    fn the_cluster_address_is_written_with_its_prefix_length() {
+        assert_eq!(InstallDescription::parse(DESCRIPTION).unwrap().cluster.address, None);
+        let with_address = DESCRIPTION.replace("  image_keys: []", "  image_keys: []\n  address: 10.20.0.50/24");
+        let address = InstallDescription::parse(&with_address).unwrap().cluster.address.unwrap();
+        assert_eq!(address.to_string(), "10.20.0.50/24");
+        let malformed = DESCRIPTION.replace("  image_keys: []", "  image_keys: []\n  address: 10.20.0.50");
+        assert!(InstallDescription::parse(&malformed).is_err());
     }
 
     #[test]

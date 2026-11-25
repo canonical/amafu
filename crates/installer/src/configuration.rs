@@ -39,6 +39,10 @@ pub enum CredentialsError {
 }
 
 impl ClusterCredentials {
+    pub fn load(path: &Path) -> Result<Self, CredentialsError> {
+        Ok(serde_json::from_slice(&std::fs::read(path)?)?)
+    }
+
     pub fn load_or_create(path: &Path, cluster_name: &str) -> Result<Self, CredentialsError> {
         match std::fs::read(path) {
             Ok(bytes) => return Ok(serde_json::from_slice(&bytes)?),

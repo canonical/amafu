@@ -1,4 +1,5 @@
 pub mod certificates;
+pub mod cluster_address;
 pub mod configuration;
 pub mod description;
 pub mod journal;
