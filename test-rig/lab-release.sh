@@ -134,6 +134,8 @@ preflight() {
   local unready
   unready="$(amafu_on_lab "--output json node list" | jq -r '[.[] | select(.status.phase != "ready") | .metadata.name] | join(", ")')"
   [[ -z "$unready" ]] || problems+=("nodes not ready: $unready")
+  lab "curl -s -o /dev/null --max-time 5 http://$LAB_IMAGE_HOST:$LAB_IMAGE_PORT/" \
+    || problems+=("nothing serves images on http://$LAB_IMAGE_HOST:$LAB_IMAGE_PORT (systemctl status amafu-images)")
   local unsettled
   unsettled="$(amafu_on_lab "--output json node list" | jq -r '[.[] | select(.status.store != null and (.status.store.is_stable | not)) | .metadata.name] | join(", ")')"
   [[ -z "$unsettled" ]] || problems+=("the store is still settling on: $unsettled")
