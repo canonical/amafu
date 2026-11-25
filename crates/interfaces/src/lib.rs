@@ -1,6 +1,7 @@
 pub mod audit;
 pub mod boot_slots;
 pub mod clock;
+pub mod cluster_address;
 pub mod consensus;
 pub mod contract;
 pub mod error;
@@ -27,6 +28,7 @@ pub mod watchdog;
 pub use audit::{AuditEntry, AuditLog, AuditOutcome, AuditSinkDelivery, AuditSinks, SequencedAuditEntry};
 pub use boot_slots::{BootSlotError, BootSlots};
 pub use clock::Clock;
+pub use cluster_address::{ClusterAddressClaim, NoClusterAddress};
 pub use consensus::{ConsensusMembership, NotAVoter};
 pub use error::ActionError;
 pub use guest::{GuestAgents, WorkloadSpecification, WorkloadState};

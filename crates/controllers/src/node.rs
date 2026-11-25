@@ -4,13 +4,17 @@ use std::time::Duration;
 
 use std::net::Ipv4Addr;
 
+use amafu_domain::features::Feature;
+use amafu_domain::kinds::cluster_version::{ClusterVersion, cluster_version_name};
 use amafu_domain::kinds::node::{
     BootReport, CpuBaseline, Node, NodeCapacity, NodePhase, NodeRole, NodeSpecification, NodeStatus,
     StoreHealth,
 };
 use amafu_domain::{Change, NodeName, Object, ObjectId, ObjectName, ObjectReference, ZoneName};
 use amafu_interfaces::objects::{apply, get, remove};
-use amafu_interfaces::{ActionError, BootSlots, Clock, ConsensusMembership, Consistency, Store};
+use amafu_interfaces::{
+    ActionError, BootSlots, Clock, ClusterAddressClaim, ConsensusMembership, Consistency, Store,
+};
 use amafu_reconciler::{Controller, KeyMapping, WatchedKind};
 use time::OffsetDateTime;
 
@@ -27,24 +31,36 @@ pub struct NodeIdentity {
     pub heartbeat_interval: Duration,
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LocalReport {
+    pub boot: Option<BootReport>,
+    pub store: Option<StoreHealth>,
+    pub holds_cluster_address: bool,
+}
+
 impl NodeIdentity {
     #[must_use]
-    pub fn status(
-        &self,
-        now: OffsetDateTime,
-        boot: Option<BootReport>,
-        store: Option<StoreHealth>,
-    ) -> NodeStatus {
+    pub fn status(&self, now: OffsetDateTime, report: LocalReport) -> NodeStatus {
         NodeStatus {
-            store,
+            store: report.store,
+            holds_cluster_address: report.holds_cluster_address,
             phase: NodePhase::Ready,
             capacity: self.capacity,
             cpu_baseline: self.cpu_baseline,
             underlay_address: self.underlay_address,
             software_version: self.software_version.clone(),
             last_heartbeat: Some(now),
-            boot,
+            boot: report.boot,
         }
+    }
+
+    #[must_use]
+    pub fn registered_roles(&self, is_cluster_address_enabled: bool) -> std::collections::BTreeSet<NodeRole> {
+        let mut roles = self.roles.clone();
+        if is_cluster_address_enabled && roles.contains(&NodeRole::Core) {
+            roles.insert(NodeRole::Dashboard);
+        }
+        roles
     }
 }
 
@@ -54,12 +70,13 @@ pub struct NodeController {
     clock: Arc<dyn Clock>,
     boot_slots: Option<Arc<dyn BootSlots>>,
     consensus: Option<Arc<dyn ConsensusMembership>>,
+    cluster_address: Option<Arc<dyn ClusterAddressClaim>>,
 }
 
 impl NodeController {
     #[must_use]
     pub fn new(identity: NodeIdentity, store: Arc<dyn Store>, clock: Arc<dyn Clock>) -> Self {
-        Self { identity, store, clock, boot_slots: None, consensus: None }
+        Self { identity, store, clock, boot_slots: None, consensus: None, cluster_address: None }
     }
 
     #[must_use]
@@ -74,8 +91,29 @@ impl NodeController {
         self
     }
 
+    #[must_use]
+    pub fn with_cluster_address(mut self, cluster_address: Arc<dyn ClusterAddressClaim>) -> Self {
+        self.cluster_address = Some(cluster_address);
+        self
+    }
+
     fn reference(&self) -> ObjectReference {
         node_reference(&self.identity.name)
+    }
+
+    fn local_report(&self) -> LocalReport {
+        LocalReport {
+            boot: self.boot_slots.as_ref().map(|boot_slots| boot_slots.report()),
+            store: self.consensus.as_ref().and_then(|consensus| consensus.health()),
+            holds_cluster_address: self.cluster_address.as_ref().is_some_and(|claim| claim.holds()),
+        }
+    }
+
+    async fn is_cluster_address_enabled(&self) -> Result<bool, ActionError> {
+        let reference = ObjectReference::of::<ClusterVersion>(None, cluster_version_name());
+        let version =
+            get::<ClusterVersion>(self.store.as_ref(), &reference, Consistency::Linearizable).await?;
+        Ok(version.is_some_and(|version| Feature::ClusterAddress.is_enabled(&version.specification)))
     }
 }
 
@@ -92,8 +130,8 @@ pub fn node_reference(name: &NodeName) -> ObjectReference {
 pub struct NodeObservation {
     pub identity: NodeIdentity,
     pub node: Option<Object<Node>>,
-    pub boot: Option<BootReport>,
-    pub store: Option<StoreHealth>,
+    pub report: LocalReport,
+    pub is_cluster_address_enabled: bool,
     pub now: OffsetDateTime,
 }
 
@@ -113,7 +151,7 @@ pub fn plan_node(observation: &NodeObservation) -> Vec<NodeAction> {
     let identity = &observation.identity;
     let Some(node) = &observation.node else {
         return vec![NodeAction::Register(NodeSpecification {
-            roles: identity.roles.clone(),
+            roles: identity.registered_roles(observation.is_cluster_address_enabled),
             is_cordoned: false,
             zone: identity.zone.clone(),
             image: None,
@@ -122,7 +160,7 @@ pub fn plan_node(observation: &NodeObservation) -> Vec<NodeAction> {
     if node.metadata.is_deleting {
         return vec![NodeAction::Remove];
     }
-    let current = identity.status(observation.now, observation.boot.clone(), observation.store);
+    let current = identity.status(observation.now, observation.report.clone());
     let reported = NodeStatus { last_heartbeat: node.status.last_heartbeat, ..current.clone() };
     let is_current = node.is_status_current()
         && node.status == reported
@@ -154,9 +192,14 @@ impl Controller for NodeController {
         } else {
             None
         };
-        let boot = self.boot_slots.as_ref().map(|boot_slots| boot_slots.report());
-        let store = self.consensus.as_ref().and_then(|consensus| consensus.health());
-        Ok(NodeObservation { identity: self.identity.clone(), node, boot, store, now: self.clock.now() })
+        let is_cluster_address_enabled = node.is_none() && self.is_cluster_address_enabled().await?;
+        Ok(NodeObservation {
+            identity: self.identity.clone(),
+            node,
+            report: self.local_report(),
+            is_cluster_address_enabled,
+            now: self.clock.now(),
+        })
     }
 
     fn plan(&self, observation: &NodeObservation) -> Vec<NodeAction> {
@@ -241,19 +284,23 @@ mod tests {
     }
 
     fn ready(identity: &NodeIdentity, heartbeat: OffsetDateTime) -> NodeStatus {
-        identity.status(heartbeat, None, None)
+        identity.status(heartbeat, LocalReport::default())
+    }
+
+    fn observed(identity: &NodeIdentity, node: Option<Object<Node>>, now: OffsetDateTime) -> NodeObservation {
+        NodeObservation {
+            identity: identity.clone(),
+            node,
+            report: LocalReport::default(),
+            is_cluster_address_enabled: false,
+            now,
+        }
     }
 
     #[test]
     fn an_unknown_node_registers_itself() {
         let identity = identity();
-        let actions = plan_node(&NodeObservation {
-            identity: identity.clone(),
-            node: None,
-            boot: None,
-            store: None,
-            now: at(0),
-        });
+        let actions = plan_node(&observed(&identity, None, at(0)));
         assert_eq!(
             actions,
             vec![NodeAction::Register(NodeSpecification {
@@ -266,16 +313,24 @@ mod tests {
     }
 
     #[test]
+    fn a_core_member_registers_as_a_dashboard_node_once_the_cluster_address_is_enabled() {
+        let identity = identity();
+        let observation =
+            NodeObservation { is_cluster_address_enabled: true, ..observed(&identity, None, at(0)) };
+        let actions = plan_node(&observation);
+        let Some(NodeAction::Register(specification)) = actions.first() else {
+            panic!("the node must register, not {actions:?}");
+        };
+        assert!(specification.serves_dashboard());
+        let compute_only = NodeIdentity { roles: BTreeSet::from([NodeRole::Compute]), ..identity };
+        assert_eq!(compute_only.registered_roles(true), BTreeSet::from([NodeRole::Compute]));
+    }
+
+    #[test]
     fn a_registered_node_reports_ready() {
         let identity = identity();
         let node = registered(&identity, NodeStatus::default());
-        let actions = plan_node(&NodeObservation {
-            identity: identity.clone(),
-            node: Some(node),
-            boot: None,
-            store: None,
-            now: at(5),
-        });
+        let actions = plan_node(&observed(&identity, Some(node), at(5)));
         assert_eq!(
             actions,
             vec![NodeAction::ReportReady { observed_generation: 1, status: ready(&identity, at(5)) }]
@@ -286,10 +341,7 @@ mod tests {
     fn a_recent_heartbeat_needs_nothing() {
         let identity = identity();
         let node = registered(&identity, ready(&identity, at(0)));
-        assert_eq!(
-            plan_node(&NodeObservation { identity, node: Some(node), boot: None, store: None, now: at(9) }),
-            Vec::new()
-        );
+        assert_eq!(plan_node(&observed(&identity, Some(node), at(9))), Vec::new());
     }
 
     #[test]
@@ -297,13 +349,8 @@ mod tests {
         let identity = identity();
         let node = registered(&identity, ready(&identity, at(0)));
         let unsettled = StoreHealth { is_stable: false, elections_started: 3, ..StoreHealth::default() };
-        let actions = plan_node(&NodeObservation {
-            identity: identity.clone(),
-            node: Some(node),
-            boot: None,
-            store: Some(unsettled),
-            now: at(2),
-        });
+        let report = LocalReport { store: Some(unsettled), ..LocalReport::default() };
+        let actions = plan_node(&NodeObservation { report, ..observed(&identity, Some(node), at(2)) });
         let reported = NodeStatus { store: Some(unsettled), ..ready(&identity, at(2)) };
         assert_eq!(actions, vec![NodeAction::ReportReady { observed_generation: 1, status: reported }]);
     }
@@ -312,13 +359,7 @@ mod tests {
     fn an_old_heartbeat_is_renewed() {
         let identity = identity();
         let node = registered(&identity, ready(&identity, at(0)));
-        let actions = plan_node(&NodeObservation {
-            identity: identity.clone(),
-            node: Some(node),
-            boot: None,
-            store: None,
-            now: at(10),
-        });
+        let actions = plan_node(&observed(&identity, Some(node), at(10)));
         assert_eq!(
             actions,
             vec![NodeAction::ReportReady { observed_generation: 1, status: ready(&identity, at(10)) }]
@@ -330,9 +371,6 @@ mod tests {
         let identity = identity();
         let mut node = registered(&identity, ready(&identity, at(0)));
         node.metadata.is_deleting = true;
-        assert_eq!(
-            plan_node(&NodeObservation { identity, node: Some(node), boot: None, store: None, now: at(1) }),
-            vec![NodeAction::Remove]
-        );
+        assert_eq!(plan_node(&observed(&identity, Some(node), at(1))), vec![NodeAction::Remove]);
     }
 }
