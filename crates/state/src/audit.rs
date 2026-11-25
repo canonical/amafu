@@ -2,7 +2,7 @@ use amafu_interfaces::{AuditEntry, AuditLog, SequencedAuditEntry, StoreError};
 use quorium::Quorium;
 use uuid::Uuid;
 
-use crate::entities::{AUDIT_SEGMENT_CAPACITY, AuditCursor, AuditSegment};
+use crate::entities::{AUDIT_SEGMENT_CAPACITY, AuditCursor, AuditRetention, AuditSegment};
 use crate::errors::store_error;
 
 const SEARCHED_SEGMENTS: u64 = 16;
@@ -97,6 +97,20 @@ impl AuditLog for QuoriumAuditLog {
             }
         }
         Ok(None)
+    }
+
+    async fn retain_newest(&self, entries: u64) -> Result<(), StoreError> {
+        let allocated = self.node.global::<AuditCursor>().allocated().await.map_err(store_error)?;
+        let first_kept = allocated.saturating_sub(entries) / AUDIT_SEGMENT_CAPACITY;
+        let retention = self.node.global::<AuditRetention>();
+        let first_still_stored = retention.first_kept_segment().await.map_err(store_error)?;
+        if first_kept <= first_still_stored {
+            return Ok(());
+        }
+        for segment in first_still_stored..first_kept {
+            self.node.entity::<AuditSegment>(segment).delete().await.map_err(store_error)?;
+        }
+        retention.keep_from(first_kept).await.map_err(store_error)
     }
 
     async fn recent(&self, limit: usize) -> Result<Vec<AuditEntry>, StoreError> {

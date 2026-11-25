@@ -48,6 +48,22 @@ async fn watchers_hear_about_every_change_of_their_kind() {
     node.shutdown().await;
 }
 
+fn denied_entry(request_id: Uuid) -> AuditEntry {
+    AuditEntry {
+        request_id,
+        recorded_at: OffsetDateTime::UNIX_EPOCH,
+        principal: Some(String::from("alice")),
+        role: Some(Role::Member),
+        verb: None,
+        kind: None,
+        project: None,
+        name: None,
+        method: String::from("GET"),
+        path: String::from("/v1/vms"),
+        outcome: AuditOutcome::Denied,
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn audit_entries_can_be_found_by_request() {
     let directory = tempfile::tempdir().unwrap();
@@ -57,22 +73,7 @@ async fn audit_entries_can_be_found_by_request() {
     for _ in 0..300 {
         let request_id = Uuid::new_v4();
         request_ids.push(request_id);
-        audit
-            .record(AuditEntry {
-                request_id,
-                recorded_at: OffsetDateTime::UNIX_EPOCH,
-                principal: Some(String::from("alice")),
-                role: Some(Role::Member),
-                verb: None,
-                kind: None,
-                project: None,
-                name: None,
-                method: String::from("GET"),
-                path: String::from("/v1/vms"),
-                outcome: AuditOutcome::Denied,
-            })
-            .await
-            .unwrap();
+        audit.record(denied_entry(request_id)).await.unwrap();
     }
     assert!(audit.find(request_ids[0]).await.unwrap().is_some());
     assert!(audit.find(request_ids[299]).await.unwrap().is_some());
@@ -82,6 +83,23 @@ async fn audit_entries_can_be_found_by_request() {
         recent.iter().map(|entry| entry.request_id).collect::<Vec<_>>(),
         vec![request_ids[299], request_ids[298], request_ids[297]]
     );
+    node.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_the_newest_audit_entries_stay_in_the_store() {
+    let directory = tempfile::tempdir().unwrap();
+    let node = single_voter(&directory).await.unwrap();
+    let audit = QuoriumAuditLog::new(node.clone());
+    let entries: Vec<AuditEntry> = (0..1500).map(|_| denied_entry(Uuid::new_v4())).collect();
+    audit.record_many(&entries).await.unwrap();
+    audit.retain_newest(512).await.unwrap();
+    let kept = audit.entries_from(0, 2000).await.unwrap();
+    assert!(kept.len() >= 512 && kept.len() < 512 + 256, "kept {} entries", kept.len());
+    assert_eq!(kept.last().map(|kept| kept.entry.request_id), Some(entries[1499].request_id));
+    assert!(audit.find(entries[0].request_id).await.unwrap().is_none());
+    audit.retain_newest(512).await.unwrap();
+    assert_eq!(audit.entries_from(0, 2000).await.unwrap().len(), kept.len());
     node.shutdown().await;
 }
 

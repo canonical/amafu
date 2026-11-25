@@ -76,4 +76,8 @@ impl AuditLog for BatchedAuditLog {
     async fn recent(&self, limit: usize) -> Result<Vec<AuditEntry>, StoreError> {
         self.log.recent(limit).await
     }
+
+    async fn retain_newest(&self, entries: u64) -> Result<(), StoreError> {
+        self.log.retain_newest(entries).await
+    }
 }

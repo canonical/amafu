@@ -184,6 +184,25 @@ impl AuditCursor {
 }
 
 #[derive(quorium::State, Debug, Clone, Default, Serialize, Deserialize)]
+#[state(key = (), name = "amafu.audit-retention")]
+pub struct AuditRetention {
+    first_kept_segment: u64,
+}
+
+#[quorium::state]
+impl AuditRetention {
+    #[quorium(id = 1)]
+    pub fn keep_from(&mut self, segment: u64) {
+        self.first_kept_segment = self.first_kept_segment.max(segment);
+    }
+
+    #[must_use]
+    pub fn first_kept_segment(&self) -> u64 {
+        self.first_kept_segment
+    }
+}
+
+#[derive(quorium::State, Debug, Clone, Default, Serialize, Deserialize)]
 #[state(key = u64, name = "amafu.audit-segment")]
 pub struct AuditSegment {
     entries: Vec<(u64, Vec<u8>)>,

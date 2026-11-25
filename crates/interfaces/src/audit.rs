@@ -69,4 +69,8 @@ pub trait AuditLog: Send + Sync {
     async fn entries_from(&self, first: u64, limit: usize) -> Result<Vec<SequencedAuditEntry>, StoreError>;
 
     async fn recent(&self, limit: usize) -> Result<Vec<AuditEntry>, StoreError>;
+
+    async fn retain_newest(&self, _entries: u64) -> Result<(), StoreError> {
+        Ok(())
+    }
 }
