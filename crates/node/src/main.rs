@@ -1,6 +1,8 @@
 mod boot;
 mod clock;
+mod cluster_address;
 mod control;
+mod dashboard;
 mod diagnostics;
 mod init;
 mod restart_guard;
@@ -38,6 +40,7 @@ enum Command {
         #[arg(long)]
         directory: PathBuf,
     },
+    Dashboard,
 }
 
 fn initialize_logging() {
@@ -89,6 +92,7 @@ fn main() -> ExitCode {
         Some(Command::VmProcess { directory }) => {
             amafu_hypervisor::run_vm_process(&directory).map_err(anyhow::Error::from)
         }
+        Some(Command::Dashboard) => dashboard::run_dashboard_process(),
         Some(Command::Control { configuration }) => control::drop_capabilities()
             .and_then(|()| runtime())
             .map_err(anyhow::Error::from)
