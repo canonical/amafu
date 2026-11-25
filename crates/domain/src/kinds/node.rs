@@ -246,10 +246,22 @@ pub struct StoreHealth {
     pub followers_catching_up: u32,
 }
 
+impl StoreHealth {
+    #[must_use]
+    pub fn is_settled(&self) -> bool {
+        self.is_stable && self.followers_catching_up == 0
+    }
+}
+
 impl NodeStatus {
     #[must_use]
     pub fn is_ready(&self) -> bool {
         self.phase == NodePhase::Ready
+    }
+
+    #[must_use]
+    pub fn is_store_settled(&self) -> bool {
+        self.store.is_none_or(|store| store.is_settled())
     }
 
     #[must_use]

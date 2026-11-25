@@ -328,7 +328,11 @@ pub struct Soak;
 impl Step for Soak {
     async fn is_complete(&self, context: &OperationContext<'_>) -> Result<bool, ActionError> {
         let soak = context.operation.specification.upgrade_plan().map_or(0, |plan| plan.soak_seconds);
-        Ok(step_age(context) >= Duration::from_secs(soak))
+        if step_age(context) < Duration::from_secs(soak) {
+            return Ok(false);
+        }
+        let nodes = list::<Node>(context.store, None, Consistency::Linearizable).await?;
+        Ok(nodes.iter().filter(|node| node.status.is_ready()).all(|node| node.status.is_store_settled()))
     }
 
     async fn run(&self, _context: &OperationContext<'_>) -> Result<(), ActionError> {

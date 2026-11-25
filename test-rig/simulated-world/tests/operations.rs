@@ -380,8 +380,8 @@ mod resuming {
 mod deadlines {
     use std::collections::BTreeMap;
 
-    use amafu_controllers::operations::upgrade::{AwaitHealthy, RebootIntoSlot};
-    use amafu_domain::kinds::node::{Node, NodeSpecification};
+    use amafu_controllers::operations::upgrade::{AwaitHealthy, RebootIntoSlot, Soak};
+    use amafu_domain::kinds::node::{Node, NodePhase, NodeSpecification, NodeStatus, StoreHealth};
     use amafu_domain::kinds::operation::{Operation, OperationSpecification, StepProgress};
     use amafu_domain::{Change, NodeName, Object, ObjectId, ObjectName, ObjectReference};
     use amafu_interfaces::objects::{apply, get};
@@ -433,8 +433,19 @@ mod deadlines {
     }
 
     fn waited(step: &dyn Step, seconds: i64) -> Result<bool, ActionError> {
+        waited_with_node(step, seconds, NodeStatus::default())
+    }
+
+    fn waited_with_node(step: &dyn Step, seconds: i64, status: NodeStatus) -> Result<bool, ActionError> {
         let store = MemoryStore::new();
         create::<Node>(&store, "node-1", NodeSpecification::default());
+        let node_reference = ObjectReference::of::<Node>(None, ObjectName::new("node-1").unwrap());
+        block_on(apply::<Node>(
+            &store,
+            &node_reference,
+            Change::UpdateStatus { observed_generation: 1, status },
+        ))
+        .unwrap();
         create::<Operation>(&store, "upgrade-1", upgrade());
         let reference = ObjectReference::of::<Operation>(None, ObjectName::new("upgrade-1").unwrap());
         let mut operation: Object<Operation> =
@@ -460,6 +471,17 @@ mod deadlines {
         let step = AwaitHealthy { node: node() };
         assert_eq!(waited(&step, 60), Ok(false));
         assert!(waited(&step, 601).unwrap_err().to_string().contains("healthily within 600 seconds"));
+    }
+
+    #[test]
+    fn a_soak_lasts_its_time_and_until_every_store_follower_has_caught_up() {
+        let ready_with =
+            |store| NodeStatus { phase: NodePhase::Ready, store: Some(store), ..NodeStatus::default() };
+        let settled = StoreHealth { is_stable: true, ..StoreHealth::default() };
+        let catching_up = StoreHealth { followers_catching_up: 1, ..settled };
+        assert_eq!(waited_with_node(&Soak, 10, ready_with(settled)), Ok(false));
+        assert_eq!(waited_with_node(&Soak, 31, ready_with(settled)), Ok(true));
+        assert_eq!(waited_with_node(&Soak, 31, ready_with(catching_up)), Ok(false));
     }
 }
 
