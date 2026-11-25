@@ -1,5 +1,6 @@
 pub mod audit_sink;
 pub mod certificate_revocation;
+pub mod cluster_address;
 pub mod cluster_version;
 pub mod environment;
 pub mod environment_secret;

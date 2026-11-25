@@ -7,6 +7,7 @@ use crate::access::{ClusterPolicy, ProjectPolicy};
 use crate::change::{Change, ChangeError, apply_change, confirm_removal};
 use crate::kinds::audit_sink::AuditSink;
 use crate::kinds::certificate_revocation::CertificateRevocation;
+use crate::kinds::cluster_address::{ClusterAddress, ClusterAddressCertificate, DashboardSessionKey};
 use crate::kinds::cluster_version::ClusterVersion;
 use crate::kinds::environment_secret::EnvironmentSecret;
 use crate::kinds::environment_settings::EnvironmentSettings;
@@ -108,7 +109,7 @@ impl KindDescriptor {
 }
 
 #[must_use]
-pub fn kinds() -> [KindDescriptor; 27] {
+pub fn kinds() -> [KindDescriptor; 30] {
     [
         KindDescriptor::of::<Node>(),
         KindDescriptor::of::<NodeLease>(),
@@ -116,6 +117,9 @@ pub fn kinds() -> [KindDescriptor; 27] {
         KindDescriptor::of::<ExternalNetwork>(),
         KindDescriptor::of::<CertificateRevocation>(),
         KindDescriptor::of::<ClusterVersion>(),
+        KindDescriptor::of::<ClusterAddress>(),
+        KindDescriptor::of::<ClusterAddressCertificate>(),
+        KindDescriptor::of::<DashboardSessionKey>(),
         KindDescriptor::of::<AuditSink>(),
         KindDescriptor::of::<Operation>(),
         KindDescriptor::of::<Vm>(),
@@ -157,6 +161,7 @@ pub fn kind_reference() -> String {
                 ClusterPolicy::ManagedByNodes => "nodes, and operators for their specification",
                 ClusterPolicy::SharedInfrastructure => "operators",
                 ClusterPolicy::AdminOnly => "admins",
+                ClusterPolicy::NodeSecret => "admins, who can never read it back",
             }
         };
         let _ = writeln!(

@@ -10,6 +10,9 @@ Generated from the kind registry by `cargo rig reference`. Do not edit it by han
 | ExternalNetwork | `/v1/external-networks` | 1 | cluster | operators |
 | CertificateRevocation | `/v1/certificate-revocations` | 1 | cluster | admins |
 | ClusterVersion | `/v1/cluster-versions` | 1 | cluster | admins |
+| ClusterAddress | `/v1/cluster-addresses` | 1 | cluster | operators |
+| ClusterAddressCertificate | `/v1/cluster-address-certificates` | 1 | cluster | admins, who can never read it back |
+| DashboardSessionKey | `/v1/dashboard-session-keys` | 1 | cluster | admins, who can never read it back |
 | AuditSink | `/v1/audit-sinks` | 1 | cluster | admins |
 | Operation | `/v1/operations` | 1 | cluster | operators |
 | Vm | `/v1/vms` | 1 | project | members of the project |
