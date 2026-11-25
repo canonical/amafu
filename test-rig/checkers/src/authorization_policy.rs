@@ -12,8 +12,46 @@ const EVERY_VERB: &[Verb] = &[Get, List, Watch, Create, Update, Delete];
 const READ: &[Verb] = &[Get, List, Watch];
 const READ_AND_UPDATE: &[Verb] = &[Get, List, Watch, Update];
 const NOTHING: &[Verb] = &[];
+const WRITE_ONLY: &[Verb] = &[Create, Update, Delete];
 
 const TABLE: &[Row] = &[
+    Row { role: Admin, kind: "ClusterAddress", in_own_project: EVERY_VERB, in_other_project: EVERY_VERB },
+    Row { role: Operator, kind: "ClusterAddress", in_own_project: EVERY_VERB, in_other_project: EVERY_VERB },
+    Row { role: Member, kind: "ClusterAddress", in_own_project: READ, in_other_project: READ },
+    Row { role: Viewer, kind: "ClusterAddress", in_own_project: READ, in_other_project: READ },
+    Row {
+        role: Admin,
+        kind: "ClusterAddressCertificate",
+        in_own_project: WRITE_ONLY,
+        in_other_project: WRITE_ONLY,
+    },
+    Row {
+        role: Operator,
+        kind: "ClusterAddressCertificate",
+        in_own_project: NOTHING,
+        in_other_project: NOTHING,
+    },
+    Row {
+        role: Member,
+        kind: "ClusterAddressCertificate",
+        in_own_project: NOTHING,
+        in_other_project: NOTHING,
+    },
+    Row {
+        role: Viewer,
+        kind: "ClusterAddressCertificate",
+        in_own_project: NOTHING,
+        in_other_project: NOTHING,
+    },
+    Row {
+        role: Admin,
+        kind: "DashboardSessionKey",
+        in_own_project: WRITE_ONLY,
+        in_other_project: WRITE_ONLY,
+    },
+    Row { role: Operator, kind: "DashboardSessionKey", in_own_project: NOTHING, in_other_project: NOTHING },
+    Row { role: Member, kind: "DashboardSessionKey", in_own_project: NOTHING, in_other_project: NOTHING },
+    Row { role: Viewer, kind: "DashboardSessionKey", in_own_project: NOTHING, in_other_project: NOTHING },
     Row { role: Admin, kind: "ExternalNetwork", in_own_project: EVERY_VERB, in_other_project: EVERY_VERB },
     Row { role: Operator, kind: "ExternalNetwork", in_own_project: EVERY_VERB, in_other_project: EVERY_VERB },
     Row { role: Member, kind: "ExternalNetwork", in_own_project: READ, in_other_project: READ },

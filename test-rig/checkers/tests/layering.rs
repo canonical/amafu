@@ -25,6 +25,7 @@ const ALLOWED: &[(&str, &[&str])] = &[
     ("amafu-system", &[]),
     ("amafu-api", &["amafu-domain", "amafu-interfaces", "amafu-token-issuer"]),
     ("amafu-boot-slots", &["amafu-domain", "amafu-interfaces"]),
+    ("amafu-cluster-address", &["amafu-domain"]),
     ("amafu-audit-export", &["amafu-domain", "amafu-interfaces"]),
     ("amafu-dashboard", &["amafu-api", "amafu-domain"]),
     (
@@ -60,7 +61,9 @@ const ALLOWED: &[(&str, &[&str])] = &[
             "amafu-api",
             "amafu-audit-export",
             "amafu-boot-slots",
+            "amafu-cluster-address",
             "amafu-controllers",
+            "amafu-dashboard",
             "amafu-domain",
             "amafu-hypervisor",
             "amafu-image-catalog",
