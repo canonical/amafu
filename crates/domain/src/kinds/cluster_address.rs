@@ -10,6 +10,7 @@ use crate::resource::{Resource, Scope};
 use crate::validation::{Validate, ValidationError};
 
 pub const CLUSTER_ADDRESS_NAME: &str = "cluster";
+const MAXIMUM_PREFIX_LENGTH: u8 = 30;
 
 #[must_use]
 pub fn cluster_address_name() -> ObjectName {
@@ -49,12 +50,12 @@ impl ClusterAddressSpecification {
 
 impl ClusterAddressSpecification {
     fn is_host_address(&self) -> bool {
-        let Some(network) = self.network().filter(|_| self.prefix_length > 0) else {
+        let Some(network) =
+            self.network().filter(|_| (1..=MAXIMUM_PREFIX_LENGTH).contains(&self.prefix_length))
+        else {
             return false;
         };
-        let has_host_bits = self.prefix_length < 31;
-        !has_host_bits
-            || (self.address != network.network_address() && self.address != network.broadcast_address())
+        self.address != network.network_address() && self.address != network.broadcast_address()
     }
 }
 
@@ -70,7 +71,7 @@ impl Validate for ClusterAddressSpecification {
         error.check(
             self.is_host_address(),
             "specification.address",
-            "must be a host address of its network, with a prefix length from 1 to 32",
+            "must be a host address of the nodes' network, with that network's prefix length (at most 30)",
         );
         if let Some(interface) = &self.interface {
             error.check(
@@ -182,7 +183,7 @@ mod tests {
         assert!(address("10.20.0.0", 24).validate().is_err());
         assert!(address("10.20.0.255", 24).validate().is_err());
         assert!(address("10.20.0.50", 33).validate().is_err());
-        assert!(address("10.20.0.50", 32).validate().is_ok());
+        assert!(address("10.20.0.50", 32).validate().is_err());
     }
 
     #[test]

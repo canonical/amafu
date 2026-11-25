@@ -1,4 +1,5 @@
 pub mod announcement;
+pub mod cluster_address;
 pub mod datapath;
 pub mod dhcp;
 pub mod dns;
