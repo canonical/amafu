@@ -6,6 +6,7 @@ use crate::entities::{AUDIT_SEGMENT_CAPACITY, AuditCursor, AuditRetention, Audit
 use crate::errors::store_error;
 
 const SEARCHED_SEGMENTS: u64 = 16;
+const SEGMENTS_DELETED_PER_BATCH: usize = 16;
 
 #[derive(Clone)]
 pub struct QuoriumAuditLog {
@@ -107,10 +108,14 @@ impl AuditLog for QuoriumAuditLog {
         if first_kept <= first_still_stored {
             return Ok(());
         }
-        for segment in first_still_stored..first_kept {
-            self.node.entity::<AuditSegment>(segment).delete().await.map_err(store_error)?;
+        for batch_start in (first_still_stored..first_kept).step_by(SEGMENTS_DELETED_PER_BATCH) {
+            let batch_end = first_kept.min(batch_start + SEGMENTS_DELETED_PER_BATCH as u64);
+            for segment in batch_start..batch_end {
+                self.node.entity::<AuditSegment>(segment).delete().await.map_err(store_error)?;
+            }
+            retention.keep_from(batch_end).await.map_err(store_error)?;
         }
-        retention.keep_from(first_kept).await.map_err(store_error)
+        Ok(())
     }
 
     async fn recent(&self, limit: usize) -> Result<Vec<AuditEntry>, StoreError> {
