@@ -242,6 +242,8 @@ pub struct StoreHealth {
     pub elections_started: u64,
     pub leader_changes: u64,
     pub leaderless_seconds: u64,
+    #[serde(default)]
+    pub followers_catching_up: u32,
 }
 
 impl NodeStatus {
