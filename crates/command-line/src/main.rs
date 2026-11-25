@@ -1,5 +1,6 @@
 mod audit_sink;
 mod catalog;
+mod cluster_address;
 mod connection;
 mod container;
 mod dashboard;
@@ -97,6 +98,8 @@ enum Command {
     SshKeyGroup(ssh_key::SshKeyGroupCommand),
     #[command(subcommand, about = "Serve or deploy the web dashboard")]
     Dashboard(dashboard::DashboardCommand),
+    #[command(subcommand, about = "Set the address the dashboard and the API answer on")]
+    ClusterAddress(cluster_address::ClusterAddressCommand),
 }
 
 async fn run(arguments: Arguments) -> anyhow::Result<()> {
@@ -134,6 +137,7 @@ async fn run(arguments: Arguments) -> anyhow::Result<()> {
         Command::ServiceAccount(command) => service_account::run(&client, command, arguments.output).await,
         Command::SshKey(command) => ssh_key::run(&client, command, arguments.output).await,
         Command::SshKeyGroup(command) => ssh_key::run_group(&client, command, arguments.output).await,
+        Command::ClusterAddress(command) => cluster_address::run(&client, command, arguments.output).await,
         Command::Install(_) | Command::Release(_) | Command::Dashboard(_) => Ok(()),
     }
 }
