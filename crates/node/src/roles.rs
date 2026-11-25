@@ -76,6 +76,8 @@ use amafu_node_configuration::NodeConfiguration;
 const INITIAL_RESTART_DELAY: Duration = Duration::from_secs(1);
 const MAXIMUM_RESTART_DELAY: Duration = Duration::from_secs(30);
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(10);
+const AUDIT_ENTRIES_KEPT_IN_THE_STORE: u64 = 10_240;
+const AUDIT_RETENTION_INTERVAL: Duration = Duration::from_secs(60);
 const NODE_IDENTIFIER_FILE: &str = "node-id";
 const STATE_DIRECTORY: &str = "state";
 const STATE_CACHE_FILE: &str = "state-cache.json";
@@ -884,6 +886,17 @@ fn lease_roles(
     }
 }
 
+fn audit_retention_role(roles: &mut JoinSet<()>, audit: Arc<dyn AuditLog>) {
+    roles.spawn(async move {
+        loop {
+            if let Err(error) = audit.retain_newest(AUDIT_ENTRIES_KEPT_IN_THE_STORE).await {
+                tracing::warn!(%error, "old audit entries could not be removed from the store");
+            }
+            tokio::time::sleep(AUDIT_RETENTION_INTERVAL).await;
+        }
+    });
+}
+
 fn boot_slot_role(
     roles: &mut JoinSet<()>,
     node: &NodeName,
@@ -955,6 +968,7 @@ pub async fn run(configuration: NodeConfiguration, boot: Option<BootServices>) -
     .spread_by(spread);
     if is_core {
         start_api(&mut roles, &configuration, &services)?;
+        audit_retention_role(&mut roles, Arc::clone(&services.audit));
         core_roles(&mut roles, &services, &adapters, &configuration)?;
     }
     let identity = node_identity(&configuration)?;
