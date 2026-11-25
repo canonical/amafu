@@ -48,9 +48,10 @@ use amafu_hypervisor::{
 };
 use amafu_image_catalog::{CanonicalCatalog, host_architecture};
 use amafu_interfaces::{
-    AuditEntry, AuditLog, BootSlots, Clock, ConsensusMembership, CoreConnection, Datapath, Fence,
-    GuestAgents, Hypervisor, ImageStore, Leases, LocalServices, NodeLeaseAuthority, NodeLeaseState,
-    NotAVoter, RandomIdentifiers, SequencedAuditEntry, Storage, Store, StoreError, Watchdog,
+    AuditEntry, AuditLog, BootSlots, Clock, ClusterAddressClaim, ConsensusMembership, CoreConnection,
+    Datapath, Fence, GuestAgents, Hypervisor, ImageStore, Leases, LocalServices, NoClusterAddress,
+    NodeLeaseAuthority, NodeLeaseState, NotAVoter, RandomIdentifiers, SequencedAuditEntry, Storage, Store,
+    StoreError, Watchdog,
 };
 use amafu_interfaces::{FixedImageCatalog, ImageCatalog, KubernetesPlatform};
 use amafu_juju_client::WebSocketJuju;
@@ -132,7 +133,7 @@ pub struct ComputeAdapters {
     pub local_services: Arc<LocalServicesServer>,
 }
 
-async fn supervise<Role, Running>(name: &'static str, role: Role)
+pub(crate) async fn supervise<Role, Running>(name: &'static str, role: Role)
 where
     Role: Fn() -> Running + Send + 'static,
     Running: Future<Output = String> + Send,
@@ -898,14 +899,20 @@ fn audit_retention_role(roles: &mut JoinSet<()>, audit: Arc<dyn AuditLog>) {
     });
 }
 
+struct BootSlotRole {
+    boot_slots: Arc<dyn BootSlots>,
+    cluster_address: Arc<dyn ClusterAddressClaim>,
+    settings: BootSlotsSettings,
+}
+
 fn boot_slot_role(
     roles: &mut JoinSet<()>,
     node: &NodeName,
     services: &Services,
     lease: &NodeLeaseState,
-    boot_slots: Arc<dyn BootSlots>,
-    settings: BootSlotsSettings,
+    role: BootSlotRole,
 ) {
+    let BootSlotRole { boot_slots, cluster_address, settings } = role;
     let controller = Arc::new(BootSlotsController::new(
         node.clone(),
         BootSlotsServices {
@@ -915,6 +922,7 @@ fn boot_slot_role(
             leases: Arc::clone(&services.node_leases),
             lease: lease.clone(),
             consensus: Arc::clone(&services.consensus),
+            cluster_address,
         },
         settings,
     ));
@@ -946,6 +954,7 @@ pub async fn run(configuration: NodeConfiguration, boot: Option<BootServices>) -
     }
     let mut roles = JoinSet::new();
     let is_core = configuration.has_role(NodeRole::Core);
+    let mut cluster_address: Arc<dyn ClusterAddressClaim> = Arc::new(NoClusterAddress);
     let services = if is_core {
         core_member_services(&configuration).await?
     } else {
@@ -968,7 +977,15 @@ pub async fn run(configuration: NodeConfiguration, boot: Option<BootServices>) -
     }
     .spread_by(spread);
     if is_core {
-        let _api_identities = start_api(&mut roles, &configuration, &services)?;
+        let api_identities = start_api(&mut roles, &configuration, &services)?;
+        let (claim, settings) = crate::cluster_address::start(
+            &mut roles,
+            &configuration,
+            Arc::clone(&services.store),
+            api_identities,
+        );
+        crate::dashboard::start(&mut roles, &configuration, settings)?;
+        cluster_address = claim;
         audit_retention_role(&mut roles, Arc::clone(&services.audit));
         core_roles(&mut roles, &services, &adapters, &configuration)?;
     }
@@ -985,17 +1002,16 @@ pub async fn run(configuration: NodeConfiguration, boot: Option<BootServices>) -
         Arc::clone(&node_services.store),
         Arc::clone(&node_services.clock),
     )
-    .with_consensus(Arc::clone(&node_services.consensus));
+    .with_consensus(Arc::clone(&node_services.consensus))
+    .with_cluster_address(Arc::clone(&cluster_address));
     if let Some(boot_slots) = boot_slots {
         node = node.with_boot_slots(Arc::clone(&boot_slots));
-        boot_slot_role(
-            &mut roles,
-            &identity.name,
-            &node_services,
-            &lease,
+        let role = BootSlotRole {
             boot_slots,
-            configuration.upgrade.boot_slots(),
-        );
+            cluster_address: Arc::clone(&cluster_address),
+            settings: configuration.upgrade.boot_slots(),
+        };
+        boot_slot_role(&mut roles, &identity.name, &node_services, &lease, role);
     }
     let node = Arc::new(node);
     let heartbeat = ReconcilerSettings {

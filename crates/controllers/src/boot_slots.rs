@@ -7,8 +7,8 @@ use amafu_domain::kinds::vm::{Vm, VmPhase};
 use amafu_domain::node_image::NodeImage;
 use amafu_interfaces::objects::{get, list};
 use amafu_interfaces::{
-    ActionError, BootSlots, Clock, ConsensusMembership, Consistency, NodeLeaseAuthority, NodeLeaseState,
-    Store,
+    ActionError, BootSlots, Clock, ClusterAddressClaim, ConsensusMembership, Consistency, NodeLeaseAuthority,
+    NodeLeaseState, Store,
 };
 use amafu_reconciler::{Controller, KeyMapping, WatchedKind};
 use time::OffsetDateTime;
@@ -93,6 +93,7 @@ pub struct BootSlotsController {
     leases: Arc<dyn NodeLeaseAuthority>,
     lease: NodeLeaseState,
     consensus: Arc<dyn ConsensusMembership>,
+    cluster_address: Arc<dyn ClusterAddressClaim>,
     settings: BootSlotsSettings,
     started_at: OffsetDateTime,
     healthy_since: Mutex<Option<OffsetDateTime>>,
@@ -105,6 +106,7 @@ pub struct BootSlotsServices {
     pub leases: Arc<dyn NodeLeaseAuthority>,
     pub lease: NodeLeaseState,
     pub consensus: Arc<dyn ConsensusMembership>,
+    pub cluster_address: Arc<dyn ClusterAddressClaim>,
 }
 
 impl BootSlotsController {
@@ -119,6 +121,7 @@ impl BootSlotsController {
             leases: services.leases,
             lease: services.lease,
             consensus: services.consensus,
+            cluster_address: services.cluster_address,
             settings,
             started_at,
             healthy_since: Mutex::new(None),
@@ -151,6 +154,7 @@ impl BootSlotsController {
     }
 
     async fn leave_and_reboot(&self) -> Result<(), ActionError> {
+        self.cluster_address.step_aside().await;
         self.consensus.hand_off_leadership().await?;
         self.surrender_lease().await;
         self.consensus.close().await;

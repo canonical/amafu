@@ -38,8 +38,9 @@ use amafu_domain::{Change, MacAddress, NodeName, ObjectId, ObjectName, ProjectNa
 use amafu_interfaces::objects::apply;
 use amafu_interfaces::{
     AuditLog, BootSlots, Clock, CoreConnection, Datapath, Fence, GuestAgents, Hypervisor, Identifiers,
-    ImageSigningKey, ImageStore, InstanceMigration, Leases, LocalServices, NodeLeaseAuthority,
-    NodeLeaseState, NodeNetworkState, NotAVoter, Storage, Store, TrustedImageKeys, WorkloadState,
+    ImageSigningKey, ImageStore, InstanceMigration, Leases, LocalServices, NoClusterAddress,
+    NodeLeaseAuthority, NodeLeaseState, NodeNetworkState, NotAVoter, Storage, Store, TrustedImageKeys,
+    WorkloadState,
 };
 use amafu_network::dhcp::{self, DhcpMessage, Lease, MessageType};
 use amafu_network::overlay::overlay_mtu;
@@ -556,6 +557,7 @@ impl SimulatedWorld {
                     leases: Arc::clone(&leases),
                     lease: lease.clone(),
                     consensus: Arc::new(NotAVoter),
+                    cluster_address: Arc::new(NoClusterAddress),
                 },
                 BOOT_SLOT_SETTINGS,
             )
