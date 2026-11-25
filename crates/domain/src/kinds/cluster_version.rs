@@ -124,11 +124,11 @@ mod tests {
         let installed = ClusterVersionSpecification::installed(image("0.1.0", 1));
         let upgraded = installed.moved_to(image("0.2.0", 2));
         assert_eq!(upgraded.validate(), Ok(()));
-        assert!(!Feature::ParallelMigrationStreams.is_enabled(&upgraded));
+        assert!(!Feature::ClusterAddress.is_enabled(&upgraded));
         assert_eq!(upgraded.previous_image, Some(image("0.1.0", 1)));
         let finalized = upgraded.finalized();
-        assert!(Feature::ParallelMigrationStreams.is_enabled(&finalized));
-        assert!(!Feature::DedicatedSubscriptionRelays.is_enabled(&finalized));
+        assert!(Feature::ClusterAddress.is_enabled(&finalized));
+        assert!(!Feature::ParallelMigrationStreams.is_enabled(&finalized));
         assert_eq!(finalized.previous_image, None);
         assert_eq!(finalized.validate_update(&upgraded), Ok(()));
         assert!(upgraded.validate_update(&finalized).is_err());

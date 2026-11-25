@@ -14,10 +14,11 @@ impl fmt::Display for FeatureLevel {
     }
 }
 
-pub const SUPPORTED_FEATURE_LEVEL: FeatureLevel = FeatureLevel(1);
+pub const SUPPORTED_FEATURE_LEVEL: FeatureLevel = FeatureLevel(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Feature {
+    ClusterAddress,
     ParallelMigrationStreams,
     DedicatedSubscriptionRelays,
 }
@@ -26,8 +27,9 @@ impl Feature {
     #[must_use]
     pub const fn introduced_in(self) -> FeatureLevel {
         match self {
-            Self::ParallelMigrationStreams => FeatureLevel(2),
-            Self::DedicatedSubscriptionRelays => FeatureLevel(3),
+            Self::ClusterAddress => FeatureLevel(2),
+            Self::ParallelMigrationStreams => FeatureLevel(3),
+            Self::DedicatedSubscriptionRelays => FeatureLevel(4),
         }
     }
 
