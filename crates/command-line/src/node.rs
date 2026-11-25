@@ -28,6 +28,9 @@ pub enum NodeCommand {
 fn store_column(health: Option<&StoreHealth>) -> String {
     match health {
         None => String::from("-"),
+        Some(health) if health.followers_catching_up > 0 => {
+            format!("followers catching up: {}", health.followers_catching_up)
+        }
         Some(health) if health.is_stable => String::from("stable"),
         Some(health) => format!("unsettled ({} elections)", health.elections_started),
     }
@@ -90,11 +93,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_store_column_tells_stable_voters_from_unsettled_ones_and_non_voters() {
+    fn the_store_column_tells_stable_voters_from_unsettled_or_lagging_ones_and_non_voters() {
         assert_eq!(store_column(None), "-");
         let stable = StoreHealth { is_stable: true, ..StoreHealth::default() };
         assert_eq!(store_column(Some(&stable)), "stable");
         let unsettled = StoreHealth { elections_started: 4, ..StoreHealth::default() };
         assert_eq!(store_column(Some(&unsettled)), "unsettled (4 elections)");
+        let leading_a_lagging_follower =
+            StoreHealth { is_stable: true, followers_catching_up: 1, ..StoreHealth::default() };
+        assert_eq!(store_column(Some(&leading_a_lagging_follower)), "followers catching up: 1");
     }
 }

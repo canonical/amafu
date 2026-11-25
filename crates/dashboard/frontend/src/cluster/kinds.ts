@@ -161,6 +161,7 @@ export interface StoreHealth {
   elections_started: number;
   leader_changes: number;
   leaderless_seconds: number;
+  followers_catching_up?: number;
 }
 
 export type Node = ClusterObject<

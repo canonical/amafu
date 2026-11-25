@@ -39,7 +39,8 @@ function storeSummary(node: Node): string | undefined {
   if (!store) {
     return undefined;
   }
-  const state = store.is_stable ? "Stable" : "Unsettled";
+  const catchingUp = store.followers_catching_up ?? 0;
+  const state = catchingUp > 0 ? `${catchingUp} followers catching up` : store.is_stable ? "Stable" : "Unsettled";
   return `${state} · ${store.elections_started} elections, ${store.leader_changes} leader changes, ${store.leaderless_seconds} s without a leader`;
 }
 

@@ -126,7 +126,7 @@ async fn seed_nodes(store: &dyn Store) -> anyhow::Result<()> {
                 "underlay_address": format!("10.0.0.{}", 10 + index),
                 "software_version": CURRENT_VERSION,
                 "last_heartbeat": now(),
-                "store": is_core.then(|| json!({"is_stable": true, "elections_started": 2, "leader_changes": 2, "leaderless_seconds": 1})),
+                "store": is_core.then(|| json!({"is_stable": true, "elections_started": 2, "leader_changes": 2, "leaderless_seconds": 1, "followers_catching_up": 0})),
                 "boot": {
                     "booted_slot": "a",
                     "default_slot": "a",
