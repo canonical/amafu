@@ -192,7 +192,8 @@ impl Controller for NodeController {
         } else {
             None
         };
-        let is_cluster_address_enabled = node.is_none() && self.is_cluster_address_enabled().await?;
+        let registers_a_core_member = node.is_none() && self.identity.roles.contains(&NodeRole::Core);
+        let is_cluster_address_enabled = registers_a_core_member && self.is_cluster_address_enabled().await?;
         Ok(NodeObservation {
             identity: self.identity.clone(),
             node,
