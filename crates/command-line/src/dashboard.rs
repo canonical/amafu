@@ -106,7 +106,7 @@ pub async fn run(command: DashboardCommand, certificate_authority: Option<&PathB
             )?;
             let listener = tokio::net::TcpListener::bind(listen).await?;
             crate::output::emit_line(format!("the dashboard is serving on {listen}"))?;
-            Err(amafu_api::server::serve(listener, Some(tls), dashboard_router(state)).await.into())
+            Err(amafu_api::server::serve(listener, Some(Arc::new(tls)), dashboard_router(state)).await.into())
         }
         DashboardCommand::CreateSessionKey { file } => {
             write_private(&file, &SessionKey::generate_hexadecimal()?)

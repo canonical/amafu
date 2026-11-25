@@ -1,5 +1,7 @@
+use std::collections::BTreeMap;
 use std::io::BufReader;
-use std::sync::Arc;
+use std::net::IpAddr;
+use std::sync::{Arc, PoisonError, RwLock};
 
 use axum::{Extension, Router};
 use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -119,8 +121,48 @@ pub fn tls_configuration(
     Ok(Arc::new(configuration))
 }
 
-pub async fn serve(listener: TcpListener, tls: Option<Arc<ServerConfig>>, router: Router) -> std::io::Error {
-    let acceptor = tls.map(TlsAcceptor::from);
+pub trait TlsIdentities: Send + Sync {
+    fn for_local_address(&self, local: IpAddr) -> Arc<ServerConfig>;
+}
+
+impl TlsIdentities for Arc<ServerConfig> {
+    fn for_local_address(&self, _local: IpAddr) -> Arc<ServerConfig> {
+        Arc::clone(self)
+    }
+}
+
+pub struct CertificateByLocalAddress {
+    default: Arc<ServerConfig>,
+    by_address: RwLock<BTreeMap<IpAddr, Arc<ServerConfig>>>,
+}
+
+impl CertificateByLocalAddress {
+    #[must_use]
+    pub fn new(default: Arc<ServerConfig>) -> Self {
+        Self { default, by_address: RwLock::default() }
+    }
+
+    pub fn present_at(&self, address: IpAddr, configuration: Arc<ServerConfig>) {
+        self.by_address.write().unwrap_or_else(PoisonError::into_inner).insert(address, configuration);
+    }
+
+    pub fn forget(&self, address: IpAddr) {
+        self.by_address.write().unwrap_or_else(PoisonError::into_inner).remove(&address);
+    }
+}
+
+impl TlsIdentities for CertificateByLocalAddress {
+    fn for_local_address(&self, local: IpAddr) -> Arc<ServerConfig> {
+        let by_address = self.by_address.read().unwrap_or_else(PoisonError::into_inner);
+        Arc::clone(by_address.get(&local.to_canonical()).unwrap_or(&self.default))
+    }
+}
+
+pub async fn serve(
+    listener: TcpListener,
+    tls: Option<Arc<dyn TlsIdentities>>,
+    router: Router,
+) -> std::io::Error {
     loop {
         let (stream, peer) = match listener.accept().await {
             Ok(accepted) => accepted,
@@ -130,7 +172,10 @@ pub async fn serve(listener: TcpListener, tls: Option<Arc<ServerConfig>>, router
             }
         };
         let router = router.clone();
-        let acceptor = acceptor.clone();
+        let acceptor = tls.as_ref().map(|identities| {
+            let local = stream.local_addr().map_or(peer.ip(), |address| address.ip());
+            TlsAcceptor::from(identities.for_local_address(local))
+        });
         tokio::spawn(async move {
             let result = match acceptor {
                 Some(acceptor) => serve_tls_connection(&acceptor, stream, router).await,
@@ -168,4 +213,31 @@ async fn serve_plain_connection(stream: tokio::net::TcpStream, router: Router) -
     auto::Builder::new(TokioExecutor::new())
         .serve_connection_with_upgrades(TokioIo::new(stream), service)
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn configuration_for(name: &str) -> Arc<ServerConfig> {
+        let key = rcgen::KeyPair::generate().unwrap();
+        let certificate =
+            rcgen::CertificateParams::new(vec![name.to_owned()]).unwrap().self_signed(&key).unwrap();
+        tls_configuration(certificate.pem().as_bytes(), key.serialize_pem().as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn a_connection_to_the_cluster_address_gets_its_certificate_and_others_get_the_node_certificate() {
+        let node = configuration_for("node-1");
+        let cluster = configuration_for("cluster");
+        let identities = CertificateByLocalAddress::new(Arc::clone(&node));
+        let cluster_address: IpAddr = "10.20.0.50".parse().unwrap();
+        identities.present_at(cluster_address, Arc::clone(&cluster));
+        assert!(Arc::ptr_eq(&identities.for_local_address(cluster_address), &cluster));
+        assert!(Arc::ptr_eq(&identities.for_local_address("10.20.0.11".parse().unwrap()), &node));
+        let mapped: IpAddr = "::ffff:10.20.0.50".parse().unwrap();
+        assert!(Arc::ptr_eq(&identities.for_local_address(mapped), &cluster));
+        identities.forget(cluster_address);
+        assert!(Arc::ptr_eq(&identities.for_local_address(cluster_address), &node));
+    }
 }

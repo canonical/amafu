@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use amafu_api::server::{serve, tls_configuration};
+use amafu_api::server::{CertificateByLocalAddress, TlsIdentities, serve, tls_configuration};
 use amafu_api::service_accounts::IssuedTokenAuthenticator;
 use amafu_api::{
     ApiState, ChainedAuthenticator, ClientIdentity, HttpTransport, NodeApiState, NodeAuthenticator,
@@ -223,7 +223,7 @@ fn start_api(
     roles: &mut JoinSet<()>,
     configuration: &NodeConfiguration,
     services: &Services,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Arc<CertificateByLocalAddress>> {
     let replicated_kinds = amafu_domain::registry::kinds()
         .iter()
         .map(|descriptor| descriptor.kind)
@@ -244,10 +244,11 @@ fn start_api(
         key_directory: Arc::new(amafu_api::key_directory::HttpKeyDirectory::default()),
         catalog: catalog_for_node(),
     };
-    let tls = tls_configuration(
+    let identities = Arc::new(CertificateByLocalAddress::new(tls_configuration(
         configuration.api.certificate.as_bytes(),
         configuration.api.private_key.as_bytes(),
-    )?;
+    )?));
+    let tls: Arc<dyn TlsIdentities> = Arc::clone(&identities) as Arc<dyn TlsIdentities>;
     let listen = configuration.api.listen;
     let mut application = router(state);
     if let Some(identity) = &configuration.identity {
@@ -281,7 +282,7 @@ fn start_api(
             tracing::error!(%error, "the API runtime stopped");
         }
     });
-    Ok(())
+    Ok(identities)
 }
 
 fn api_runtime() -> std::io::Result<&'static tokio::runtime::Runtime> {
@@ -967,7 +968,7 @@ pub async fn run(configuration: NodeConfiguration, boot: Option<BootServices>) -
     }
     .spread_by(spread);
     if is_core {
-        start_api(&mut roles, &configuration, &services)?;
+        let _api_identities = start_api(&mut roles, &configuration, &services)?;
         audit_retention_role(&mut roles, Arc::clone(&services.audit));
         core_roles(&mut roles, &services, &adapters, &configuration)?;
     }
