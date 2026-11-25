@@ -1,6 +1,6 @@
 # 0026: A stateless dashboard that forwards each user's token, in React and Vanilla
 
-Status: accepted for milestone 6
+Status: accepted for milestone 6; where the dashboard runs is replaced by 0035
 
 ## Decision
 

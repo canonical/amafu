@@ -215,7 +215,8 @@ machines:
     #[test]
     fn the_cluster_address_is_written_with_its_prefix_length() {
         assert_eq!(InstallDescription::parse(DESCRIPTION).unwrap().cluster.address, None);
-        let with_address = DESCRIPTION.replace("  image_keys: []", "  image_keys: []\n  address: 10.20.0.50/24");
+        let with_address =
+            DESCRIPTION.replace("  image_keys: []", "  image_keys: []\n  address: 10.20.0.50/24");
         let address = InstallDescription::parse(&with_address).unwrap().cluster.address.unwrap();
         assert_eq!(address.to_string(), "10.20.0.50/24");
         let malformed = DESCRIPTION.replace("  image_keys: []", "  image_keys: []\n  address: 10.20.0.50");

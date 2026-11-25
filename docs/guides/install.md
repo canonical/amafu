@@ -41,6 +41,7 @@ cluster:
     digest: sha256:...
   image_keys: ["<public key>"]
   resolvers: [10.0.0.2]
+  address: 10.0.0.50/24         # the cluster address: the dashboard and the API answer on it
 maas:
   url: http://maas.example:5240/MAAS
   api_key: consumer:token:secret
@@ -63,6 +64,9 @@ machines:
 A machine may also have a `management` address that the installer reaches it on, when the underlay is not routed to
 the installer.
 
+The cluster `address` is optional. It is a free address on the nodes' network, with that network's prefix length.
+One core member holds it at a time; when that member stops, another takes it over within a few seconds.
+
 ## Install
 
 ```sh
@@ -80,32 +84,40 @@ Keep it safe and readable only by you; anyone holding it administers the cluster
 
 ```sh
 jq -r .authority.certificate_pem ~/amafu-prod-east/cluster-credentials.json > prod-east-ca.pem
-export AMAFU_ENDPOINT=https://10.0.0.11:7443,https://10.0.0.12:7443,https://10.0.0.13:7443
+export AMAFU_ENDPOINT=https://10.0.0.50:7443,https://10.0.0.11:7443,https://10.0.0.12:7443,https://10.0.0.13:7443
 export AMAFU_CERTIFICATE_AUTHORITY=prod-east-ca.pem
 export AMAFU_TOKEN=$(jq -r .admin_token ~/amafu-prod-east/cluster-credentials.json)
 amafu node list
 amafu upgrade status
 ```
 
-Name every core member in `AMAFU_ENDPOINT`: reads, and `--wait` while an upgrade restarts members, move to the next
-one that answers.
+Name the cluster address and every core member in `AMAFU_ENDPOINT`: reads, and `--wait` while an upgrade restarts
+members, move to the next one that answers.
 
 ## The dashboard
 
-The dashboard runs on management machines, not on the nodes, behind one virtual address (decision 0026).
+Core members serve the dashboard (decision 0035) on port 443 of the cluster address, and of their own addresses.
+It is part of the node image, so every upgrade upgrades it too. Users sign in with their own token; the dashboard
+can do only what they may.
+
+To give a cluster an address after installing it, or to change it:
 
 ```sh
-amafu dashboard create-session-key --file dashboard-session.key
-amafu dashboard enable --description cluster.yaml --state-directory ~/amafu-prod-east \
-    --machine mgmt-1 --machine mgmt-2 --virtual-address 10.0.0.50/24 \
-    --command-line-url https://images.example/amafu --command-line-digest sha256:... \
-    --session-key-file dashboard-session.key
+amafu cluster-address set 10.0.0.50/24 --state-directory ~/amafu-prod-east
 ```
 
-The management machines download the plain `amafu` binary, published beside the snap, from `--command-line-url`
-and check it against `--command-line-digest`; they do not use the snap.
+The installer's authority issues the address's certificate. To present a certificate browsers already trust, pass
+`--certificate` and `--private-key` instead of `--state-directory`.
 
-Users sign in with their own token; the dashboard can do only what they may.
+Core members serve the dashboard by default. To stop one from serving it, or to let it serve again:
+
+```sh
+amafu node update node-3 --remove-role dashboard
+amafu node update node-3 --add-role dashboard
+```
+
+The cluster address needs feature level 2: on a cluster installed with an older image, finalize an upgrade to a
+release that supports it first.
 
 ## Storage and audit export
 

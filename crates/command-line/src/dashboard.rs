@@ -2,20 +2,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use amafu_api::{ApiClient, HttpTransport, Transport};
+use amafu_api::{HttpTransport, Transport};
 use amafu_dashboard::{DashboardState, SessionKey, dashboard_router};
-use amafu_domain::Sha256Digest;
-use amafu_installer::configuration::{ClusterCredentials, api_endpoint};
-use amafu_installer::maas::MaasClient;
-use amafu_installer::management::{ManagementPlan, enable_dashboard};
-use amafu_installer::{InstallDescription, InstallDirectory};
-use amafu_interfaces::{MachineName, MachineProvisioner};
 use anyhow::Context;
 use clap::Subcommand;
 
 const SECONDS_PER_HOUR: u64 = 3600;
-const ANSWER_TIMEOUT: Duration = Duration::from_secs(900);
-const ANSWER_POLL: Duration = Duration::from_secs(5);
 
 #[derive(Subcommand)]
 pub enum DashboardCommand {
@@ -38,29 +30,6 @@ pub enum DashboardCommand {
     CreateSessionKey {
         #[arg(long)]
         file: PathBuf,
-    },
-    #[command(about = "Deploy the dashboard on management machines from MAAS, behind one virtual address")]
-    Enable {
-        #[arg(long, help = "The install description the cluster was installed with")]
-        description: PathBuf,
-        #[arg(long, help = "The installer's state directory, which holds the cluster authority")]
-        state_directory: PathBuf,
-        #[arg(
-            long = "machine",
-            required = true,
-            help = "A MAAS machine to deploy the dashboard on, repeated"
-        )]
-        machines: Vec<String>,
-        #[arg(long, help = "The shared address with its prefix length, for example 10.0.0.50/24")]
-        virtual_address: String,
-        #[arg(long, default_value = "eth0")]
-        interface: String,
-        #[arg(long, help = "Where the management machines download this command")]
-        command_line_url: String,
-        #[arg(long)]
-        command_line_digest: Sha256Digest,
-        #[arg(long)]
-        session_key_file: PathBuf,
     },
 }
 
@@ -111,58 +80,5 @@ pub async fn run(command: DashboardCommand, certificate_authority: Option<&PathB
         DashboardCommand::CreateSessionKey { file } => {
             write_private(&file, &SessionKey::generate_hexadecimal()?)
         }
-        DashboardCommand::Enable {
-            description,
-            state_directory,
-            machines,
-            virtual_address,
-            interface,
-            command_line_url,
-            command_line_digest,
-            session_key_file,
-        } => {
-            let description = InstallDescription::load(&description)?;
-            let directory = InstallDirectory::new(&state_directory);
-            let credentials =
-                ClusterCredentials::load_or_create(&directory.credentials(), &description.cluster.name)?;
-            let maas = &description.maas;
-            let provisioner: Arc<dyn MachineProvisioner> =
-                Arc::new(MaasClient::new(&maas.url, &maas.api_key, maas.certificate_authority.as_deref())?);
-            let plan = ManagementPlan {
-                machines: machines.into_iter().map(MachineName).collect(),
-                virtual_address,
-                interface,
-                core_endpoints: description.core_members().map(api_endpoint).collect(),
-                command_line_url,
-                command_line_digest,
-                session_key: read(&session_key_file)?.trim().to_owned(),
-            };
-            enable_dashboard(&plan, &credentials.authority, provisioner).await?;
-            let address = plan.virtual_address.split('/').next().unwrap_or_default();
-            crate::output::emit_line(format!(
-                "the machines are deployed; waiting for the dashboard to answer on {address}"
-            ))?;
-            wait_until_answering(address, &credentials.authority.certificate_pem).await?;
-            crate::output::emit_line(format!("the dashboard answers on https://{address}/"))?;
-            Ok(())
-        }
-    }
-}
-
-async fn wait_until_answering(address: &str, certificate_authority_pem: &str) -> anyhow::Result<()> {
-    let transport =
-        HttpTransport::new(&format!("https://{address}"), Some(certificate_authority_pem.as_bytes()))?;
-    let client = ApiClient::new(Arc::new(transport), None);
-    let deadline = tokio::time::Instant::now() + ANSWER_TIMEOUT;
-    loop {
-        let failure = match client.raw(http::Method::GET, "/", None).await {
-            Ok(response) if (200..300).contains(&response.status) => return Ok(()),
-            Ok(response) => format!("it answered {}", response.status),
-            Err(error) => error.to_string(),
-        };
-        if tokio::time::Instant::now() >= deadline {
-            anyhow::bail!("the dashboard does not answer on {address} after {ANSWER_TIMEOUT:?}: {failure}");
-        }
-        tokio::time::sleep(ANSWER_POLL).await;
     }
 }

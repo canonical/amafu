@@ -5,7 +5,7 @@ Status: accepted for milestone 6
 ## Decision
 
 - **Operators get `amafu` as the snap `amafu`**, on base core26, with strict confinement.
-- **Dashboard machines keep the plain binary.** `amafu dashboard enable` has them download it from a URL and check
+- **Dashboard machines keep the plain binary** (until 0035 moved the dashboard onto the nodes). `amafu dashboard enable` has them download it from a URL and check
   its digest, because the service reads its keys from `/etc/amafu`, which a strictly confined snap cannot read.
 - **It asks for `home`, `network` and `network-bind`.** `network` reaches MAAS and the cluster, `network-bind` lets
   `amafu dashboard serve` listen, and `home` reads install descriptions, keys and manifests and writes the

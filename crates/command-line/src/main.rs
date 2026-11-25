@@ -96,7 +96,7 @@ enum Command {
     SshKey(ssh_key::SshKeyCommand),
     #[command(subcommand, about = "Gather SSH keys to grant them together")]
     SshKeyGroup(ssh_key::SshKeyGroupCommand),
-    #[command(subcommand, about = "Serve or deploy the web dashboard")]
+    #[command(subcommand, about = "Serve the web dashboard outside the cluster")]
     Dashboard(dashboard::DashboardCommand),
     #[command(subcommand, about = "Set the address the dashboard and the API answer on")]
     ClusterAddress(cluster_address::ClusterAddressCommand),

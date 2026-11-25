@@ -1,6 +1,6 @@
 # 0035: The dashboard runs on the nodes, and the dashboard and the API share one cluster address
 
-Status: proposed (replaces the deployment part of 0026)
+Status: accepted for milestone 7 (replaces the deployment part of 0026)
 
 ## Context
 
@@ -14,7 +14,7 @@ The CLI, guests (0031) and Juju reach the API through a list of node addresses, 
 
 ## Decision
 
-- **A `dashboard` node role.** A node with it serves the dashboard. Core members get it by default, and an operator can add it to or remove it from any node. It confers no authority: the dashboard only ever forwards the signed-in user's token (0026).
+- **A `dashboard` node role.** A node with it serves the dashboard. Core members get it by default, and an operator can add it to or remove it from a core member. It confers no authority: the dashboard only ever forwards the signed-in user's token (0026). Other nodes cannot take it yet, because the state they are sent does not include their peers or the address's secrets.
 - **The image carries the dashboard.** It is a subcommand of `amafu-node`, so every node upgrade upgrades it and the separate dashboard machines go away.
 - **It runs as its own sandboxed process.** It is not a task inside the control process, because it is the most exposed web surface on the node. It has its own user and cgroup, Landlock and seccomp like a VM process (0007), and is handed everything it needs over a socket pair. It never reads the store, the node's identity or the token file.
 - **One cluster address serves both the dashboard (443) and the API (7443).** Exactly one dashboard node holds it at a time, and the other dashboard nodes elect a new holder without the store, so the address keeps answering while the store has no quorum.
@@ -152,7 +152,8 @@ async fn leave_and_reboot(&self) -> Result<(), ActionError> {
   - with `--state-directory`, issues the new certificate from the installer's authority;
   - with `--certificate` and `--private-key`, uses an operator's certificate instead.
 - **A core singleton creates `DashboardSessionKey`** the first time a dashboard node needs it, so no human ever handles it.
-- **`amafu dashboard enable`, `create-session-key`, `management.rs` and the dashboard step of `lab-release.sh` are removed.** `amafu dashboard serve` stays, for running the dashboard outside the cluster.
+- **`amafu dashboard enable`, `management.rs` and the dashboard step of `lab-release.sh` are removed.** `amafu dashboard serve` and `create-session-key` stay, for running the dashboard outside the cluster.
+- **The address goes on the interface with its network's prefix length,** not as a /32, so the floating IP datapath, which owns every /32 on the underlay, never withdraws it. Its prefix length is therefore at most 30.
 - **`amafu node list`** shows the dashboard role in ROLES and marks the address holder.
 
 ## Implementation plan
