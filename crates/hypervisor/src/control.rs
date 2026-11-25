@@ -6,6 +6,7 @@ use rustix::net::{
     AddressFamily, RecvAncillaryBuffer, RecvAncillaryMessage, RecvFlags, SendAncillaryBuffer,
     SendAncillaryMessage, SendFlags, SocketFlags, SocketType, recvmsg, sendmsg, socketpair,
 };
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::plan::VmProcessPlan;
@@ -47,9 +48,21 @@ pub fn send(
     instructions: &Instructions,
     descriptors: &[BorrowedFd<'_>],
 ) -> io::Result<()> {
-    let bytes = serde_json::to_vec(instructions).map_err(io::Error::other)?;
+    send_message(socket, instructions, descriptors)
+}
+
+pub fn receive(socket: impl AsFd) -> io::Result<(Instructions, Vec<OwnedFd>)> {
+    receive_message(socket)
+}
+
+pub fn send_message<Message: Serialize>(
+    socket: impl AsFd,
+    message: &Message,
+    descriptors: &[BorrowedFd<'_>],
+) -> io::Result<()> {
+    let bytes = serde_json::to_vec(message).map_err(io::Error::other)?;
     if bytes.len() > MAXIMUM_INSTRUCTIONS_BYTES || descriptors.len() > MAXIMUM_DESCRIPTORS {
-        return Err(io::Error::other("the VM process instructions are too large"));
+        return Err(io::Error::other("the message for the child process is too large"));
     }
     let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(MAXIMUM_DESCRIPTORS))];
     let mut ancillary = SendAncillaryBuffer::new(&mut space);
@@ -60,7 +73,7 @@ pub fn send(
     if sent == bytes.len() { Ok(()) } else { Err(io::Error::other("the instructions were truncated")) }
 }
 
-pub fn receive(socket: impl AsFd) -> io::Result<(Instructions, Vec<OwnedFd>)> {
+pub fn receive_message<Message: DeserializeOwned>(socket: impl AsFd) -> io::Result<(Message, Vec<OwnedFd>)> {
     let mut bytes = vec![0_u8; MAXIMUM_INSTRUCTIONS_BYTES];
     let mut space = [MaybeUninit::uninit(); rustix::cmsg_space!(ScmRights(MAXIMUM_DESCRIPTORS))];
     let mut ancillary = RecvAncillaryBuffer::new(&mut space);
@@ -75,8 +88,8 @@ pub fn receive(socket: impl AsFd) -> io::Result<(Instructions, Vec<OwnedFd>)> {
     if received.flags.contains(rustix::net::ReturnFlags::TRUNC) {
         return Err(io::Error::other("the instructions were truncated"));
     }
-    let instructions = serde_json::from_slice(&bytes[..received.bytes]).map_err(io::Error::other)?;
-    Ok((instructions, descriptors))
+    let message = serde_json::from_slice(&bytes[..received.bytes]).map_err(io::Error::other)?;
+    Ok((message, descriptors))
 }
 
 #[cfg(test)]

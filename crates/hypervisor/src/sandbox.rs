@@ -22,11 +22,13 @@ pub const MAXIMUM_VMS: u32 = 60_000;
 const KVM_DEVICE: &str = "/dev/kvm";
 const CGROUP_ROOT: &str = "/sys/fs/cgroup";
 const CGROUP_SLICE: &str = "amafu-vms";
+const SERVICE_SLICE: &str = "amafu-services";
 const CONTROLLERS: &str = "+cpu +memory +pids";
 const CPU_PERIOD_MICROSECONDS: u64 = 100_000;
 const MEMORY_OVERHEAD_MEBIBYTES: u64 = 256;
 const MAXIMUM_PROCESSES: u32 = 4096;
 const ADDRESS_FAMILY_UNIX: u64 = 1;
+const ADDRESS_FAMILY_INTERNET: u64 = 2;
 const NO_SUCH_SYSTEM_CALL: u32 = 38;
 const LANDLOCK_ABI: ABI = ABI::V5;
 
@@ -36,6 +38,21 @@ pub enum SandboxError {
     Filesystem(String),
     #[error("the system call filter cannot be applied: {0}")]
     SystemCalls(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocketFamilies {
+    UnixOnly,
+    UnixAndInternet,
+}
+
+impl SocketFamilies {
+    fn allowed(self) -> &'static [u64] {
+        match self {
+            Self::UnixOnly => &[ADDRESS_FAMILY_UNIX],
+            Self::UnixAndInternet => &[ADDRESS_FAMILY_UNIX, ADDRESS_FAMILY_INTERNET],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,10 +122,33 @@ pub fn cgroup_of(name: &str) -> PathBuf {
     cgroup_slice().join(name)
 }
 
-pub fn create_cgroup(name: &str, cpu_count: u16, memory_mebibytes: u64) -> io::Result<PathBuf> {
+fn create_slice(slice: &Path) -> io::Result<()> {
     std::fs::write(Path::new(CGROUP_ROOT).join("cgroup.subtree_control"), CONTROLLERS)?;
-    std::fs::create_dir_all(cgroup_slice())?;
-    std::fs::write(cgroup_slice().join("cgroup.subtree_control"), CONTROLLERS)?;
+    std::fs::create_dir_all(slice)?;
+    std::fs::write(slice.join("cgroup.subtree_control"), CONTROLLERS)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServiceLimits {
+    pub cpu_count: u16,
+    pub memory_mebibytes: u64,
+    pub processes: u32,
+}
+
+pub fn create_service_cgroup(name: &str, limits: ServiceLimits) -> io::Result<PathBuf> {
+    let slice = Path::new(CGROUP_ROOT).join(SERVICE_SLICE);
+    create_slice(&slice)?;
+    let cgroup = slice.join(name);
+    std::fs::create_dir_all(&cgroup)?;
+    let quota = u64::from(limits.cpu_count) * CPU_PERIOD_MICROSECONDS;
+    std::fs::write(cgroup.join("cpu.max"), format!("{quota} {CPU_PERIOD_MICROSECONDS}"))?;
+    std::fs::write(cgroup.join("memory.max"), (limits.memory_mebibytes * 1024 * 1024).to_string())?;
+    std::fs::write(cgroup.join("pids.max"), limits.processes.to_string())?;
+    Ok(cgroup)
+}
+
+pub fn create_cgroup(name: &str, cpu_count: u16, memory_mebibytes: u64) -> io::Result<PathBuf> {
+    create_slice(&cgroup_slice())?;
     let cgroup = cgroup_of(name);
     std::fs::create_dir_all(&cgroup)?;
     let quota = u64::from(cpu_count) * CPU_PERIOD_MICROSECONDS;
@@ -241,12 +281,15 @@ fn unconditional(numbers: &[i64]) -> BTreeMap<i64, Vec<SeccompRule>> {
     numbers.iter().map(|number| (*number, Vec::new())).collect()
 }
 
-pub fn forbidden_system_calls_filter() -> Result<BpfProgram, SandboxError> {
+pub fn forbidden_system_calls_filter(sockets: SocketFamilies) -> Result<BpfProgram, SandboxError> {
     let mut rules = unconditional(FORBIDDEN_SYSTEM_CALLS);
-    let other_family =
-        SeccompCondition::new(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Ne, ADDRESS_FAMILY_UNIX)
-            .map_err(backend_failure)?;
-    rules.insert(numbers::SOCKET, vec![SeccompRule::new(vec![other_family]).map_err(backend_failure)?]);
+    let other_family = sockets
+        .allowed()
+        .iter()
+        .map(|family| SeccompCondition::new(0, SeccompCmpArgLen::Dword, SeccompCmpOp::Ne, *family))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(backend_failure)?;
+    rules.insert(numbers::SOCKET, vec![SeccompRule::new(other_family).map_err(backend_failure)?]);
     compile(rules, SeccompAction::KillProcess)
 }
 
@@ -255,8 +298,12 @@ pub fn unavailable_system_calls_filter() -> Result<BpfProgram, SandboxError> {
 }
 
 pub fn enter(restrictions: &Restrictions) -> Result<(), SandboxError> {
+    enter_with(restrictions, SocketFamilies::UnixOnly)
+}
+
+pub fn enter_with(restrictions: &Restrictions, sockets: SocketFamilies) -> Result<(), SandboxError> {
     restrict_filesystem(restrictions)?;
-    for program in [unavailable_system_calls_filter()?, forbidden_system_calls_filter()?] {
+    for program in [unavailable_system_calls_filter()?, forbidden_system_calls_filter(sockets)?] {
         seccompiler::apply_filter(&program).map_err(|error| SandboxError::SystemCalls(error.to_string()))?;
     }
     Ok(())
@@ -273,7 +320,8 @@ mod tests {
 
     #[test]
     fn the_system_call_filters_compile() {
-        assert!(forbidden_system_calls_filter().is_ok());
+        assert!(forbidden_system_calls_filter(SocketFamilies::UnixOnly).is_ok());
+        assert!(forbidden_system_calls_filter(SocketFamilies::UnixAndInternet).is_ok());
         assert!(unavailable_system_calls_filter().is_ok());
     }
 
