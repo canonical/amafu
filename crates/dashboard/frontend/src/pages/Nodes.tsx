@@ -76,6 +76,7 @@ function NodeDetail({ node, onClose }: { node: Node; onClose: () => void }) {
           { label: "Default slot", value: boot?.default_slot },
           { label: "Other slot", value: boot?.inactive_image?.version },
           { label: "Store", value: storeSummary(node) },
+          { label: "Cluster address", value: node.status.holds_cluster_address ? "Held by this node" : undefined },
           { label: "Last heartbeat", value: sinceNow(node.status.last_heartbeat) },
         ]}
       />

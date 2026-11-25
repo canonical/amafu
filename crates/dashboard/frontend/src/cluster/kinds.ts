@@ -139,7 +139,7 @@ export type FloatingIp = ClusterObject<
   }
 >;
 
-export type NodeRole = "core" | "compute";
+export type NodeRole = "core" | "compute" | "dashboard";
 export type NodePhase = "unknown" | "ready" | "not-ready" | "suspect" | "lost";
 
 export interface ImageIdentity {
@@ -175,6 +175,7 @@ export type Node = ClusterObject<
     last_heartbeat?: string;
     boot?: BootReport;
     store?: StoreHealth;
+    holds_cluster_address?: boolean;
   }
 >;
 
