@@ -1,5 +1,6 @@
 use std::fmt;
 use std::net::Ipv4Addr;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
@@ -62,6 +63,26 @@ impl ClusterAddressSpecification {
 impl fmt::Display for ClusterAddressSpecification {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}/{}", self.address, self.prefix_length)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0} is not an address with its network's prefix length, such as 10.20.0.50/24")]
+pub struct MalformedClusterAddress(String);
+
+impl FromStr for ClusterAddressSpecification {
+    type Err = MalformedClusterAddress;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let malformed = || MalformedClusterAddress(text.to_owned());
+        let (address, prefix_length) = text.split_once('/').ok_or_else(malformed)?;
+        let specification = Self {
+            address: address.parse().map_err(|_| malformed())?,
+            prefix_length: prefix_length.parse().map_err(|_| malformed())?,
+            interface: None,
+        };
+        specification.validate().map_err(|_| malformed())?;
+        Ok(specification)
     }
 }
 
@@ -184,6 +205,13 @@ mod tests {
         assert!(address("10.20.0.255", 24).validate().is_err());
         assert!(address("10.20.0.50", 33).validate().is_err());
         assert!(address("10.20.0.50", 32).validate().is_err());
+    }
+
+    #[test]
+    fn a_cluster_address_is_written_as_an_address_and_its_prefix_length() {
+        assert_eq!("10.20.0.50/24".parse::<ClusterAddressSpecification>(), Ok(address("10.20.0.50", 24)));
+        assert!("10.20.0.50".parse::<ClusterAddressSpecification>().is_err());
+        assert!("10.20.0.0/24".parse::<ClusterAddressSpecification>().is_err());
     }
 
     #[test]
