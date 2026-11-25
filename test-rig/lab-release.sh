@@ -14,8 +14,6 @@ LAB_ENDPOINTS="${LAB_ENDPOINTS:-10.20.0.11,10.20.0.12,10.20.0.13}"
 LAB_NODE_INSTANCES="${LAB_NODE_INSTANCES:-amafu-node-1,amafu-node-2,amafu-node-3}"
 LAB_LXD_PROJECT="${LAB_LXD_PROJECT:-amafu}"
 LAB_PROJECTS="${LAB_PROJECTS:-default}"
-LAB_DASHBOARD_MACHINES="${LAB_DASHBOARD_MACHINES:-amafu-dashboard-1,amafu-dashboard-2}"
-LAB_DASHBOARD_VIP="${LAB_DASHBOARD_VIP:-10.20.0.50}"
 LAB_FEATURE_LEVEL="${LAB_FEATURE_LEVEL:-2}"
 LAB_CANARY_COUNT="${LAB_CANARY_COUNT:-1}"
 LAB_SOAK_SECONDS="${LAB_SOAK_SECONDS:-30}"
@@ -34,7 +32,8 @@ Usage: test-rig/lab-release.sh [options]
 
 Builds a committed revision in a clean worktree, rolls it across the lab
 cluster one node at a time, recovers nodes that hang while rebooting, then
-upgrades the running dashboard machines to the same build.
+checks that the dashboard and the API answer on the cluster address, which
+the nodes serve from the same image.
 
 Options:
   --ref REF          revision to release (default: HEAD)
@@ -42,7 +41,6 @@ Options:
   --host USER@HOST   lab host (default: $LAB_HOST)
   --finalize         finalize the upgrade once every node runs it; the cluster can no longer go back
   --skip-build       reuse the artifacts already built for this revision
-  --no-dashboard     leave the dashboard machines alone
   --dry-run          check the lab and print the plan, change nothing
   -h, --help         show this help
 
@@ -54,7 +52,6 @@ REF="HEAD"
 VERSION=""
 FINALIZE=0
 SKIP_BUILD=0
-UPGRADE_DASHBOARD=1
 DRY_RUN=0
 
 while (($# > 0)); do
@@ -64,7 +61,6 @@ while (($# > 0)); do
     --host) LAB_HOST="$2"; shift 2 ;;
     --finalize) FINALIZE=1; shift ;;
     --skip-build) SKIP_BUILD=1; shift ;;
-    --no-dashboard) UPGRADE_DASHBOARD=0; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 1 ;;
@@ -290,28 +286,26 @@ roll_out() {
   die "the rollout still failed after $LAB_RETRIES retries"
 }
 
-upgrade_dashboards() {
-  local machine state
-  for machine in ${LAB_DASHBOARD_MACHINES//,/ }; do
-    state="$(lab "sudo lxc list '$machine' --project '$LAB_LXD_PROJECT' -f csv -c s")"
-    if [[ "$state" != RUNNING ]]; then
-      say "skipping $machine: it is ${state:-missing}"
-      continue
-    fi
-    say "upgrading the dashboard on $machine"
-    lab "set -e; sudo lxc file push -q '$LAB_ROOT/amafu-fixed' '$machine/usr/local/bin/amafu.new' --project '$LAB_LXD_PROJECT' --mode 0755; \
-      sudo lxc exec '$machine' --project '$LAB_LXD_PROJECT' -- sh -c 'cd /usr/local/bin && mv amafu amafu.previous && mv amafu.new amafu && systemctl restart amafu-dashboard && sleep 2 && systemctl is-active --quiet amafu-dashboard'" \
-      || die "the dashboard on $machine did not come back; amafu.previous is still there"
-  done
-  local answer=""
-  local attempt
+answers_on() {
+  local url="$1" answer="" attempt
   for attempt in 1 2 3 4 5; do
-    answer="$(lab "timeout 5 curl -sk -o /dev/null -w '%{http_code}' https://$LAB_DASHBOARD_VIP/" || true)"
-    [[ "$answer" == 200 ]] && break
+    answer="$(lab "timeout 5 curl -sk -o /dev/null -w '%{http_code}' $url" || true)"
+    [[ "$answer" =~ ^[1-5][0-9][0-9]$ ]] && return 0
     sleep 3
   done
-  [[ "$answer" == 200 ]] || die "the dashboard address $LAB_DASHBOARD_VIP does not answer"
-  say "the dashboard answers on $LAB_DASHBOARD_VIP"
+  return 1
+}
+
+check_cluster_address() {
+  local address
+  address="$(amafu_on_lab "--output json cluster-address show" 2>/dev/null | jq -r '.specification.address // empty' || true)"
+  if [[ -z "$address" ]]; then
+    say "the cluster has no cluster address, so there is no dashboard address to check"
+    return
+  fi
+  answers_on "https://$address/" || die "the dashboard does not answer on $address"
+  answers_on "https://$address:7443/v1/health" || die "the API does not answer on $address"
+  say "the dashboard and the API answer on $address"
 }
 
 prune_images() {
@@ -321,7 +315,7 @@ prune_images() {
 [[ -n "$VERSION" ]] || VERSION="$(next_version)"
 preflight
 say "plan: release $SHORT_COMMIT as $VERSION, canary $LAB_CANARY_COUNT, soak ${LAB_SOAK_SECONDS}s, \
-$( ((FINALIZE)) && echo finalize || echo "no finalize" ), $( ((UPGRADE_DASHBOARD)) && echo "then the dashboards" || echo "dashboards untouched" )"
+$( ((FINALIZE)) && echo finalize || echo "no finalize" )"
 if ((DRY_RUN)); then
   say "dry run: nothing changed"
   exit 0
@@ -335,9 +329,7 @@ if ((FINALIZE)); then
   say "finalizing $RELEASED_VERSION"
   amafu_on_lab "upgrade finalize"
 fi
-if ((UPGRADE_DASHBOARD)); then
-  upgrade_dashboards
-fi
+check_cluster_address
 prune_images
 amafu_on_lab "upgrade status"
 say "done: $SHORT_COMMIT runs on the lab as $RELEASED_VERSION; log in $LOG"
