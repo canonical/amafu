@@ -437,6 +437,15 @@ mod deadlines {
     }
 
     fn waited_with_node(step: &dyn Step, seconds: i64, status: NodeStatus) -> Result<bool, ActionError> {
+        waited_at_step(step, seconds, status, 0)
+    }
+
+    fn waited_at_step(
+        step: &dyn Step,
+        seconds: i64,
+        status: NodeStatus,
+        completed_steps: usize,
+    ) -> Result<bool, ActionError> {
         let store = MemoryStore::new();
         create::<Node>(&store, "node-1", NodeSpecification::default());
         let node_reference = ObjectReference::of::<Node>(None, ObjectName::new("node-1").unwrap());
@@ -451,6 +460,7 @@ mod deadlines {
         let mut operation: Object<Operation> =
             block_on(get::<Operation>(&store, &reference, Consistency::Linearizable)).unwrap().unwrap();
         operation.status.current_step = Some(StepProgress::started(OffsetDateTime::UNIX_EPOCH));
+        operation.status.completed_steps = completed_steps;
         let clock = VirtualClock::starting_at(OffsetDateTime::UNIX_EPOCH + Duration::seconds(seconds));
         let fence = Fence { name: String::from("operations"), token: 1 };
         let context = OperationContext { operation: &operation, store: &store, clock: &clock, fence: &fence };
@@ -482,6 +492,11 @@ mod deadlines {
         assert_eq!(waited_with_node(&Soak, 10, ready_with(settled)), Ok(false));
         assert_eq!(waited_with_node(&Soak, 31, ready_with(settled)), Ok(true));
         assert_eq!(waited_with_node(&Soak, 31, ready_with(catching_up)), Ok(false));
+    }
+
+    #[test]
+    fn the_soak_after_the_last_wave_ends_at_once() {
+        assert_eq!(waited_at_step(&Soak, 0, NodeStatus::default(), 7), Ok(true));
     }
 }
 

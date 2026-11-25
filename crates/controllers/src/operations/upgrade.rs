@@ -322,11 +322,18 @@ impl Step for Uncordon {
     }
 }
 
+fn is_last_step(context: &OperationContext<'_>) -> bool {
+    context.operation.status.completed_steps + 1 >= context.operation.specification.steps.len()
+}
+
 pub struct Soak;
 
 #[async_trait::async_trait]
 impl Step for Soak {
     async fn is_complete(&self, context: &OperationContext<'_>) -> Result<bool, ActionError> {
+        if is_last_step(context) {
+            return Ok(true);
+        }
         let soak = context.operation.specification.upgrade_plan().map_or(0, |plan| plan.soak_seconds);
         if step_age(context) < Duration::from_secs(soak) {
             return Ok(false);
