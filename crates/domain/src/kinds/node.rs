@@ -28,6 +28,14 @@ impl Resource for Node {
 pub enum NodeRole {
     Core,
     Compute,
+    Dashboard,
+}
+
+impl NodeRole {
+    #[must_use]
+    pub fn is_granted_by_certificate(self) -> bool {
+        matches!(self, Self::Core | Self::Compute)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -153,10 +161,36 @@ impl NodeSpecification {
     }
 }
 
+impl NodeSpecification {
+    #[must_use]
+    pub fn serves_dashboard(&self) -> bool {
+        self.roles.contains(&NodeRole::Dashboard)
+    }
+
+    fn roles_granted_by_certificate(&self) -> BTreeSet<NodeRole> {
+        self.roles.iter().copied().filter(|role| role.is_granted_by_certificate()).collect()
+    }
+}
+
 impl Validate for NodeSpecification {
+    fn validate_update(&self, previous: &Self) -> Result<(), ValidationError> {
+        let mut error = ValidationError::new();
+        error.check(
+            self.roles_granted_by_certificate() == previous.roles_granted_by_certificate(),
+            "specification.roles",
+            "only the dashboard role can change; core and compute come from the node's certificate",
+        );
+        error.into_result()
+    }
+
     fn validate(&self) -> Result<(), ValidationError> {
         let mut error = ValidationError::new();
         error.check(!self.roles.is_empty(), "specification.roles", "must name at least one role");
+        error.check(
+            !self.serves_dashboard() || self.roles.contains(&NodeRole::Core),
+            "specification.roles",
+            "only core members can serve the dashboard for now",
+        );
         if let Some(request) = &self.image {
             request.image.check("specification.image.image", &mut error);
         }
@@ -234,6 +268,8 @@ pub struct NodeStatus {
     pub boot: Option<BootReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub store: Option<StoreHealth>,
+    #[serde(default)]
+    pub holds_cluster_address: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

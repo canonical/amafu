@@ -37,6 +37,7 @@ fn role_name(role: NodeRole) -> &'static str {
     match role {
         NodeRole::Core => "core",
         NodeRole::Compute => "compute",
+        NodeRole::Dashboard => "dashboard",
     }
 }
 
@@ -71,7 +72,7 @@ impl CertificateAuthority {
         let uri =
             |text: String| text.try_into().map(SanType::URI).map_err(|error: rcgen::Error| failure(error));
         parameters.subject_alt_names.push(uri(format!("{NODE_URI_PREFIX}{node}"))?);
-        for role in roles {
+        for role in roles.iter().filter(|role| role.is_granted_by_certificate()) {
             parameters.subject_alt_names.push(uri(format!("{ROLE_URI_PREFIX}{}", role_name(*role)))?);
         }
         parameters.extended_key_usages =
